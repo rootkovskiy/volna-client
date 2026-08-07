@@ -1,0 +1,11 @@
+VOLNA client
+Copyright 2026 VOLNA contributors
+
+This distribution contains the complete first-party source selected for the
+VOLNA Expo client. The VOLNA name, wordmark, and logos are not licensed as
+trademarks by the Apache License 2.0. Third-party dependencies and bundled
+assets retain their respective notices and licenses.
+
+The proprietary VOLNA API, database schema, moderation services,
+recommendation systems, deployment secrets, and operations are not part of
+this distribution.

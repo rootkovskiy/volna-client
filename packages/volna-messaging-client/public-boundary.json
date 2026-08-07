@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "package": "@volna/messaging-client",
+  "license": "Apache-2.0",
+  "allowedTopLevelEntries": [
+    "DEPENDENCIES.md",
+    "LICENSE",
+    "NOTICE",
+    "PUBLIC_BOUNDARY.md",
+    "README.md",
+    "SECURITY.md",
+    "THREAT_MODEL.md",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-lock.public.yaml",
+    "public-boundary.json",
+    "rust",
+    "scripts",
+    "src",
+    "test",
+    "tsconfig.json"
+  ],
+  "forbiddenImportPrefixes": [
+    "apps/",
+    "@volna/content-policy",
+    "@volna/music-taxonomy"
+  ],
+  "forbiddenPathFragments": [
+    ".env",
+    "credential",
+    "private-key",
+    "secret"
+  ]
+}

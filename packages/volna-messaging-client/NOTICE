@@ -1,0 +1,15 @@
+VOLNA Messaging Client
+Copyright 2026 VOLNA contributors
+
+This distribution contains an evaluation wrapper for OpenMLS, Copyright OpenMLS
+Authors, used under the MIT License. The wrapper pins OpenMLS 0.8.1 for evaluation;
+it is not a claim that the VOLNA integration has completed an independent audit.
+
+The JavaScript runtime uses ts-mls 1.6.2, hpke-js packages 1.7.x-1.9.x, and Noble
+Cryptography packages 2.x under their MIT licenses. Exact versions and upstream
+locations are recorded in DEPENDENCIES.md and the package lockfile.
+
+The public React Native/Web security and message surfaces use Expo Camera,
+Clipboard, Audio, Image, and Location, Socket.IO Client, Lucide,
+react-native-qrcode-svg, and react-native-svg under their respective licenses.
+Exact integration versions are recorded in DEPENDENCIES.md and the package lockfile.

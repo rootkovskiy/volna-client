@@ -1,0 +1,51 @@
+name: Verify public client
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-client-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Boundary, tests, audit, and exports
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.14.0
+
+      - name: Install the pinned package manager
+        run: npm install --global pnpm@11.7.0
+
+      - name: Install the frozen dependency graph
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify source boundary, types, and tests
+        run: pnpm verify
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+
+      - name: Export Web
+        run: pnpm export:web
+
+      - name: Export Android bundle
+        run: pnpm export:android
+
+      - name: Export iOS bundle
+        run: pnpm export:ios

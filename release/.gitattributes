@@ -1,0 +1,2 @@
+# Preserve the deterministic source-archive bytes on every Git platform.
+* -text

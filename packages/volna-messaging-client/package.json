@@ -1,0 +1,162 @@
+{
+  "name": "@volna/messaging-client",
+  "version": "0.1.0",
+  "description": "Public client-side trust boundary and wire contracts for VOLNA end-to-end encrypted messages.",
+  "license": "Apache-2.0",
+  "private": false,
+  "packageManager": "pnpm@11.7.0",
+  "volnaVerification": {
+    "packageManager": "pnpm@11.7.0"
+  },
+  "type": "commonjs",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./mls-runtime": {
+      "types": "./src/mls-runtime.d.mts",
+      "import": "./src/mls-runtime.mjs",
+      "default": "./src/mls-runtime.mjs"
+    },
+    "./message-projection": {
+      "types": "./src/message-projection.d.mts",
+      "import": "./src/message-projection.mjs",
+      "default": "./src/message-projection.mjs"
+    },
+    "./encrypted-message-store": {
+      "types": "./src/encrypted-message-store.d.mts",
+      "import": "./src/encrypted-message-store.mjs",
+      "default": "./src/encrypted-message-store.mjs"
+    },
+    "./opaque-transport": {
+      "types": "./src/opaque-transport.d.mts",
+      "import": "./src/opaque-transport.mjs",
+      "default": "./src/opaque-transport.mjs"
+    },
+    "./key-directory-witness": {
+      "types": "./src/key-directory-witness.d.mts",
+      "import": "./src/key-directory-witness.mjs",
+      "default": "./src/key-directory-witness.mjs"
+    },
+    "./expo-storage-adapter": {
+      "types": "./src/expo-storage-adapter.d.ts",
+      "import": "./src/expo-storage-adapter.ts",
+      "default": "./src/expo-storage-adapter.ts"
+    },
+    "./expo-secure-messaging": {
+      "types": "./src/expo-secure-messaging.ts",
+      "import": "./src/expo-secure-messaging.ts",
+      "default": "./src/expo-secure-messaging.ts"
+    },
+    "./secure-messaging-client": {
+      "types": "./src/secure-messaging-client.d.mts",
+      "import": "./src/secure-messaging-client.mjs",
+      "default": "./src/secure-messaging-client.mjs"
+    },
+    "./device-transfer": {
+      "types": "./src/device-transfer.d.mts",
+      "import": "./src/device-transfer.mjs",
+      "default": "./src/device-transfer.mjs"
+    },
+    "./react-native-message-security": {
+      "types": "./src/react-native-message-security.tsx",
+      "import": "./src/react-native-message-security.tsx",
+      "default": "./src/react-native-message-security.tsx"
+    },
+    "./messaging-surface-controller": {
+      "types": "./src/messaging-surface-controller.d.mts",
+      "import": "./src/messaging-surface-controller.mjs",
+      "default": "./src/messaging-surface-controller.mjs"
+    },
+    "./react-native-messages": {
+      "types": "./src/react-native-messages.tsx",
+      "import": "./src/react-native-messages.tsx",
+      "default": "./src/react-native-messages.tsx"
+    },
+    "./media-policy": {
+      "types": "./src/media-policy.d.mts",
+      "import": "./src/media-policy.mjs",
+      "default": "./src/media-policy.mjs"
+    }
+  },
+  "files": [
+    "DEPENDENCIES.md",
+    "LICENSE",
+    "NOTICE",
+    "pnpm-lock.yaml",
+    "pnpm-lock.public.yaml",
+    "PUBLIC_BOUNDARY.md",
+    "README.md",
+    "SECURITY.md",
+    "THREAT_MODEL.md",
+    "public-boundary.json",
+    "rust/openmls-evaluation",
+    "scripts",
+    "src",
+    "test",
+    "tsconfig.json"
+  ],
+  "sideEffects": false,
+  "dependencies": {
+    "@hpke/chacha20poly1305": "1.7.1",
+    "@hpke/common": "1.9.0",
+    "@hpke/core": "1.8.0",
+    "@hpke/dhkem-x25519": "1.7.0",
+    "@noble/ciphers": "2.1.1",
+    "@noble/curves": "2.0.1",
+    "@noble/hashes": "2.0.1",
+    "socket.io-client": "4.8.3",
+    "ts-mls": "1.6.2"
+  },
+  "peerDependencies": {
+    "@react-native-async-storage/async-storage": ">=2.2.0 <3",
+    "expo": ">=54.0.0 <55",
+    "expo-camera": ">=17.0.0 <18",
+    "expo-clipboard": ">=8.0.0 <9",
+    "expo-crypto": ">=15.0.0 <16",
+    "expo-audio": ">=1.1.0 <2",
+    "expo-image": ">=3.0.0 <4",
+    "expo-location": ">=19.0.0 <20",
+    "expo-secure-store": ">=15.0.0 <16",
+    "lucide-react-native": ">=0.562.0 <0.600.0",
+    "react": ">=19.1.0 <20",
+    "react-native": ">=0.81.0 <0.82",
+    "react-native-qrcode-svg": ">=6.3.0 <7",
+    "react-native-svg": ">=15.12.0 <16"
+  },
+  "devDependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@types/react": "19.1.17",
+    "expo": "54.0.36",
+    "expo-camera": "17.0.10",
+    "expo-clipboard": "8.0.8",
+    "expo-crypto": "15.0.9",
+    "expo-audio": "1.1.1",
+    "expo-image": "3.0.11",
+    "expo-location": "19.0.8",
+    "expo-secure-store": "15.0.8",
+    "lucide-react-native": "0.562.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-qrcode-svg": "6.3.21",
+    "react-native-svg": "15.12.1",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "release:evidence": "node scripts/build-release-evidence.mjs",
+    "verify:boundary": "node scripts/verify-public-boundary.mjs",
+    "verify": "pnpm run verify:boundary && pnpm typecheck && pnpm test"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20 <25"
+  }
+}

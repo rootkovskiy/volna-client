@@ -1,0 +1,9 @@
+The VOLNA client source in this directory is licensed under the Apache License,
+Version 2.0. The complete license text is distributed at:
+
+  ../../packages/volna-messaging-client/LICENSE
+
+SPDX-License-Identifier: Apache-2.0
+
+The VOLNA name, wordmark, and logos are not licensed as trademarks. Third-party
+dependencies and assets retain their respective notices and licenses.

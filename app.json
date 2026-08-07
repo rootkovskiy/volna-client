@@ -1,0 +1,68 @@
+{
+  "expo": {
+    "name": "VOLNA",
+    "slug": "volna",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./apps/mobile/assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "volna",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ru.volna.app"
+    },
+    "android": {
+      "package": "ru.volna.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./apps/mobile/assets/android-icon-foreground.png",
+        "backgroundImage": "./apps/mobile/assets/android-icon-background.png",
+        "monochromeImage": "./apps/mobile/assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./apps/mobile/assets/favicon.png",
+      "orientation": "portrait"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "volna-social",
+          "project": "react-native"
+        }
+      ],
+      "expo-notifications",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "VOLNA добавляет выбранные вами ивенты в календарь и создаёт напоминание перед началом.",
+          "remindersPermission": false
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "VOLNA использует камеру только для сканирования QR-кода при безопасном переносе защищённых сообщений на новое устройство.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "VOLNA использует геопозицию для функций поблизости и Коннекта только при выданном вами разрешении. Точные координаты не публикуются в профиле."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}

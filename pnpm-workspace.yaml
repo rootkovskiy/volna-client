@@ -1,0 +1,17 @@
+packages:
+  - "apps/mobile"
+  - "packages/content-policy"
+  - "packages/music-taxonomy"
+  - "packages/volna-messaging-client"
+injectWorkspacePackages: true
+overrides:
+  postcss: 8.5.26
+  uuid: 11.1.1
+onlyBuiltDependencies:
+  - "@sentry/cli"
+  - "protobufjs"
+  - "unrs-resolver"
+allowBuilds:
+  "@sentry/cli": true
+  "protobufjs": true
+  "unrs-resolver": true

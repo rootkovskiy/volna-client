@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "allowJs": false,
+    "allowImportingTsExtensions": true,
+    "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022"
+  },
+  "include": [
+    "src/expo-storage-adapter.ts",
+    "src/expo-secure-messaging.ts",
+    "src/react-native-message-security.tsx",
+    "src/react-native-messages.tsx"
+  ]
+}

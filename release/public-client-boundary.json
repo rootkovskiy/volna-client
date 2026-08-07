@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "name": "@volna/client",
+  "license": "Apache-2.0",
+  "releaseDirectory": "release",
+  "firstPartyRuntimeRoots": [
+    "app",
+    "apps/mobile",
+    "packages/content-policy",
+    "packages/music-taxonomy",
+    "packages/volna-messaging-client",
+    "public"
+  ],
+  "rootRuntimeFiles": [
+    "app.json",
+    "eas.json",
+    "index.ts",
+    "metro.config.cjs",
+    "tsconfig.json"
+  ],
+  "excludedNonRuntimePaths": [
+    "apps/mobile/AGENTS.md",
+    "apps/mobile/CLAUDE.md"
+  ],
+  "forbiddenSourceRoots": [
+    "apps/api",
+    "docs",
+    "observability",
+    "scripts"
+  ],
+  "allowedWorkspaceImports": [
+    "@volna/content-policy",
+    "@volna/messaging-client",
+    "@volna/music-taxonomy"
+  ],
+  "allowedPublicEnvironmentVariables": [
+    "EXPO_PUBLIC_API_URL",
+    "EXPO_PUBLIC_SENTRY_DSN"
+  ],
+  "requiredArchiveRootFiles": [
+    ".gitattributes",
+    ".gitignore",
+    ".github/workflows/verify.yml",
+    "ARCHITECTURE.md",
+    "CONTRIBUTING.md",
+    "DEPENDENCIES.md",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "SECURITY.md",
+    "THREAT_MODEL.md",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml"
+  ]
+}
