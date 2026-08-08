@@ -46,6 +46,7 @@
     "DEPENDENCIES.md",
     "LICENSE",
     "NOTICE",
+    "patches/image-size@1.2.1.patch",
     "README.md",
     "SECURITY.md",
     "THREAT_MODEL.md",
