@@ -39,7 +39,13 @@ For each release candidate:
 pnpm install --frozen-lockfile
 pnpm audit --prod
 pnpm verify
+pnpm verify:openmls
 ```
+
+`rust-toolchain.toml` pins the separately compiled OpenMLS evaluation to Rust
+1.88.0. The public CI runs its locked test on every PR and weekly scheduled check;
+this proves that the reference OpenMLS path builds and authenticates the VOLNA AAD,
+but it is not yet a wire-level interoperability test against the JavaScript client.
 
 An audit result is time-scoped evidence, not a permanent guarantee. New advisories
 must be evaluated against the locked graph before publishing another artifact.
