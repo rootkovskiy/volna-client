@@ -91,10 +91,21 @@ function validateManifest(manifest, failures) {
 async function validateReleaseMetadata(manifest, failures) {
   const packageJson = JSON.parse(await readFile(path.join(releaseRoot, 'package.json'), 'utf8'));
   const workspace = await readFile(path.join(releaseRoot, 'pnpm-workspace.yaml'), 'utf8');
+  const workflow = await readFile(path.join(releaseRoot, '.github', 'workflows', 'verify.yml'), 'utf8');
+  const rustToolchain = await readFile(path.join(releaseRoot, 'rust-toolchain.toml'), 'utf8');
   if (packageJson.name !== manifest.name) failures.push('release package name does not match the boundary');
   if (packageJson.license !== manifest.license) failures.push('release package license does not match the boundary');
   if (packageJson.packageManager !== 'pnpm@11.7.0') failures.push('release package manager must be pnpm@11.7.0');
   if (packageJson.engines?.node !== '>=20 <25') failures.push('release Node engine must exclude unsupported Node 25');
+  if (packageJson.scripts?.['verify:openmls'] !== 'cargo test --locked --all-targets --manifest-path packages/volna-messaging-client/rust/openmls-evaluation/Cargo.toml') {
+    failures.push('release must expose the pinned locked OpenMLS verification command');
+  }
+  if (!/^\[toolchain\]\r?\nchannel = "1\.88\.0"\r?\nprofile = "minimal"\r?\n?$/.test(rustToolchain)) {
+    failures.push('public OpenMLS evaluation must pin the minimal Rust 1.88.0 toolchain');
+  }
+  if (!workflow.includes('run: pnpm verify:openmls')) {
+    failures.push('public CI must run the locked OpenMLS evaluation');
+  }
   if (!/^patchedDependencies:\r?\n\s{2}image-size@1\.2\.1:\s+patches\/image-size@1\.2\.1\.patch\s*$/m.test(workspace)) {
     failures.push('public workspace must apply the reviewed image-size 1.2.1 patch');
   }

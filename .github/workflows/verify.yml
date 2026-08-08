@@ -39,6 +39,9 @@ jobs:
       - name: Verify source boundary, types, and tests
         run: pnpm verify
 
+      - name: Verify the pinned OpenMLS evaluation
+        run: pnpm verify:openmls
+
       - name: Audit production dependencies
         run: pnpm audit --prod
 

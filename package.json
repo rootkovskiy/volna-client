@@ -17,6 +17,7 @@
     "typecheck": "pnpm --filter mobile typecheck && pnpm --filter @volna/messaging-client typecheck",
     "test": "pnpm --filter @volna/messaging-client test && node --test release/test/*.test.mjs",
     "verify:boundary": "node release/scripts/verify-public-client-boundary.mjs",
+    "verify:openmls": "cargo test --locked --all-targets --manifest-path packages/volna-messaging-client/rust/openmls-evaluation/Cargo.toml",
     "verify": "pnpm verify:boundary && pnpm typecheck && pnpm test",
     "export:web": "expo export --platform web --output-dir dist/web",
     "export:android": "expo export --platform android --output-dir dist/android",
