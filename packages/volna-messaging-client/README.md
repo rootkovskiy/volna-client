@@ -39,9 +39,8 @@ Recovery never reopens or dual-writes the legacy plaintext route.
 The complete first-party client source now has a verified Apache-2.0 release
 contour under `client-public/`, but native release artifacts are not yet reproducible
 or independently signed,
-the required witness protocol has no independently operated production witnesses or
-checkpoint-gossip monitor yet, the complete physical-platform/large-history/leakage
-matrix is unfinished, and the integration
+the required witness protocol has no independently operated production witnesses,
+the complete physical-platform test matrix is unfinished, and the integration
 has not received an independent security review. Consequently
 `CHAT_E2EE_ENROLLMENT_ENABLED` and `CHAT_E2EE_ROLLOUT_ENABLED` must remain false
 and the product must not advertise these chats as end-to-end encrypted.
@@ -53,6 +52,7 @@ and the product must not advertise these chats as end-to-end encrypted.
 - MLS runtime adapters and pinned dependency/build metadata;
 - local encrypted-state and platform key-storage adapters;
 - a journaled encrypted message-projection store and endpoint-only local search;
+- a signature-verifying checkpoint-gossip monitor with durable evidence records;
 - deterministic public source-archive, SHA-256, and CycloneDX release-evidence tooling;
 - device verification, QR transfer, recovery authorization, MLS membership rekey,
   initial-activation replacement, transparency, downgrade, and migration logic;
@@ -117,6 +117,17 @@ match the witness's latest state. VOLNA clients query it with `credentials: omit
 `referrerPolicy: no-referrer`, and no application token. At least two distinct
 origins and signing keys are mandatory in the shipped client policy.
 
+`@volna/messaging-client/key-directory-gossip` verifies those signed statements
+again before committing them to a supplied durable compare-and-swap store. It
+preserves the exact signed evidence for every observed checkpoint and rejects a
+per-witness rollback, same-size equivocation, cross-witness split view, identity
+change, signature failure, or observation-time rollback. The bundled memory store
+is test-only. A production deployment still needs independently controlled
+operators and durable storage outside VOLNA. Statements for different entry counts
+do not by themselves prove prefix consistency; the reference witness performs that
+full-chain check before signing, and endpoint directory verification independently
+pins the chain it has already accepted.
+
 ## Encrypted local history and search
 
 `@volna/messaging-client/encrypted-message-store` keeps message projections outside
@@ -133,8 +144,14 @@ The secure client hydrates and searches only decrypted in-memory projections. Se
 terms never enter the opaque API or witness requests. Dialog metadata may be fetched
 without a query to resolve a local match, with bounded pagination and stale-result
 cancellation. This protects message content at rest but does not replace device lock,
-OS storage protection, large-history performance evidence, or the release-distribution
+OS storage protection, physical-device performance evidence, or the release-distribution
 and independent-review gates above.
+
+The public suite also exercises 32,768 encrypted projection records across eight
+threads, confirms plaintext identifiers/content do not occur in the backing store,
+and verifies an append rewrites only one tail chunk, one index, and the manifest.
+Its timing ceiling is a desktop Node smoke guard, not evidence for real iOS/Android
+hardware.
 
 ## Reproducible public release evidence
 
