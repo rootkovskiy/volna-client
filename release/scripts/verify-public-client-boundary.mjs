@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { access, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,6 +27,7 @@ const serverOnlyImportPrefixes = [
   'pg',
   'prisma',
 ];
+const imageSizePatchSha256 = '01100757bdbd55c38cda4b40e79d1b358024fe9fee2d45ab7a9f72111758e8e3';
 
 const portable = (value) => value.replaceAll('\\', '/');
 const isInside = (candidate, root) => candidate === root || candidate.startsWith(`${root}${path.sep}`);
@@ -93,6 +95,14 @@ async function validateReleaseMetadata(manifest, failures) {
   if (packageJson.license !== manifest.license) failures.push('release package license does not match the boundary');
   if (packageJson.packageManager !== 'pnpm@11.7.0') failures.push('release package manager must be pnpm@11.7.0');
   if (packageJson.engines?.node !== '>=20 <25') failures.push('release Node engine must exclude unsupported Node 25');
+  if (!/^patchedDependencies:\r?\n\s{2}image-size@1\.2\.1:\s+patches\/image-size@1\.2\.1\.patch\s*$/m.test(workspace)) {
+    failures.push('public workspace must apply the reviewed image-size 1.2.1 patch');
+  }
+  for (const advisory of ['GHSA-5p2g-fcmc-qvqq', 'GHSA-w3rx-r6r6-pgpr']) {
+    if (!new RegExp(`^\\s{4}- ${advisory}$`, 'm').test(workspace)) {
+      failures.push(`public audit policy must document the patched exception ${advisory}`);
+    }
+  }
   if (!/^\s{2}postcss:\s+8\.5\.26\s*$/m.test(workspace)) {
     failures.push('public workspace must pin postcss to the reviewed patched version 8.5.26');
   }
@@ -125,6 +135,20 @@ async function validateReleaseMetadata(manifest, failures) {
     if (major < 8 || (major === 8 && (minor < 5 || (minor === 5 && patch < 18)))) {
       failures.push(`public lockfile contains vulnerable PostCSS ${major}.${minor}.${patch}`);
     }
+  }
+  const patchPath = path.join(releaseRoot, 'patches', 'image-size@1.2.1.patch');
+  if (!(await exists(patchPath))) {
+    failures.push('reviewed image-size patch is missing');
+  } else {
+    const patchHash = createHash('sha256').update(await readFile(patchPath)).digest('hex');
+    if (patchHash !== imageSizePatchSha256) failures.push(`unexpected image-size patch SHA-256: ${patchHash}`);
+  }
+  if (!lock.includes(`image-size@1.2.1: ${imageSizePatchSha256}`)) {
+    failures.push('public lockfile does not pin the reviewed image-size patch hash');
+  }
+  const snapshots = lock.slice(lock.indexOf('\nsnapshots:\n'));
+  if (/^  image-size@1\.2\.1:\s*$/m.test(snapshots)) {
+    failures.push('public lockfile contains an unpatched image-size 1.2.1 snapshot');
   }
 }
 

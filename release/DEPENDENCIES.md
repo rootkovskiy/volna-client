@@ -19,6 +19,20 @@ otherwise resolves `uuid` 7.x, which is affected by the buffer-bounds advisory
 The override keeps the CommonJS `uuid.v4()` API used by that helper and is exercised
 by the isolated client verification/build flow.
 
+Expo and Metro currently resolve transitive `image-size` `1.2.1`, whose ICNS,
+JXL, and HEIF parsing family is covered by two high-severity infinite-loop
+advisories
+[GHSA-w3rx-r6r6-pgpr](https://github.com/advisories/GHSA-w3rx-r6r6-pgpr) and
+[GHSA-5p2g-fcmc-qvqq](https://github.com/advisories/GHSA-5p2g-fcmc-qvqq).
+No non-vulnerable npm release exists as of 2026-08-08. The workspace therefore
+applies the reviewable `patches/image-size@1.2.1.patch`: malformed ICNS entry
+lengths and undersized ISO BMFF boxes are rejected before any parser loop can
+retain its offset. The patch SHA-256 is pinned by both the lockfile and boundary
+verifier, and a subprocess regression test fails on a parser hang. The two GHSA
+records are excluded from `pnpm audit` only while that exact patch remains active;
+all other advisories still fail the release. Replace this temporary patch with a
+reviewed upstream release as soon as one is published.
+
 For each release candidate:
 
 ```sh
