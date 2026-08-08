@@ -22,7 +22,9 @@
 The endpoint and its OS secure storage are trusted for plaintext processing.
 The server, object storage, realtime service, and witnesses are untrusted for
 message confidentiality. Independent witnesses reduce unilateral directory
-equivocation but do not protect a compromised endpoint. Public source removes
+equivocation; the public client retains their signed statements and detects
+rollback or same-size split views through an atomic gossip store. This does not
+replace independently operated witnesses and does not protect a compromised endpoint. Public source removes
 hidden first-party client code only when the installed artifact is independently
 matched to that source.
 

@@ -32,6 +32,8 @@ device keys, or production tokens.
 - An `MLS_V1` thread never falls back or dual-writes to plaintext routes.
 - Missing or invalid witnesses, directory consistency, membership, AAD, media,
   or local-state checks fail closed.
+- Signed witness evidence is re-verified before durable gossip storage; rollback,
+  equivocation, same-size split views, and stored-evidence tampering fail closed.
 - Release evidence must state signing, review, and reproducibility facts
   literally; absent evidence is never inferred.
 

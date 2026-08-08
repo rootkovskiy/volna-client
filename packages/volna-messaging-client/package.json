@@ -41,6 +41,11 @@
       "import": "./src/key-directory-witness.mjs",
       "default": "./src/key-directory-witness.mjs"
     },
+    "./key-directory-gossip": {
+      "types": "./src/key-directory-gossip.d.mts",
+      "import": "./src/key-directory-gossip.mjs",
+      "default": "./src/key-directory-gossip.mjs"
+    },
     "./expo-storage-adapter": {
       "types": "./src/expo-storage-adapter.d.ts",
       "import": "./src/expo-storage-adapter.ts",

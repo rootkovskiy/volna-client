@@ -28,6 +28,9 @@ pnpm export:ios
 `pnpm verify:boundary` fails if a first-party client source root is omitted,
 if client code imports a proprietary server module, if a secret-bearing file
 enters the release, or if an undeclared environment variable is read.
+The suite also verifies retained signed key-directory gossip evidence and a
+32,768-message encrypted local-history smoke scenario. The latter is desktop
+evidence only; physical iOS and Android testing remains a release gate.
 
 ## Assurance status
 

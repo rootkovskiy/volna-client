@@ -22,7 +22,10 @@ previews and playback, edits/reactions, attachments, direct-share targets, and t
 controller that selects explicit legacy or MLS transport. It also includes the
 reference key-directory witness state machine: durable operators can reuse its
 strict snapshot verifier and atomic compare-and-swap fork prevention without
-receiving any message key or plaintext. The proprietary mobile
+receiving any message key or plaintext. It includes the client-side gossip monitor
+that re-verifies and durably retains the exact signed statements supporting each
+checkpoint, rejecting rollback, equivocation, split views, and stored-evidence
+tampering. The proprietary mobile
 shell stores only route identifiers and provides content-free navigation/activity
 callbacks. `scripts/verify-messaging-trust-boundary.mjs` in the integration
 repository rejects reintroduction of plaintext message routes, duplicate closed
@@ -56,6 +59,8 @@ witness signs only a fully verified continuation of the chain and refuses rollba
 or a changed prefix after an atomic persistent checkpoint. The in-memory store is
 test-only; an independent deployment must provide durable multi-instance
 compare-and-swap storage and protect its signing key outside VOLNA control.
+The gossip monitor likewise ships only a test memory store; production evidence
+storage and witness operation must remain outside VOLNA's sole control.
 
 A closed host may provide narrow capabilities such as navigation or generic toasts
 only when an enforceable process/origin boundary prevents it from observing or

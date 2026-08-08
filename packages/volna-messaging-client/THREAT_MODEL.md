@@ -23,6 +23,12 @@ all cursor pages. Before using the result, the public client directly queries
 distinct pinned witness origins without VOLNA credentials and requires at least two
 fresh Ed25519 statements for the exact account-label checkpoint. A missing witness,
 truncated page set, changed snapshot, rollback, or changed prefix fails closed.
+The public gossip monitor re-verifies and retains the signed checkpoint evidence in
+an atomic store. It rejects per-witness rollback/equivocation, cross-witness
+same-size split views, identity changes, timestamp rollback, and corrupted stored
+evidence. Different-size statements alone are not a cryptographic consistency
+proof; each independent witness must verify the complete append-only chain before
+signing, while each endpoint pins the directory prefix it has accepted.
 
 Local message projections are not persisted in the MLS runtime envelope. A separate
 journaled store HKDF-derives its key from the device-only wrapping key, uses opaque
@@ -60,8 +66,8 @@ from a media provider the user explicitly chooses to play.
   garbage-collected heap, even though mutable byte arrays are cleared best-effort;
 - the pinned `ts-mls` integration and VOLNA glue have not received an independent
   security audit and must not be described as audited;
-- the witness-verification protocol is implemented, but no independently operated
-  production witness or checkpoint-gossip monitor exists yet. Owner-controlled
+- the witness-verification and checkpoint-gossip protocols are implemented, but no
+  independently operated production witness or gossip service exists yet. Owner-controlled
   witness infrastructure would not satisfy the non-collusion assumption, so E2EE
   rollout remains blocked even though unconfigured clients already fail closed.
 
