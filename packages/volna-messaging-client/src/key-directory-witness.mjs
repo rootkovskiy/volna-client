@@ -13,6 +13,9 @@ const { MAX_TOTAL_DEVICES_PER_ACCOUNT } = contract;
 const ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_COMPARE_AND_SWAP_ATTEMPTS = 16;
+const RECEIPT_ISSUER = 'volna_directory_v1';
+const MAX_RECEIPT_LIFETIME_MS = 10 * 60_000;
+const CLOCK_SKEW_MS = 30_000;
 
 export class KeyDirectoryWitnessError extends Error {
   constructor(code, cause) {
@@ -49,11 +52,118 @@ function isoDate(value, code) {
 function exactPrivateKey(value) {
   const bytes = typeof value === 'string' ? base64UrlToBytes(value, 32) : value;
   if (!(bytes instanceof Uint8Array) || bytes.length !== 32) fail('signing_key');
-  return bytes.slice();
+  return new Uint8Array(bytes);
+}
+
+function exactPublicKey(value) {
+  const bytes = typeof value === 'string' ? base64UrlToBytes(value, 32) : value;
+  if (!(bytes instanceof Uint8Array) || bytes.length !== 32) fail('receipt_public_key');
+  return new Uint8Array(bytes);
 }
 
 function clone(value) {
   return value === null ? null : JSON.parse(JSON.stringify(value));
+}
+
+function normalizeCheckpoint(value) {
+  const checkpoint = object(value, 'receipt_checkpoint');
+  if (checkpoint.version !== 1) fail('receipt_checkpoint');
+  const directoryLabel = hash(checkpoint.directoryLabel, 'receipt_label');
+  const identityFingerprint = hash(checkpoint.identityFingerprint, 'receipt_identity');
+  if (
+    !Number.isSafeInteger(checkpoint.entryCount)
+    || checkpoint.entryCount < 0
+    || checkpoint.entryCount > MAX_TOTAL_DEVICES_PER_ACCOUNT * 2
+  ) fail('receipt_entry_count');
+  const headHash = checkpoint.headHash === null ? null : hash(checkpoint.headHash, 'receipt_head');
+  if ((checkpoint.entryCount === 0) !== (headHash === null)) fail('receipt_head');
+  return { version: 1, directoryLabel, identityFingerprint, entryCount: checkpoint.entryCount, headHash };
+}
+
+function normalizeReceiptUnsigned(value) {
+  const receipt = object(value, 'receipt');
+  if (receipt.version !== 1 || receipt.issuer !== RECEIPT_ISSUER) fail('receipt');
+  return {
+    version: 1,
+    issuer: RECEIPT_ISSUER,
+    checkpoint: normalizeCheckpoint(receipt.checkpoint),
+    issuedAt: isoDate(receipt.issuedAt, 'receipt_issued_at'),
+    expiresAt: isoDate(receipt.expiresAt, 'receipt_expires_at'),
+  };
+}
+
+export function canonicalKeyDirectorySnapshotReceipt(value) {
+  return contract.canonicalKeyDirectorySnapshotReceipt(normalizeReceiptUnsigned(value));
+}
+
+export function keyDirectorySnapshotReceiptPublicKey(signingKeyValue) {
+  const signingKey = exactPrivateKey(signingKeyValue);
+  try {
+    return bytesToBase64Url(ed25519.getPublicKey(signingKey));
+  } finally {
+    signingKey.fill(0);
+  }
+}
+
+export function createKeyDirectorySnapshotReceipt(optionsValue) {
+  const options = object(optionsValue, 'receipt_options');
+  const signingKey = exactPrivateKey(options.signingKey);
+  const issuedTime = options.issuedAt === undefined ? Date.now() : options.issuedAt;
+  const lifetimeMs = options.lifetimeMs === undefined ? 5 * 60_000 : options.lifetimeMs;
+  if (!Number.isSafeInteger(issuedTime) || issuedTime < 0) fail('receipt_issued_at');
+  if (!Number.isSafeInteger(lifetimeMs) || lifetimeMs < 60_000 || lifetimeMs > MAX_RECEIPT_LIFETIME_MS) {
+    fail('receipt_lifetime');
+  }
+  const receipt = {
+    version: 1,
+    issuer: RECEIPT_ISSUER,
+    checkpoint: normalizeCheckpoint(options.checkpoint),
+    issuedAt: new Date(issuedTime).toISOString(),
+    expiresAt: new Date(issuedTime + lifetimeMs).toISOString(),
+  };
+  try {
+    return {
+      ...receipt,
+      signature: bytesToBase64Url(ed25519.sign(canonicalKeyDirectorySnapshotReceipt(receipt), signingKey)),
+    };
+  } finally {
+    signingKey.fill(0);
+  }
+}
+
+export function verifyKeyDirectorySnapshotReceipt(optionsValue) {
+  const options = object(optionsValue, 'receipt_verification');
+  const receiptValue = object(options.receipt, 'receipt');
+  const receipt = normalizeReceiptUnsigned(receiptValue);
+  const expectedCheckpoint = normalizeCheckpoint(options.checkpoint);
+  if (JSON.stringify(receipt.checkpoint) !== JSON.stringify(expectedCheckpoint)) fail('receipt_checkpoint');
+  const issuedTime = Date.parse(receipt.issuedAt);
+  const expiresTime = Date.parse(receipt.expiresAt);
+  const now = options.now === undefined ? Date.now() : options.now;
+  if (!Number.isSafeInteger(now) || now < 0) fail('receipt_clock');
+  if (
+    expiresTime <= issuedTime
+    || expiresTime - issuedTime > MAX_RECEIPT_LIFETIME_MS
+    || issuedTime > now + CLOCK_SKEW_MS
+    || expiresTime < now - CLOCK_SKEW_MS
+  ) fail('receipt_expired');
+  const publicKey = exactPublicKey(options.publicKey);
+  let valid = false;
+  try {
+    const signature = base64UrlToBytes(receiptValue.signature, 64);
+    valid = signature.length === 64 && ed25519.verify(
+      signature,
+      canonicalKeyDirectorySnapshotReceipt(receipt),
+      publicKey,
+      { zip215: false },
+    );
+  } catch {
+    valid = false;
+  } finally {
+    publicKey.fill(0);
+  }
+  if (!valid) fail('receipt_signature');
+  return clone({ ...receipt, signature: receiptValue.signature });
 }
 
 function normalizeStoredState(value, expectedLabel) {

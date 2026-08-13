@@ -66,5 +66,13 @@ fails if its vulnerable ChaCha20-Poly1305 package ever enters the selected featu
 graph. A dismissed `not_used` alert is therefore scoped to the current graph and
 must be reopened if provider features change.
 
+The independently deployable witness pins `pg` `8.22.0`. Its production container
+pins the Node 24.14.0 Bookworm Slim multi-platform image by manifest digest, removes
+package managers from the runtime stage, runs as the unprivileged `node` user, and
+contains only the deployed production dependency graph. Public CI exercises its
+PostgreSQL compare-and-swap race against an isolated PostgreSQL 17 service, builds
+the image, and fails on fixed high or critical container findings reported by the
+pinned Trivy action.
+
 An audit result is time-scoped evidence, not a permanent guarantee. New advisories
 must be evaluated against the locked graph before publishing another artifact.

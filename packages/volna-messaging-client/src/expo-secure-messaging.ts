@@ -32,6 +32,7 @@ export type MessagingClientHandle = {
 export type ExpoSecureMessagingManagerOptions = {
   apiOrigin: string;
   fetch: typeof globalThis.fetch;
+  witnessFetch?: typeof globalThis.fetch;
   getAccessToken?: () => string | undefined | Promise<string | undefined>;
   includeCredentials?: boolean;
   allowInsecureDevelopmentOrigin?: boolean;
@@ -66,6 +67,7 @@ export function createExpoSecureMessagingManager(options: ExpoSecureMessagingMan
   const createTransport = () => createOpaqueChatTransport({
     apiOrigin: options.apiOrigin,
     fetch: options.fetch,
+    witnessFetch: options.witnessFetch,
     getAccessToken: options.getAccessToken ?? (() => undefined),
     includeCredentials: options.includeCredentials === true,
     allowInsecureDevelopmentOrigin: options.allowInsecureDevelopmentOrigin === true,

@@ -178,6 +178,13 @@ export declare function normalizeOpaqueEnvelopeInput(input: unknown): OpaqueEnve
 export declare function normalizeDeviceRegistration(input: unknown): DeviceRegistrationInput;
 export declare function canonicalDeviceAuthorization(input: Omit<DeviceRegistrationInput, 'challengeId' | 'proofSignature' | 'accountIdentityPublicKey' | 'accountIdentitySignature'> & { accountId: string }): string;
 export declare function canonicalDeviceRegistrationProof(input: unknown): string;
+export declare function canonicalKeyDirectorySnapshotReceipt(input: {
+  version: 1;
+  issuer: 'volna_directory_v1';
+  checkpoint: { version: 1; directoryLabel: string; identityFingerprint: string; entryCount: number; headHash: string | null };
+  issuedAt: string;
+  expiresAt: string;
+}): Uint8Array;
 export declare function normalizeTransferDeviceDraft(input: unknown): TransferDeviceDraft;
 export declare function canonicalTransferDeviceDraft(input: unknown): string;
 export declare function normalizeDeviceTransferSessionInput(input: unknown): DeviceTransferSessionInput;
