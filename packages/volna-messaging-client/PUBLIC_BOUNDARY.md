@@ -19,7 +19,8 @@ the standard field during packing.
 The boundary includes the cryptographic runtime, opaque transport, Expo client
 manager, device-security/transfer screen, dialog list, composer, renderer, local
 previews and playback, edits/reactions, attachments, direct-share targets, and the
-controller that selects explicit legacy or MLS transport. It also includes the
+controller that selects explicit legacy or MLS transport. It includes the selected
+radix-256 sparse-map/C2SP verifier and pending-device recovery state, plus the
 reference key-directory witness state machine: durable operators can reuse its
 strict snapshot verifier and atomic compare-and-swap fork prevention without
 receiving any message key or plaintext. It includes the client-side gossip monitor
@@ -53,14 +54,15 @@ state/outbox purge, replacement Welcome handling, and no-downgrade controller ar
 inspectable and covered by public tests. The proprietary relay decides only whether
 its content-blind timeout/no-envelope preconditions permit the operation.
 
-Key-directory clients reconstruct an exact immutable cursor snapshot, then query
-each pinned witness directly without VOLNA authentication data. The reference
-witness signs only a fully verified continuation of the chain and refuses rollback
-or a changed prefix after an atomic persistent checkpoint. The in-memory store is
-test-only; an independent deployment must provide durable multi-instance
-compare-and-swap storage and protect its signing key outside VOLNA control.
-The gossip monitor likewise ships only a test memory store; production evidence
-storage and witness operation must remain outside VOLNA's sole control.
+Key-directory clients reconstruct an exact immutable cursor snapshot, then verify
+its compressed inclusion in a globally witnessed sparse-map root. They validate
+RFC 6962 log inclusion, the C2SP log signature, and a fresh 2-of-3 pinned
+cosignature quorum without sending VOLNA authentication or an account directory to
+the witnesses. The earlier reference witness signs only a fully verified semantic
+chain continuation and refuses rollback after atomic compare-and-swap, but that
+path is not counted toward the selected production quorum. The gossip monitor
+ships only a test memory store; production evidence storage and external witness
+operation must remain outside VOLNA's sole control.
 
 A closed host may provide narrow capabilities such as navigation or generic toasts
 only when an enforceable process/origin boundary prevents it from observing or

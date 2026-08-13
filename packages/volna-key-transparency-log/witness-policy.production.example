@@ -1,0 +1,7 @@
+# Operator registration is still required before this policy can publish a checkpoint.
+# Endpoint liveness was verified on 2026-08-13; keys are pinned from each operator's own page.
+witness mullvad witness.mullvad.net+0e35d04d+BBXW0BQVQyR7dLqzwQdjctnIlPYZw3bWSymqMSzAD2Gt https://witness.mullvad.net/
+witness glasklar witness.glasklar.is+90ad80e6+BLIQbbkGXsl/JeCcGIOSFnUabibY7YtB5IWlY9PRSYU2 https://bastion.glasklar.is/6bdf03b285fce48e00ff9b199cb2b77472dcc4a112f067fa5b274929cb9504e3/
+witness tillitis tillitis.se/tillitis-witness-1+9246694a+BAdr6MnufqYJFvDfNgjJRddzAILss3dJ2tLJ7TOf6ncM https://bastion.glasklar.is/774fafee07d3b0d9399d669676440a6301db9fa8fe2140d7d352418da25144c5/
+group independent 2 mullvad glasklar tillitis
+quorum independent

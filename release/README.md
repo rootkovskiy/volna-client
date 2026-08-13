@@ -7,8 +7,11 @@ client release candidate: iOS, Android, Web, and installed PWA. It includes the
 application host, routes, UI, networking and storage adapters, service worker,
 shared client packages, and the gated end-to-end encrypted messaging
 implementation. It also contains the separately deployable reference
-key-directory witness service under `packages/volna-key-directory-witness` so an
-independent operator can review and run the exact append-only verification logic.
+key-directory witness service under `packages/volna-key-directory-witness` and the
+standard C2SP/Tessera map-root log under `packages/volna-key-transparency-log` so an
+independent reviewer can inspect the exact endpoint verifier and append-only log
+personality. The semantic witness is retained reference code; the selected fast
+production path is the globally batched C2SP log cosigned by external operators.
 
 The VOLNA API, Prisma schema, databases, moderation and recommendation
 services, deployment configuration, and secrets are intentionally excluded
@@ -50,9 +53,10 @@ to replace JavaScript after publication.
 Production E2EE is currently hard-disabled. Legacy chats remain server-readable;
 only a future conversation explicitly activated as `MLS_V1` receives the
 server-blind message-content guarantee described in the security documents.
-The witness implementation being public does not count as independent operation:
-production still requires at least two operators outside VOLNA's cloud accounts,
-key custody, database control, and administration.
+Public implementations and owner-run copies do not count as independent operation:
+production still requires the real VOLNA log to be live-cosigned by at least two
+pinned operators outside VOLNA's cloud accounts, key custody, database control,
+and administration. The checked-in policy remains pending until that happens.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md),
 [THREAT_MODEL.md](THREAT_MODEL.md), and [DEPENDENCIES.md](DEPENDENCIES.md) before

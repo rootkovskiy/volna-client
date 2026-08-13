@@ -1,0 +1,27 @@
+{
+  "status": "pending_operator_registration",
+  "mode": "c2sp-map-v1",
+  "origin": "kt.volna.social",
+  "logVkey": null,
+  "threshold": 2,
+  "maxAgeSeconds": 300,
+  "witnessVkeys": [
+    "witness.mullvad.net+0e35d04d+BBXW0BQVQyR7dLqzwQdjctnIlPYZw3bWSymqMSzAD2Gt",
+    "witness.glasklar.is+90ad80e6+BLIQbbkGXsl/JeCcGIOSFnUabibY7YtB5IWlY9PRSYU2",
+    "tillitis.se/tillitis-witness-1+9246694a+BAdr6MnufqYJFvDfNgjJRddzAILss3dJ2tLJ7TOf6ncM"
+  ],
+  "operators": [
+    {
+      "operator": "Mullvad VPN AB",
+      "endpoint": "https://witness.mullvad.net/"
+    },
+    {
+      "operator": "Glasklar Teknik AB",
+      "endpoint": "https://bastion.glasklar.is/6bdf03b285fce48e00ff9b199cb2b77472dcc4a112f067fa5b274929cb9504e3/"
+    },
+    {
+      "operator": "Tillitis AB",
+      "endpoint": "https://bastion.glasklar.is/774fafee07d3b0d9399d669676440a6301db9fa8fe2140d7d352418da25144c5/"
+    }
+  ]
+}

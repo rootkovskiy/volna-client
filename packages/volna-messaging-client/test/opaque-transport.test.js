@@ -345,3 +345,200 @@ test('opaque transport assembles one immutable directory snapshot and requires a
   await assert.rejects(() => transport.getDirectory(first.accountId), /directory_witness_verification/);
   assert.equal(timedOutWitnesses, 2);
 });
+
+test('opaque transport verifies a sparse directory map inside a fresh 2-of-3 C2SP checkpoint', async () => {
+  const [{ ed25519 }, { sha256 }, runtime, kt, { createOpaqueChatTransport }] = await Promise.all([
+    import('@noble/curves/ed25519.js'),
+    import('@noble/hashes/sha2.js'),
+    import('../src/mls-runtime.mjs'),
+    import('../src/key-transparency.mjs'),
+    import('../src/opaque-transport.mjs'),
+  ]);
+  const encoder = new TextEncoder();
+  const random = (length) => new Uint8Array(randomBytes(length));
+  const mls = runtime.createMlsRuntime({ randomBytes: random });
+  const created = await mls.createDeviceIdentity({
+    accountId: 'account_c2sp', deviceId: 'device_c2sp_1', platform: 'web', displayName: 'C2SP browser', capabilities: ['mls-v1'],
+  });
+  const digest = (value) => createHash('sha256').update(Buffer.from(value, 'base64url')).digest('hex');
+  const registeredAt = '2026-08-13T12:00:00.000Z';
+  const identity = {
+    accountId: created.accountId,
+    publicKey: created.accountIdentityPublicKey,
+    keyHash: digest(created.accountIdentityPublicKey),
+    createdAt: registeredAt,
+  };
+  const device = {
+    id: created.deviceId,
+    accountId: created.accountId,
+    platform: created.platform,
+    displayName: created.displayName,
+    credential: created.credential,
+    signaturePublicKey: created.signaturePublicKey,
+    accountIdentitySignature: created.accountIdentitySignature,
+    capabilities: created.capabilities,
+    status: 'ACTIVE',
+    transparencyGeneration: '1',
+    activatedAt: registeredAt,
+    registeredAt,
+    lastSeenAt: registeredAt,
+    revokedAt: null,
+  };
+  const payload = {
+    version: 1,
+    operation: 'REGISTER',
+    accountId: created.accountId,
+    deviceId: created.deviceId,
+    platform: created.platform,
+    displayName: created.displayName,
+    credentialHash: digest(created.credential),
+    signatureKeyHash: digest(created.signaturePublicKey),
+    accountIdentityKeyHash: identity.keyHash,
+    accountIdentitySignature: created.accountIdentitySignature,
+    capabilities: created.capabilities,
+    registeredAt,
+    revokedAt: null,
+    recordedAt: registeredAt,
+  };
+  const entryHash = createHash('sha256')
+    .update(Buffer.from(JSON.stringify(['VOLNA-CHAT-KEY-DIRECTORY', 1, null, payload]), 'utf8'))
+    .digest('hex');
+  const entry = {
+    id: '1', deviceId: created.deviceId, operation: 'DEVICE_REGISTERED', previousHash: null,
+    entryHash, payload, createdAt: registeredAt,
+  };
+  const directoryLabel = runtime.keyDirectoryLabel(created.accountId);
+  const leafValue = {
+    version: 1,
+    directoryLabel,
+    identityFingerprint: identity.keyHash,
+    entryCount: 1,
+    headHash: entryHash,
+    deviceIds: [created.deviceId],
+  };
+  const keyBytes = Buffer.from(directoryLabel, 'hex');
+  let mapRoot = Buffer.from(kt.hashKeyTransparencyLeaf(directoryLabel, leafValue), 'hex');
+  for (let depth = 31; depth >= 0; depth -= 1) {
+    const children = Array(256).fill(Buffer.from(kt.keyTransparencyDefaultHash(depth + 1), 'hex'));
+    children[keyBytes[depth]] = mapRoot;
+    mapRoot = Buffer.from(sha256(Uint8Array.from([3, ...children.flatMap((child) => [...child])])));
+  }
+  const rootEntry = {
+    tag: 'VOLNA-CHAT-KEY-TRANSPARENCY-ROOT',
+    version: 1,
+    generation: '1',
+    root: mapRoot.toString('hex'),
+    previousGeneration: null,
+    previousRoot: null,
+    updateCount: 1,
+    createdAt: registeredAt,
+  };
+  const canonicalRootEntry = kt.canonicalKeyTransparencyRootEntry(rootEntry);
+  const logRoot = kt.rfc6962LeafHash(encoder.encode(canonicalRootEntry));
+  const makeVkey = (name, type, privateKey) => {
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const keyId = sha256(Uint8Array.from([...encoder.encode(`${name}\n`), type, ...publicKey])).subarray(0, 4);
+    return {
+      name,
+      id: keyId,
+      vkey: `${name}+${Buffer.from(keyId).toString('hex')}+${Buffer.from(Uint8Array.from([type, ...publicKey])).toString('base64')}`,
+    };
+  };
+  const logKey = new Uint8Array(32).fill(41);
+  const witnessKeys = [42, 43, 44].map((value) => new Uint8Array(32).fill(value));
+  const log = makeVkey('kt.volna.test/log', 1, logKey);
+  const witnesses = witnessKeys.map((key, index) => makeVkey(`witness.test/${index + 1}`, 4, key));
+  const body = `${log.name}\n1\n${Buffer.from(logRoot, 'hex').toString('base64')}\n`;
+  const signatureLine = (name, id, payloadBytes) => `— ${name} ${Buffer.from(Uint8Array.from([...id, ...payloadBytes])).toString('base64')}\n`;
+  const now = Math.floor(Date.now() / 1_000);
+  const witnessLine = (index) => {
+    const timestamp = new Uint8Array(8);
+    new DataView(timestamp.buffer).setBigUint64(0, BigInt(now));
+    const signature = ed25519.sign(encoder.encode(`cosignature/v1\ntime ${now}\n${body}`), witnessKeys[index]);
+    return signatureLine(witnesses[index].name, witnesses[index].id, Uint8Array.from([...timestamp, ...signature]));
+  };
+  const checkpointNote = `${body}\n${signatureLine(log.name, log.id, ed25519.sign(encoder.encode(body), logKey))}${witnessLine(0)}${witnessLine(2)}`;
+  const evidence = {
+    version: 1,
+    rootEntry,
+    mapProof: { key: directoryLabel, value: leafValue, siblings: [], root: rootEntry.root },
+    log: {
+      entry: canonicalRootEntry,
+      index: '0',
+      treeSize: '1',
+      root: logRoot,
+      inclusionProof: [],
+      checkpointNote,
+      witnessNames: [witnesses[0].name, witnesses[2].name],
+      oldestWitnessAt: new Date(now * 1_000).toISOString(),
+    },
+  };
+  const directCheckpoint = kt.verifyC2spCheckpoint({
+    note: checkpointNote,
+    policy: {
+      origin: log.name,
+      logVkey: log.vkey,
+      threshold: 2,
+      maxAgeSeconds: 300,
+      witnessVkeys: witnesses.map((witness) => witness.vkey),
+    },
+    now,
+  });
+  assert.equal(directCheckpoint.root, logRoot);
+  assert.equal(kt.verifyRfc6962Inclusion({
+    leaf: encoder.encode(canonicalRootEntry), index: '0', treeSize: '1', proof: [], root: logRoot,
+  }), true);
+  let currentEvidence = evidence;
+  const transport = createOpaqueChatTransport({
+    apiOrigin: 'https://volna.example',
+    getAccessToken: () => 'token',
+    fetch: async (url) => String(url).endsWith('/chats/e2ee/capabilities')
+      ? response({
+          protocolVersion: 1,
+          ciphersuite: 'MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519',
+          enrollmentEnabled: true,
+          rolloutEnabled: false,
+          deviceTransferEnabled: true,
+          membershipRekeyEnabled: true,
+          plaintextFallback: false,
+          contentPlane: 'opaque-only-for-mls-v1',
+          legacyHistoryServerReadable: true,
+          keyTransparencyRequired: true,
+          keyTransparencyVersion: 1,
+          keyTransparencyPolicyStatus: 'configured',
+          keyTransparencyActivationTargetMs: 3_000,
+          directoryPaginationVersion: 1,
+          directoryReceiptPublicKey: null,
+        })
+      : response({
+          accountId: created.accountId,
+          identity,
+          devices: [device],
+          entries: [entry],
+          entryCount: 1,
+          headHash: entryHash,
+          nextCursor: null,
+          snapshotDetailsIncluded: true,
+          witnessReceipt: null,
+          keyTransparencyEvidence: currentEvidence,
+        }),
+    keyTransparencyPolicy: {
+      mode: 'c2sp-map-v1',
+      origin: log.name,
+      logVkey: log.vkey,
+      threshold: 2,
+      maxAgeSeconds: 300,
+      witnessVkeys: witnesses.map((witness) => witness.vkey),
+    },
+  });
+  const capabilities = await transport.capabilities();
+  assert.equal(capabilities.enrollmentEnabled, true);
+  assert.equal(capabilities.directoryReceiptPublicKey, null);
+  assert.equal(capabilities.keyTransparencyPolicyStatus, 'configured');
+  const directory = await transport.getDirectory(created.accountId);
+  assert.equal(directory.verification.witnessQuorum.threshold, 2);
+  assert.equal(directory.verification.witnessQuorum.witnessIds.length, 2);
+  currentEvidence = structuredClone(evidence);
+  currentEvidence.mapProof.root = 'ff'.repeat(32);
+  await assert.rejects(() => transport.getDirectory(created.accountId), /directory_transparency/);
+});

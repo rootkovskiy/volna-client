@@ -17,6 +17,8 @@ export declare class SecureMessagingClient {
   });
   restore(): Promise<Record<string, unknown>>;
   setupDevice(input?: { recoverySecret?: string }): Promise<Record<string, unknown>>;
+  getPendingRecoverySecretForDisplay(): string | null;
+  acknowledgeRecoverySecretSaved(): Promise<{ status: 'cleared' | 'already-cleared' }>;
   prepareIncomingDeviceTransfer(): Promise<{ status: 'transfer-pending'; draft: Record<string, unknown> }>;
   startIncomingDeviceTransfer(): Promise<Record<string, unknown>>;
   pollIncomingDeviceTransfer(): Promise<Record<string, unknown>>;

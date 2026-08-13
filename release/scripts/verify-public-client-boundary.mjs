@@ -34,7 +34,7 @@ const reviewedTransitiveOverrides = [
   ['brace-expansion@>=4.0.0 <5.0.9', '5.0.9'],
   ['js-yaml@>=3.0.0 <4.0.0', '3.15.1'],
   ['js-yaml@>=4.0.0 <5.0.0', '4.3.1'],
-  ['nanoid@<3.3.17', '3.3.17'],
+  ['nanoid@<3.3.18', '3.3.18'],
   ['socket.io-parser@>=4.0.0 <4.2.7', '4.2.7'],
   ['tar@<=7.5.20', '7.5.21'],
   ['undici@<6.28.0', '6.28.0'],
@@ -196,7 +196,7 @@ async function validateReleaseMetadata(manifest, failures) {
   for (const [dependency, allowedVersions] of Object.entries({
     'brace-expansion': new Set(['1.1.18', '2.1.4', '5.0.9']),
     'js-yaml': new Set(['3.15.1', '4.3.1']),
-    nanoid: new Set(['3.3.17']),
+    nanoid: new Set(['3.3.18']),
     'socket.io-parser': new Set(['4.2.7']),
     tar: new Set(['7.5.21']),
     undici: new Set(['6.28.0']),

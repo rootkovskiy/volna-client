@@ -17,6 +17,7 @@ if (packageJson.packageManager !== undefined && packageJson.packageManager !== '
 
 const requiredPublishedFiles = [
   'DEPENDENCIES.md',
+  'key-transparency-policy.json',
   'LICENSE',
   'NOTICE',
   'PUBLIC_BOUNDARY.md',

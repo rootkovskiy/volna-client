@@ -22,6 +22,7 @@ const CLIENT_STATE_VERSION = 1;
 const ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 const MAX_PROCESSED_ENVELOPES_PER_THREAD = 20_000;
 const MAX_SYNC_ENVELOPES = 5_000;
+const TRANSPARENCY_ACTIVATION_TIMEOUT_MS = 20_000;
 
 export class SecureMessagingClientError extends Error {
   constructor(code, cause) {
@@ -49,6 +50,7 @@ function initialApplicationState() {
   return {
     v: CLIENT_STATE_VERSION,
     deviceRegistered: false,
+    pendingRecoverySecretForDisplay: null,
     threads: {},
     pendingActivations: {},
     pendingRekeys: {},
@@ -65,6 +67,13 @@ function normalizeApplicationState(value) {
   return {
     v: CLIENT_STATE_VERSION,
     deviceRegistered: state.deviceRegistered === true,
+    pendingRecoverySecretForDisplay: state.pendingRecoverySecretForDisplay === undefined
+      || state.pendingRecoverySecretForDisplay === null
+      ? null
+      : typeof state.pendingRecoverySecretForDisplay === 'string'
+        && /^[A-Za-z0-9_-]{43}$/.test(state.pendingRecoverySecretForDisplay)
+        ? state.pendingRecoverySecretForDisplay
+        : fail('client_pending_recovery_secret'),
     threads: object(state.threads, 'client_threads'),
     pendingActivations: object(state.pendingActivations, 'client_activations'),
     pendingRekeys: state.pendingRekeys === undefined ? {} : object(state.pendingRekeys, 'client_rekeys'),
@@ -298,8 +307,10 @@ export class SecureMessagingClient {
     await this.restoreMessageProjections();
     const capabilities = await this.transport.capabilities();
     if (!capabilities.enrollmentEnabled && !this.applicationState.deviceRegistered) fail('enrollment_disabled');
-    if (!this.applicationState.deviceRegistered) await this.completeRegistration();
-    else await this.verifyOwnDirectory(identity);
+    if (!this.applicationState.deviceRegistered) {
+      return { status: 'registration-pending', identity, rolloutEnabled: capabilities.rolloutEnabled };
+    }
+    await this.verifyOwnDirectory(identity);
     this.ready = true;
     if (this.applicationState.incomingTransfer?.phase === 'identity-complete') {
       this.applicationState.incomingTransfer = {
@@ -358,10 +369,32 @@ export class SecureMessagingClient {
   }
 
   async setupDevice({ recoverySecret } = {}) {
-    if (this.ready) return { status: 'ready', identity: this.runtime.getIdentitySummary() };
+    if (this.ready) return {
+      status: 'ready',
+      identity: this.runtime.getIdentitySummary(),
+      recoverySecret: this.applicationState.pendingRecoverySecretForDisplay ?? undefined,
+    };
     const capabilities = await this.transport.capabilities();
     if (!capabilities.enrollmentEnabled) fail('enrollment_disabled');
     const directory = await this.transport.listOwnDevices();
+    const existingIdentityStatus = this.runtime.getIdentityStatus?.();
+    if (existingIdentityStatus?.status === 'ready') {
+      const existingIdentity = this.runtime.getIdentitySummary();
+      if (
+        existingIdentity.accountId !== this.accountId
+        || existingIdentity.deviceId !== this.deviceId
+        || (directory.identity !== null && directory.identity.publicKey !== existingIdentity.accountIdentityPublicKey)
+      ) fail('pending_registration_identity_mismatch');
+      await this.completeRegistration();
+      this.ready = true;
+      await this.replenishKeyPackages();
+      await this.persist();
+      return {
+        status: 'ready',
+        identity: existingIdentity,
+        recoverySecret: this.applicationState.pendingRecoverySecretForDisplay ?? undefined,
+      };
+    }
     if (directory.identity !== null && typeof recoverySecret !== 'string') {
       return {
         status: 'recovery-required',
@@ -381,6 +414,7 @@ export class SecureMessagingClient {
       fail('recovery_identity_mismatch');
     }
     this.applicationState = initialApplicationState();
+    this.applicationState.pendingRecoverySecretForDisplay = created.recoverySecret ?? null;
     this.projectionChanges.clear();
     await this.persist();
     await this.completeRegistration();
@@ -392,6 +426,18 @@ export class SecureMessagingClient {
       identity: this.runtime.getIdentitySummary(),
       recoverySecret: created.recoverySecret,
     };
+  }
+
+  getPendingRecoverySecretForDisplay() {
+    return this.applicationState.pendingRecoverySecretForDisplay;
+  }
+
+  async acknowledgeRecoverySecretSaved() {
+    this.requireReady();
+    if (this.applicationState.pendingRecoverySecretForDisplay === null) return { status: 'already-cleared' };
+    this.applicationState.pendingRecoverySecretForDisplay = null;
+    await this.persist();
+    return { status: 'cleared' };
   }
 
   async prepareIncomingDeviceTransfer() {
@@ -847,9 +893,30 @@ export class SecureMessagingClient {
       || registered.identity.publicKey !== identity.accountIdentityPublicKey
       || registered.device.id !== this.deviceId
     ) fail('registration_response_binding');
+    const registrationStatus = registered.device.status ?? 'ACTIVE';
+    if (registrationStatus === 'PENDING_TRANSPARENCY') {
+      await this.waitForTransparencyActivation();
+    } else if (registrationStatus !== 'ACTIVE') {
+      fail('registration_device_inactive');
+    }
     await this.verifyOwnDirectory(identity);
     this.applicationState.deviceRegistered = true;
     await this.persist();
+  }
+
+  async waitForTransparencyActivation() {
+    if (typeof this.transport.getDeviceTransparencyStatus !== 'function') fail('transparency_status_missing');
+    const deadline = Date.now() + TRANSPARENCY_ACTIVATION_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const status = await this.transport.getDeviceTransparencyStatus(this.deviceId);
+      if (status.status === 'ACTIVE') return;
+      if (status.status === 'REVOKED') fail('transparency_device_revoked');
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const waitMs = Math.min(status.retryAfterMs ?? 750, remaining);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+    fail('transparency_activation_timeout');
   }
 
   async verifyOwnDirectory(identity = this.runtime.getIdentitySummary()) {
@@ -879,6 +946,9 @@ export class SecureMessagingClient {
         status: 'transfer-pending',
         incomingTransferPhase: this.applicationState.incomingTransfer?.phase ?? null,
       };
+    }
+    if (identity?.status === 'ready' && !this.applicationState.deviceRegistered) {
+      return { status: 'registration-pending' };
     }
     return { status: 'needs-setup' };
   }

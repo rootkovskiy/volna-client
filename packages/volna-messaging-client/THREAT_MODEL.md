@@ -19,16 +19,15 @@
   which clients must make detectable and blocking.
 
 Directory responses are bound to one immutable head and exact entry count across
-all cursor pages. Before using the result, the public client directly queries
-distinct pinned witness origins without VOLNA credentials and requires at least two
-fresh Ed25519 statements for the exact account-label checkpoint. A missing witness,
-truncated page set, changed snapshot, rollback, or changed prefix fails closed.
-The public gossip monitor re-verifies and retains the signed checkpoint evidence in
-an atomic store. It rejects per-witness rollback/equivocation, cross-witness
-same-size split views, identity changes, timestamp rollback, and corrupted stored
-evidence. Different-size statements alone are not a cryptographic consistency
-proof; each independent witness must verify the complete append-only chain before
-signing, while each endpoint pins the directory prefix it has accepted.
+all cursor pages. Before using the result, the public client verifies the account-
+master chain, a compressed radix-256 sparse-map proof, RFC 6962 inclusion of that
+map root, the log signature, and two fresh distinct pinned C2SP cosignatures. A
+missing/stale quorum, truncated page set, changed snapshot, rollback, predecessor
+mismatch, or changed prefix fails closed. The public gossip monitor re-verifies and
+retains the exact signed checkpoint evidence in an atomic store and rejects
+rollback/equivocation, same-size split views, timestamp rollback, and corrupted
+stored evidence. External witnesses assert append-only log consistency, not
+semantic authorization of devices; the endpoint verifies those semantics itself.
 
 Local message projections are not persisted in the MLS runtime envelope. A separate
 journaled store HKDF-derives its key from the device-only wrapping key, uses opaque
@@ -66,10 +65,11 @@ from a media provider the user explicitly chooses to play.
   garbage-collected heap, even though mutable byte arrays are cleared best-effort;
 - the pinned `ts-mls` integration and VOLNA glue have not received an independent
   security audit and must not be described as audited;
-- the witness-verification and checkpoint-gossip protocols are implemented, but no
-  independently operated production witness or gossip service exists yet. Owner-controlled
-  witness infrastructure would not satisfy the non-collusion assumption, so E2EE
-  rollout remains blocked even though unconfigured clients already fail closed.
+- C2SP verification and checkpoint gossip are implemented, and three external
+  operators are pinned as the intended policy, but the VOLNA production log key
+  does not yet exist and those operators have not registered/cosigned it. E2EE
+  rollout therefore remains blocked; owner-controlled witness copies would not
+  satisfy the non-collusion assumption.
 
 Device lifecycle changes use authenticated MLS Add/Remove Commits. A newly approved
 device receives a Welcome for each conversation, and a revoked device remains a

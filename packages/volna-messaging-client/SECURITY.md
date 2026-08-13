@@ -18,9 +18,10 @@ The following are security invariants for this package:
   for the dependency and this integration;
 - unexpected device/key changes are blocking and visible;
 - a key directory is usable only after exact snapshot pagination/hash-chain
-  verification and a fresh threshold of at least two directly queried, distinct,
-  pinned Ed25519 witnesses; VOLNA authentication data must never be sent to a
-  witness origin, and absent witness configuration disables client enrollment;
+  verification, sparse-map inclusion, C2SP log inclusion/signature verification,
+  and a fresh threshold of at least two distinct pinned Ed25519 witness
+  cosignatures; witnesses receive only the public global checkpoint, and absent or
+  pending policy disables client enrollment;
 - local search operates only on decrypted endpoint memory; search text must never be
   sent to VOLNA, a witness, analytics, logs, or crash telemetry;
 - parsers are versioned, strict, bounded, and reject malformed/unknown critical data;

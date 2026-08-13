@@ -69,6 +69,32 @@ function parsePnpmComponents(lockText) {
   return components;
 }
 
+function parseGoComponents(modText, sumText) {
+  const sums = new Map();
+  for (const line of sumText.split(/\r?\n/)) {
+    const match = /^(\S+) (v\S+) (h1:\S+)$/.exec(line);
+    if (match !== null) sums.set(`${match[1]}@${match[2]}`, match[3]);
+  }
+  const components = [];
+  for (const line of modText.split(/\r?\n/)) {
+    const match = /^\s*([^\s()]+) (v\S+)(?: \/\/ indirect)?$/.exec(line);
+    if (match === null) continue;
+    const [, name, version] = match;
+    const purl = `pkg:golang/${name.split('/').map(encodeURIComponent).join('/')}@${encodeURIComponent(version)}`;
+    components.push({
+      type: 'library',
+      'bom-ref': purl,
+      name,
+      version,
+      purl,
+      ...(sums.has(`${name}@${version}`)
+        ? { properties: [{ name: 'volna:go-module-h1', value: sums.get(`${name}@${version}`) }] }
+        : {}),
+    });
+  }
+  return components;
+}
+
 function deterministicUuid(hash) {
   const value = hash.slice(0, 32).split('');
   value[12] = '5';
@@ -100,6 +126,21 @@ async function buildSbom(packageJson, lockText, sourceTreeHash, repositoryRoot) 
       properties: [{ name: 'volna:first-party-source', value: relative }],
     });
   }
+  const goRoot = path.join(repositoryRoot, 'packages', 'volna-key-transparency-log');
+  for (const component of parseGoComponents(
+    await readFile(path.join(goRoot, 'go.mod'), 'utf8'),
+    await readFile(path.join(goRoot, 'go.sum'), 'utf8'),
+  )) components.set(component['bom-ref'], component);
+  const goServiceReference = 'pkg:generic/volna-key-transparency-log@0.1.0';
+  components.set(goServiceReference, {
+    type: 'application',
+    'bom-ref': goServiceReference,
+    name: 'volna-key-transparency-log',
+    version: '0.1.0',
+    purl: goServiceReference,
+    licenses: [{ license: { id: 'Apache-2.0' } }],
+    properties: [{ name: 'volna:first-party-source', value: 'packages/volna-key-transparency-log' }],
+  });
   const rootReference = npmPurl(packageJson.name, packageJson.version);
   return {
     bomFormat: 'CycloneDX',

@@ -23,6 +23,9 @@ The release workspace also carries range-scoped patched floors for the transitiv
 `brace-expansion`, `js-yaml`, `nanoid`, `socket.io-parser`, `tar`, and `undici`
 families. These close the reviewed 2026 denial-of-service, parser, archive, and
 HTTP advisories without collapsing packages across incompatible major versions.
+The nanoid 3.x floor is `3.3.18`, which closes
+[GHSA-2v37-7h3g-55p8](https://github.com/advisories/GHSA-2v37-7h3g-55p8)
+without forcing consumers onto a different major.
 The boundary verifier pins both each selector and every allowed resolution, so a
 future install cannot silently return to a vulnerable version or select an
 unreviewed major. `socket.io-parser` is repeated in the standalone messaging
@@ -67,12 +70,21 @@ graph. A dismissed `not_used` alert is therefore scoped to the current graph and
 must be reopened if provider features change.
 
 The independently deployable witness pins `pg` `8.22.0`. Its production container
-pins the Node 24.14.0 Bookworm Slim multi-platform image by manifest digest, removes
+pins the Node 24.19.0 Bookworm Slim multi-platform image by manifest digest, removes
 package managers from the runtime stage, runs as the unprivileged `node` user, and
 contains only the deployed production dependency graph. Public CI exercises its
 PostgreSQL compare-and-swap race against an isolated PostgreSQL 17 service, builds
 the image, and fails on fixed high or critical container findings reported by the
 pinned Trivy action.
+
+The independently deployable key-transparency log pins Tessera `v1.0.4` and its
+complete Go module graph in `packages/volna-key-transparency-log/go.sum`. The
+release SBOM includes those Go modules in addition to the client npm lock. Its
+multi-stage container uses digest-pinned Go `1.26.5` and distroless non-root
+images, while explicitly selecting OpenTelemetry `1.41.0` and
+`golang.org/x/crypto` `0.52.0` over older vulnerable transitive resolutions. CI
+builds and scans the final static image and must report zero fixable HIGH/CRITICAL
+findings.
 
 An audit result is time-scoped evidence, not a permanent guarantee. New advisories
 must be evaluated against the locked graph before publishing another artifact.

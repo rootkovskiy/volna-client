@@ -21,14 +21,14 @@
 
 The endpoint and its OS secure storage are trusted for plaintext processing.
 The server, object storage, realtime service, and witnesses are untrusted for
-message confidentiality. Independent witnesses reduce unilateral directory
-equivocation; the public client retains their signed statements and detects
-rollback or same-size split views through an atomic gossip store. A short-lived
-VOLNA receipt authenticates the first canonical directory observation so an
-unrelated attacker cannot pre-claim another account label. Because the witness
-retains the full hash prefix under its own atomic storage, that receipt does not
-let VOLNA erase or replace already observed history. Compromise or collusion of
-the required witness quorum remains a trust failure. Running multiple instances
+message confidentiality. The endpoint verifies account-master directory semantics
+and a compressed sparse-map proof to a global root. Independent C2SP witnesses
+reduce unilateral log/directory equivocation by cosigning only append-only
+checkpoints; the public client retains exact checkpoint evidence and detects
+rollback or same-size split views through an atomic gossip store. Witnesses see no
+account directory, and their signature is not treated as a semantic device
+authorization. Compromise or collusion of the log operator and the required
+witness quorum remains a trust failure. Running multiple instances
 under one operator is not independence. This does not protect a compromised endpoint. Public source removes
 hidden first-party client code only when the installed artifact is independently
 matched to that source.
