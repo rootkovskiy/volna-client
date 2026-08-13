@@ -56,6 +56,17 @@ test('mobile OS navigation is centralized behind the HTTPS policy', async () => 
   }
 });
 
+test('native YouTube control sends validated data without constructing JavaScript', async () => {
+  const source = await readFile(
+    path.join(sourceRoot, 'apps/mobile/src/components/YouTubeAudioEngine.native.tsx'),
+    'utf8',
+  );
+  assert.doesNotMatch(source, /injectJavaScript\s*\(/);
+  assert.match(source, /postMessage\(JSON\.stringify\(command\)\)/);
+  assert.match(source, /normalizeYouTubeVideoId\(videoId\)/);
+  assert.match(source, /\^\[A-Za-z0-9_\-\]\{11\}\$/);
+});
+
 test('public E2EE claims distinguish MLS threads from server-readable legacy chats', async () => {
   const architecture = await readFile(path.join(releaseRoot, 'ARCHITECTURE.md'), 'utf8');
   const security = await readFile(path.join(releaseRoot, 'SECURITY.md'), 'utf8');
