@@ -28,6 +28,8 @@ const DEVICE_PLATFORMS = new Set(['ios', 'android', 'web']);
 const CONTENT_KINDS = new Set(['message.create', 'message.edit', 'message.reaction', 'message.delete']);
 const ENTITY_TYPES = new Set(['account', 'publicPage', 'event']);
 const MUSIC_PROVIDERS = new Set(['apple', 'yandex', 'youtube', 'volna', 'soundcloud', 'bandcamp']);
+const HASH_PATTERN = /^[0-9a-f]{64}$/;
+const DIRECTORY_RECEIPT_ISSUER = 'volna_directory_v1';
 
 class MessagingContractError extends Error {
   constructor(code) {
@@ -79,6 +81,57 @@ function assertDate(value) {
     fail('client_created_at');
   }
   return value;
+}
+
+function canonicalKeyDirectorySnapshotReceipt(input) {
+  const receipt = assertPlainObject(input, 'directory_receipt');
+  assertExactKeys(
+    receipt,
+    new Set(['version', 'issuer', 'checkpoint', 'issuedAt', 'expiresAt']),
+    'directory_receipt_keys',
+  );
+  if (receipt.version !== 1 || receipt.issuer !== DIRECTORY_RECEIPT_ISSUER) fail('directory_receipt');
+  const checkpoint = assertPlainObject(receipt.checkpoint, 'directory_receipt_checkpoint');
+  assertExactKeys(
+    checkpoint,
+    new Set(['version', 'directoryLabel', 'identityFingerprint', 'entryCount', 'headHash']),
+    'directory_receipt_checkpoint_keys',
+  );
+  if (
+    checkpoint.version !== 1
+    || typeof checkpoint.directoryLabel !== 'string'
+    || !HASH_PATTERN.test(checkpoint.directoryLabel)
+    || typeof checkpoint.identityFingerprint !== 'string'
+    || !HASH_PATTERN.test(checkpoint.identityFingerprint)
+    || !Number.isSafeInteger(checkpoint.entryCount)
+    || checkpoint.entryCount < 0
+    || checkpoint.entryCount > MAX_TOTAL_DEVICES_PER_ACCOUNT * 2
+  ) fail('directory_receipt_checkpoint');
+  const headHash = checkpoint.headHash === null
+    ? null
+    : (typeof checkpoint.headHash === 'string' && HASH_PATTERN.test(checkpoint.headHash)
+      ? checkpoint.headHash
+      : fail('directory_receipt_checkpoint'));
+  if ((checkpoint.entryCount === 0) !== (headHash === null)) fail('directory_receipt_checkpoint');
+  const date = (value) => {
+    if (typeof value !== 'string' || !ISO_DATE_PATTERN.test(value) || !Number.isFinite(Date.parse(value))) {
+      fail('directory_receipt_date');
+    }
+    return new Date(value).toISOString();
+  };
+  const issuedAt = date(receipt.issuedAt);
+  const expiresAt = date(receipt.expiresAt);
+  return new TextEncoder().encode(JSON.stringify([
+    'VOLNA-CHAT-KEY-DIRECTORY-RECEIPT',
+    1,
+    DIRECTORY_RECEIPT_ISSUER,
+    checkpoint.directoryLabel,
+    checkpoint.identityFingerprint,
+    checkpoint.entryCount,
+    headHash,
+    issuedAt,
+    expiresAt,
+  ]));
 }
 
 function normalizeText(value, { required = false } = {}) {
@@ -754,6 +807,7 @@ module.exports = {
   MAX_TRANSFER_WIRE_PAYLOAD_BYTES,
   MessagingContractError,
   canonicalDeviceAuthorization,
+  canonicalKeyDirectorySnapshotReceipt,
   canonicalDeviceRegistrationProof,
   canonicalTransferDeviceDraft,
   canonicalMlsRoster,

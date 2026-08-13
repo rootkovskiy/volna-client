@@ -1,0 +1,20 @@
+{
+  "name": "@volna/key-directory-witness",
+  "version": "0.1.0",
+  "description": "Independently operated key-directory witness for VOLNA E2EE clients.",
+  "license": "Apache-2.0",
+  "private": false,
+  "type": "module",
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:postgres": "node --test test/postgres-store.integration.mjs"
+  },
+  "dependencies": {
+    "@volna/messaging-client": "workspace:*",
+    "pg": "8.22.0"
+  }
+}

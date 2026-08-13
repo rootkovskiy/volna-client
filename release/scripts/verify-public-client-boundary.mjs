@@ -92,7 +92,8 @@ function validateManifest(manifest, failures) {
     'excludedNonRuntimePaths',
     'forbiddenSourceRoots',
     'allowedWorkspaceImports',
-    'allowedPublicEnvironmentVariables',
+    'allowedClientEnvironmentVariables',
+    'allowedWitnessEnvironmentVariables',
     'requiredArchiveRootFiles',
   ]) {
     if (!Array.isArray(manifest[key]) || manifest[key].length === 0) failures.push(`${key} must be a non-empty array`);
@@ -280,7 +281,10 @@ async function scanTextFile(absolute, manifest, failures) {
 
   for (const match of content.matchAll(/process\.env(?:\.([A-Z][A-Z0-9_]*)|\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\])/g)) {
     const variableName = match[1] ?? match[2];
-    if (!manifest.allowedPublicEnvironmentVariables.includes(variableName)) {
+    const allowedEnvironmentVariables = relative.startsWith('packages/volna-key-directory-witness/')
+      ? manifest.allowedWitnessEnvironmentVariables
+      : manifest.allowedClientEnvironmentVariables;
+    if (!allowedEnvironmentVariables.includes(variableName)) {
       failures.push(`undeclared environment variable ${variableName} in ${relative}`);
     }
   }
@@ -289,7 +293,8 @@ async function scanTextFile(absolute, manifest, failures) {
   }
 
   for (const specifier of importSpecifiers(content)) {
-    if (serverOnlyImportPrefixes.some((prefix) => specifier === prefix || specifier.startsWith(prefix))) {
+    const witnessServerImport = relative.startsWith('packages/volna-key-directory-witness/') && specifier === 'pg';
+    if (!witnessServerImport && serverOnlyImportPrefixes.some((prefix) => specifier === prefix || specifier.startsWith(prefix))) {
       failures.push(`server-only import ${specifier} in ${relative}`);
     }
     if (specifier.startsWith('@volna/')) {

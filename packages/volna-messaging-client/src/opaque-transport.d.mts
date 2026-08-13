@@ -6,6 +6,7 @@ export declare class OpaqueTransportError extends Error {
 export type KeyTransparencyWitnessPolicy = {
   threshold: number;
   maxStatementAgeMs: number;
+  requestTimeoutMs?: number;
   witnesses: Array<{
     id: string;
     origin: string;
@@ -17,6 +18,7 @@ export declare class OpaqueChatTransport {
   constructor(options: {
     apiOrigin: string;
     fetch: typeof globalThis.fetch;
+    witnessFetch?: typeof globalThis.fetch;
     getAccessToken: () => string | undefined | Promise<string | undefined>;
     includeCredentials?: boolean;
     allowInsecureDevelopmentOrigin?: boolean;

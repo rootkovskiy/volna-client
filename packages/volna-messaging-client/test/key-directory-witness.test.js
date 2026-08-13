@@ -171,3 +171,47 @@ test('independent witness signs only an append-only directory and permanently re
   assert.deepEqual(verified.witnessIds, ['witness_1', 'witness_2']);
   witnesses.forEach((witness) => witness.destroy());
 });
+
+test('a short-lived VOLNA receipt binds the canonical directory checkpoint before first observation', async () => {
+  const { ed25519 } = await import('@noble/curves/ed25519.js');
+  const {
+    createKeyDirectorySnapshotReceipt,
+    keyDirectorySnapshotReceiptPublicKey,
+    verifyKeyDirectorySnapshotReceipt,
+  } = await import('../src/key-directory-witness.mjs');
+  const now = Date.parse('2026-08-13T09:00:00.000Z');
+  const privateKey = Buffer.alloc(32, 31);
+  const privateKeyBefore = Buffer.from(privateKey);
+  const publicKey = Buffer.from(ed25519.getPublicKey(privateKey));
+  const publicKeyBefore = Buffer.from(publicKey);
+  const checkpoint = {
+    version: 1,
+    directoryLabel: 'a'.repeat(64),
+    identityFingerprint: 'b'.repeat(64),
+    entryCount: 2,
+    headHash: 'c'.repeat(64),
+  };
+  assert.equal(keyDirectorySnapshotReceiptPublicKey(privateKey), publicKey.toString('base64url'));
+  assert.deepEqual(privateKey, privateKeyBefore);
+  const receipt = createKeyDirectorySnapshotReceipt({ checkpoint, signingKey: privateKey, issuedAt: now });
+  assert.deepEqual(privateKey, privateKeyBefore);
+  assert.deepEqual(
+    verifyKeyDirectorySnapshotReceipt({ receipt, checkpoint, publicKey, now: now + 30_000 }),
+    receipt,
+  );
+  assert.deepEqual(publicKey, publicKeyBefore);
+  assert.throws(() => verifyKeyDirectorySnapshotReceipt({
+    receipt,
+    checkpoint: { ...checkpoint, headHash: 'd'.repeat(64) },
+    publicKey,
+    now: now + 30_000,
+  }), /receipt_checkpoint/);
+  assert.throws(() => verifyKeyDirectorySnapshotReceipt({
+    receipt,
+    checkpoint,
+    publicKey,
+    now: now + 11 * 60_000,
+  }), /receipt_expired/);
+  const forged = { ...receipt, signature: Buffer.alloc(64, 7).toString('base64url') };
+  assert.throws(() => verifyKeyDirectorySnapshotReceipt({ receipt: forged, checkpoint, publicKey, now }), /receipt_signature/);
+});
