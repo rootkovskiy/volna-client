@@ -13,7 +13,7 @@ openmls = { version = "=0.8.1" }
 openmls_basic_credential = { version = "=0.5.0", features = ["clonable"] }
 openmls_rust_crypto = { version = "=0.5.1" }
 openmls_traits = { version = "=0.5.0" }
-tls_codec = { version = "=0.4.2", features = ["derive", "serde", "mls"] }
+tls_codec = { version = "=0.5.0", features = ["derive", "serde", "mls"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom_old = { package = "getrandom", version = "=0.2.17", features = ["js"] }
