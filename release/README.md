@@ -6,7 +6,9 @@ This is the complete public first-party source boundary for the VOLNA Expo
 client release candidate: iOS, Android, Web, and installed PWA. It includes the
 application host, routes, UI, networking and storage adapters, service worker,
 shared client packages, and the gated end-to-end encrypted messaging
-implementation.
+implementation. It also contains the separately deployable reference
+key-directory witness service under `packages/volna-key-directory-witness` so an
+independent operator can review and run the exact append-only verification logic.
 
 The VOLNA API, Prisma schema, databases, moderation and recommendation
 services, deployment configuration, and secrets are intentionally excluded
@@ -20,6 +22,7 @@ Use Node 20, 22, or 24 and pnpm 11.7.0:
 ```sh
 pnpm install --frozen-lockfile
 pnpm verify
+pnpm test:witness:postgres
 pnpm verify:openmls
 pnpm export:web
 pnpm export:android
@@ -29,7 +32,9 @@ pnpm export:ios
 `pnpm verify:boundary` fails if a first-party client source root is omitted,
 if client code imports a proprietary server module, if a secret-bearing file
 enters the release, or if an undeclared environment variable is read.
-The suite also verifies retained signed key-directory gossip evidence and a
+The PostgreSQL test requires an isolated database in
+`WITNESS_TEST_DATABASE_URL`. The suite also verifies retained signed
+key-directory gossip evidence and a
 32,768-message encrypted local-history smoke scenario. The latter is desktop
 evidence only; physical iOS and Android testing remains a release gate.
 
@@ -45,6 +50,9 @@ to replace JavaScript after publication.
 Production E2EE is currently hard-disabled. Legacy chats remain server-readable;
 only a future conversation explicitly activated as `MLS_V1` receives the
 server-blind message-content guarantee described in the security documents.
+The witness implementation being public does not count as independent operation:
+production still requires at least two operators outside VOLNA's cloud accounts,
+key custody, database control, and administration.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md),
 [THREAT_MODEL.md](THREAT_MODEL.md), and [DEPENDENCIES.md](DEPENDENCIES.md) before

@@ -84,11 +84,14 @@ async function buildSbom(packageJson, lockText, sourceTreeHash, repositoryRoot) 
     'packages/content-policy/package.json',
     'packages/music-taxonomy/package.json',
     'packages/volna-messaging-client/package.json',
+    'packages/volna-key-directory-witness/package.json',
   ]) {
     const componentPackage = JSON.parse(await readFile(path.join(repositoryRoot, relative), 'utf8'));
     const reference = npmPurl(componentPackage.name, componentPackage.version);
     components.set(reference, {
-      type: componentPackage.name === 'mobile' ? 'application' : 'library',
+      type: ['mobile', '@volna/key-directory-witness'].includes(componentPackage.name)
+        ? 'application'
+        : 'library',
       'bom-ref': reference,
       name: componentPackage.name,
       version: componentPackage.version,

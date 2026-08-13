@@ -19,8 +19,11 @@ seen by that device fails closed. Directory retrieval is immutable-snapshot
 paginated: the endpoint verifies the exact entry count and chain head before use.
 It then queries distinct pinned witness origins directly, without VOLNA cookies or
 tokens, and requires at least two fresh Ed25519 statements over that exact
-checkpoint. If no witness policy is compiled into the client, enrollment, transfer,
-rekey, and rollout capabilities remain locally disabled.
+checkpoint. Each direct witness request has an eight-second default deadline and a
+64 KiB streaming response bound; collection stops at the first valid quorum and
+ignores failed, oversized, stale, or forked minority responses. If no witness policy
+is compiled into the client, enrollment, transfer, rekey, and rollout capabilities
+remain locally disabled.
 
 Device changes now use a QR-bound X25519/HKDF/XChaCha20-Poly1305 transfer channel,
 a human-compared six-digit code, resumable chained history chunks, a new independent

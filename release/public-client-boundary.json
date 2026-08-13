@@ -9,6 +9,7 @@
     "packages/content-policy",
     "packages/music-taxonomy",
     "packages/volna-messaging-client",
+    "packages/volna-key-directory-witness",
     "public"
   ],
   "rootRuntimeFiles": [
@@ -33,9 +34,20 @@
     "@volna/messaging-client",
     "@volna/music-taxonomy"
   ],
-  "allowedPublicEnvironmentVariables": [
+  "allowedClientEnvironmentVariables": [
     "EXPO_PUBLIC_API_URL",
     "EXPO_PUBLIC_SENTRY_DSN"
+  ],
+  "allowedWitnessEnvironmentVariables": [
+    "VOLNA_DIRECTORY_RECEIPT_PUBLIC_KEY",
+    "WITNESS_ALLOWED_ORIGINS",
+    "WITNESS_DATABASE_POOL_SIZE",
+    "WITNESS_DATABASE_URL",
+    "WITNESS_ID",
+    "WITNESS_MAX_CONCURRENT_OBSERVATIONS",
+    "WITNESS_PORT",
+    "WITNESS_SIGNING_KEY",
+    "WITNESS_TEST_DATABASE_URL"
   ],
   "requiredArchiveRootFiles": [
     ".gitattributes",

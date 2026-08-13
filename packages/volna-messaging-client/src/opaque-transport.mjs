@@ -28,7 +28,11 @@ const {
 const ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 const HEX_HASH_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_RESPONSE_CHARS = 2 * 1024 * 1024;
-const MAX_WITNESS_RESPONSE_CHARS = 64 * 1024;
+const MAX_WITNESS_RESPONSE_BYTES = 64 * 1024;
+const MAX_WITNESS_OBSERVATION_CHARS = 512 * 1024;
+const DEFAULT_WITNESS_REQUEST_TIMEOUT_MS = 8_000;
+const MIN_WITNESS_REQUEST_TIMEOUT_MS = 100;
+const MAX_WITNESS_REQUEST_TIMEOUT_MS = 30_000;
 const DIRECTORY_PAGE_SIZE = 8;
 
 export class OpaqueTransportError extends Error {
@@ -327,6 +331,46 @@ function encodeQuery(value) {
   return encodeURIComponent(value);
 }
 
+async function readBoundedUtf8Response(response, maximumBytes) {
+  const declaredLengthValue = response.headers?.get?.('content-length');
+  if (declaredLengthValue !== null && declaredLengthValue !== undefined) {
+    const declaredLength = Number(declaredLengthValue);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > maximumBytes) return null;
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) return null;
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      if (!(result.value instanceof Uint8Array)) return null;
+      totalBytes += result.value.byteLength;
+      if (totalBytes > maximumBytes) {
+        void reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(new Uint8Array(result.value));
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.releaseLock?.();
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 export function createOpaqueChatTransport(options) {
   return new OpaqueChatTransport(options);
 }
@@ -350,6 +394,8 @@ export class OpaqueChatTransport {
     }
     this.origin = origin.origin;
     this.fetch = options.fetch;
+    this.witnessFetch = options.witnessFetch === undefined ? options.fetch : options.witnessFetch;
+    if (typeof this.witnessFetch !== 'function') fail('witness_fetch_missing');
     this.getAccessToken = options.getAccessToken;
     this.includeCredentials = options.includeCredentials === true;
     this.keyTransparencyPolicy = this.normalizeKeyTransparencyPolicy(
@@ -372,6 +418,14 @@ export class OpaqueChatTransport {
       || policy.maxStatementAgeMs < 60_000
       || policy.maxStatementAgeMs > 30 * 24 * 60 * 60_000
     ) fail('directory_witness_max_age');
+    const requestTimeoutMs = policy.requestTimeoutMs === undefined
+      ? DEFAULT_WITNESS_REQUEST_TIMEOUT_MS
+      : policy.requestTimeoutMs;
+    if (
+      !Number.isSafeInteger(requestTimeoutMs)
+      || requestTimeoutMs < MIN_WITNESS_REQUEST_TIMEOUT_MS
+      || requestTimeoutMs > MAX_WITNESS_REQUEST_TIMEOUT_MS
+    ) fail('directory_witness_timeout');
     const seenIds = new Set();
     const seenOrigins = new Set();
     const seenKeys = new Set();
@@ -405,8 +459,34 @@ export class OpaqueChatTransport {
     return Object.freeze({
       threshold: policy.threshold,
       maxStatementAgeMs: policy.maxStatementAgeMs,
+      requestTimeoutMs,
       witnesses: Object.freeze(witnesses),
     });
+  }
+
+  async requestWitnessStatement(witness, observationBody, signal) {
+    try {
+      const response = await this.witnessFetch(
+        `${witness.origin}/v1/key-directory/observations`,
+        {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: observationBody,
+          cache: 'no-store',
+          credentials: 'omit',
+          redirect: 'error',
+          referrerPolicy: 'no-referrer',
+          signal,
+        },
+      );
+      if (!response?.ok) return null;
+      const body = await readBoundedUtf8Response(response, MAX_WITNESS_RESPONSE_BYTES);
+      if (body === null) return null;
+      const statement = object(JSON.parse(body), 'directory_witness_statement');
+      return statement.witnessId === witness.id ? statement : null;
+    } catch {
+      return null;
+    }
   }
 
   async request(path, init = {}) {
@@ -451,10 +531,18 @@ export class OpaqueChatTransport {
     ) {
       fail('capabilities_mismatch');
     }
+    const enrollmentEnabled = value.enrollmentEnabled === true;
+    const directoryReceiptPublicKey = value.directoryReceiptPublicKey === null
+      ? null
+      : text(value.directoryReceiptPublicKey, 128, 'directory_receipt_public_key');
+    if (
+      (directoryReceiptPublicKey !== null && base64UrlToBytes(directoryReceiptPublicKey, 32).length !== 32)
+      || (enrollmentEnabled && directoryReceiptPublicKey === null)
+    ) fail('capabilities_mismatch');
     return {
       protocolVersion: CHAT_PROTOCOL_VERSION,
       ciphersuite: CHAT_CIPHERSUITE,
-      enrollmentEnabled: value.enrollmentEnabled === true,
+      enrollmentEnabled,
       rolloutEnabled: value.rolloutEnabled === true,
       deviceTransferEnabled: value.deviceTransferEnabled === true,
       membershipRekeyEnabled: value.membershipRekeyEnabled === true,
@@ -463,6 +551,7 @@ export class OpaqueChatTransport {
       legacyHistoryServerReadable: true,
       keyTransparencyRequired: true,
       directoryPaginationVersion: 1,
+      directoryReceiptPublicKey,
     };
   }
 
@@ -603,6 +692,7 @@ export class OpaqueChatTransport {
     let cursor = null;
     let identity = null;
     let devices = null;
+    let witnessReceipt = null;
     let headHash;
     let entryCount;
     const entries = [];
@@ -632,12 +722,14 @@ export class OpaqueChatTransport {
         if (value.snapshotDetailsIncluded !== true) fail('directory_snapshot_details');
         identity = pageIdentity;
         devices = pageDevices;
+        witnessReceipt = object(value.witnessReceipt, 'directory_witness_receipt');
         headHash = pageHeadHash;
         entryCount = value.entryCount;
       } else if (
         value.snapshotDetailsIncluded !== false
         || pageIdentity !== null
         || pageDevices.length !== 0
+        || value.witnessReceipt !== null
         || pageHeadHash !== headHash
         || value.entryCount !== entryCount
       ) fail('directory_snapshot_changed');
@@ -673,48 +765,85 @@ export class OpaqueChatTransport {
       entryCount,
       headHash,
     };
-    const statements = (await Promise.all(this.keyTransparencyPolicy.witnesses.map(async (witness) => {
-      const query = new URLSearchParams({
-        entryCount: String(checkpoint.entryCount),
-        headHash: checkpoint.headHash ?? 'none',
-        identityFingerprint: checkpoint.identityFingerprint,
+    const observationBody = JSON.stringify({
+      snapshot: {
+        accountId: directory.accountId,
+        identity: directory.identity,
+        devices: directory.devices,
+        entries: directory.entries,
+        headHash: directory.headHash,
+      },
+      receipt: witnessReceipt,
+    });
+    if (observationBody.length > MAX_WITNESS_OBSERVATION_CHARS) fail('directory_witness_observation');
+    const requests = this.keyTransparencyPolicy.witnesses.map((witness) => {
+      const controller = new AbortController();
+      let timeout;
+      const deadline = new Promise((resolve) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          resolve(null);
+        }, this.keyTransparencyPolicy.requestTimeoutMs);
       });
-      let response;
-      try {
-        response = await this.fetch(
-          `${witness.origin}/v1/key-directory/checkpoints/${checkpoint.directoryLabel}?${query.toString()}`,
-          {
-            method: 'GET',
-            headers: { Accept: 'application/json' },
-            cache: 'no-store',
-            credentials: 'omit',
-            redirect: 'error',
-            referrerPolicy: 'no-referrer',
-          },
-        );
-        if (!response?.ok || typeof response.text !== 'function') return null;
-        const declaredLength = Number(response.headers?.get?.('content-length'));
-        if (Number.isFinite(declaredLength) && declaredLength > MAX_WITNESS_RESPONSE_CHARS) return null;
-        const body = await response.text();
-        if (body.length > MAX_WITNESS_RESPONSE_CHARS) return null;
-        const statement = object(JSON.parse(body), 'directory_witness_statement');
-        return statement.witnessId === witness.id ? statement : null;
-      } catch {
-        return null;
-      }
-    }))).filter((statement) => statement !== null);
-    try {
-      directory.verification.witnessQuorum = verifyKeyDirectoryWitnessQuorum({
-        accountId: requestedAccountId,
-        identityFingerprint: directory.verification.identityFingerprint,
-        entryCount,
-        headHash,
-        statements,
-        policy: this.keyTransparencyPolicy,
-      });
-    } catch {
-      fail('directory_witness_verification');
+      const request = Promise.race([
+        this.requestWitnessStatement(witness, observationBody, controller.signal),
+        deadline,
+      ]).finally(() => clearTimeout(timeout));
+      return {
+        cancel: () => {
+          clearTimeout(timeout);
+          controller.abort();
+        },
+        request,
+        settled: null,
+      };
+    });
+    const pending = new Set();
+    for (const request of requests) {
+      request.settled = request.request.then((statement) => ({ request, statement }));
+      pending.add(request.settled);
     }
+    const statements = [];
+    let witnessQuorum = null;
+    try {
+      while (pending.size > 0) {
+        const settled = await Promise.race(pending);
+        pending.delete(settled.request.settled);
+        if (settled.statement !== null) {
+          try {
+            verifyKeyDirectoryWitnessQuorum({
+              accountId: requestedAccountId,
+              identityFingerprint: directory.verification.identityFingerprint,
+              entryCount,
+              headHash,
+              statements: [settled.statement],
+              policy: { ...this.keyTransparencyPolicy, threshold: 1 },
+            });
+            statements.push(settled.statement);
+          } catch {
+            // A failed or malicious minority witness cannot poison an honest quorum.
+          }
+        }
+        if (statements.length >= this.keyTransparencyPolicy.threshold) {
+          witnessQuorum = verifyKeyDirectoryWitnessQuorum({
+            accountId: requestedAccountId,
+            identityFingerprint: directory.verification.identityFingerprint,
+            entryCount,
+            headHash,
+            statements,
+            policy: this.keyTransparencyPolicy,
+          });
+          break;
+        }
+        if (statements.length + pending.size < this.keyTransparencyPolicy.threshold) break;
+      }
+    } catch {
+      witnessQuorum = null;
+    } finally {
+      requests.forEach((request) => request.cancel());
+    }
+    if (witnessQuorum === null) fail('directory_witness_verification');
+    directory.verification.witnessQuorum = witnessQuorum;
     return directory;
   }
 

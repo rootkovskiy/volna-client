@@ -3,7 +3,9 @@
 ## Current status
 
 The source and release-evidence tooling are public-review candidates. Production
-E2EE remains disabled until independent witnesses, artifact signing and
+E2EE remains disabled. A deployable PostgreSQL-backed witness implementation is
+included, but no VOLNA-controlled deployment satisfies independence. Release still
+requires at least two independently administered witness origins and keys, artifact signing and
 reproducible binary verification, cross-implementation tests, all-platform
 device tests, and a documented public-review window with no unresolved known
 high-severity findings are complete. VOLNA does not require a commissioned
@@ -34,6 +36,12 @@ device keys, or production tokens.
   or local-state checks fail closed.
 - Signed witness evidence is re-verified before durable gossip storage; rollback,
   equivocation, same-size split views, and stored-evidence tampering fail closed.
+- A witness accepts an observation only after verifying both the complete
+  account-master-authorized directory and a short-lived VOLNA signature over that
+  exact checkpoint. Witness state advances through database compare-and-swap and
+  never accepts a shorter or changed prefix.
+- Witness credentials and database URLs are server-only environment variables and
+  are forbidden from all Expo client roots by the public boundary verifier.
 - Release evidence must state signing, review, and reproducibility facts
   literally; absent evidence is never inferred.
 

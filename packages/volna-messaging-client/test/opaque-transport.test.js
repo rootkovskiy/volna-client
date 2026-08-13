@@ -6,12 +6,13 @@ const test = require('node:test');
 
 function response(value, status = 200) {
   const body = JSON.stringify(value);
-  return {
-    ok: status >= 200 && status < 300,
+  return new Response(body, {
     status,
-    headers: { get: (name) => name === 'content-length' ? String(body.length) : null },
-    text: async () => body,
-  };
+    headers: {
+      'content-length': String(new TextEncoder().encode(body).byteLength),
+      'content-type': 'application/json',
+    },
+  });
 }
 
 test('opaque transport sends only bounded ciphertext envelope fields', async () => {
@@ -187,17 +188,29 @@ test('opaque transport assembles one immutable directory snapshot and requires a
     entryCount: 2,
     headHash: secondEntry.entryHash,
   };
-  const privateKeys = [new Uint8Array(32).fill(7), new Uint8Array(32).fill(8)];
+  const witnessReceipt = {
+    version: 1,
+    issuer: 'volna_directory_v1',
+    checkpoint,
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    signature: Buffer.alloc(64, 1).toString('base64url'),
+  };
+  const privateKeys = [
+    new Uint8Array(32).fill(7),
+    new Uint8Array(32).fill(8),
+    new Uint8Array(32).fill(9),
+  ];
   const witnesses = privateKeys.map((privateKey, index) => ({
     id: `witness_${index + 1}`,
     origin: `https://witness-${index + 1}.example`,
     publicKey: bytesToBase64Url(ed25519.getPublicKey(privateKey)),
   }));
-  const witnessStatement = (index) => {
+  const witnessStatement = (index, statementCheckpoint = checkpoint) => {
     const unsigned = {
       version: 1,
       witnessId: witnesses[index].id,
-      checkpoint,
+      checkpoint: statementCheckpoint,
       observedAt: new Date().toISOString(),
     };
     return {
@@ -210,11 +223,44 @@ test('opaque transport assembles one immutable directory snapshot and requires a
   };
   const apiCalls = [];
   const witnessCalls = [];
+  let witnessMode = 'stall';
+  let stalledWitnessAborted = false;
+  let timedOutWitnesses = 0;
+  let oversizedResponseCancelled = false;
   const fetch = async (url, init = {}) => {
     const parsed = new URL(url);
     if (parsed.hostname.startsWith('witness-')) {
       witnessCalls.push({ url, init });
       const index = Number(parsed.hostname.match(/witness-(\d+)/)[1]) - 1;
+      if (witnessMode === 'stall' && index === 2) {
+        return new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            stalledWitnessAborted = true;
+            reject(new Error('aborted'));
+          }, { once: true });
+        });
+      }
+      if (witnessMode === 'timeout' && index > 0) {
+        return new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            timedOutWitnesses += 1;
+            reject(new Error('aborted'));
+          }, { once: true });
+        });
+      }
+      if (witnessMode === 'oversized' && index === 0) {
+        return new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(64 * 1024 + 1));
+          },
+          cancel() {
+            oversizedResponseCancelled = true;
+          },
+        }), { status: 200 });
+      }
+      if (witnessMode === 'mismatched-checkpoint' && index === 0) {
+        return response(witnessStatement(index, { ...checkpoint, headHash: 'f'.repeat(64) }));
+      }
       return response(witnessStatement(index));
     }
     apiCalls.push(url);
@@ -228,6 +274,7 @@ test('opaque transport assembles one immutable directory snapshot and requires a
           ...common,
           identity: null,
           devices: [],
+          witnessReceipt: null,
           entries: [secondEntry],
           nextCursor: null,
           snapshotDetailsIncluded: false,
@@ -236,6 +283,7 @@ test('opaque transport assembles one immutable directory snapshot and requires a
           ...common,
           identity,
           devices,
+          witnessReceipt,
           entries: [firstEntry],
           nextCursor: 'cursor_page_2',
           snapshotDetailsIncluded: true,
@@ -249,6 +297,7 @@ test('opaque transport assembles one immutable directory snapshot and requires a
     keyTransparencyPolicy: {
       threshold: 2,
       maxStatementAgeMs: 60_000,
+      requestTimeoutMs: 100,
       witnesses,
     },
   });
@@ -257,7 +306,42 @@ test('opaque transport assembles one immutable directory snapshot and requires a
   assert.equal(directory.entries.length, 2);
   assert.equal(directory.verification.witnessQuorum.threshold, 2);
   assert.deepEqual(directory.verification.witnessQuorum.witnessIds, ['witness_1', 'witness_2']);
+  assert.equal(stalledWitnessAborted, true);
   assert.equal(apiCalls.length, 2);
-  assert.equal(witnessCalls.length, 2);
-  assert.ok(witnessCalls.every((call) => call.init.credentials === 'omit' && call.init.referrerPolicy === 'no-referrer'));
+  assert.equal(witnessCalls.length, 3);
+  assert.ok(witnessCalls.every((call) => (
+    call.url.endsWith('/v1/key-directory/observations')
+      && call.init.method === 'POST'
+      && call.init.credentials === 'omit'
+      && call.init.referrerPolicy === 'no-referrer'
+      && call.init.headers.Authorization === undefined
+  )));
+  const observations = witnessCalls.map((call) => JSON.parse(call.init.body));
+  assert.ok(observations.every((observation) => (
+    observation.snapshot.accountId === first.accountId
+      && observation.snapshot.entries.length === 2
+      && observation.snapshot.devices.length === 2
+      && observation.snapshot.verification === undefined
+      && observation.receipt.signature === witnessReceipt.signature
+  )));
+
+  witnessMode = 'oversized';
+  apiCalls.length = 0;
+  witnessCalls.length = 0;
+  const boundedDirectory = await transport.getDirectory(first.accountId);
+  assert.deepEqual(boundedDirectory.verification.witnessQuorum.witnessIds, ['witness_2', 'witness_3']);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(oversizedResponseCancelled, true);
+
+  witnessMode = 'mismatched-checkpoint';
+  apiCalls.length = 0;
+  witnessCalls.length = 0;
+  const minorityForkDirectory = await transport.getDirectory(first.accountId);
+  assert.deepEqual(minorityForkDirectory.verification.witnessQuorum.witnessIds, ['witness_2', 'witness_3']);
+
+  witnessMode = 'timeout';
+  apiCalls.length = 0;
+  witnessCalls.length = 0;
+  await assert.rejects(() => transport.getDirectory(first.accountId), /directory_witness_verification/);
+  assert.equal(timedOutWitnesses, 2);
 });
