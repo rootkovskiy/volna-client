@@ -4,6 +4,7 @@
   "license": "Apache-2.0",
   "allowedTopLevelEntries": [
     "DEPENDENCIES.md",
+    "key-transparency-policy.json",
     "LICENSE",
     "NOTICE",
     "PUBLIC_BOUNDARY.md",

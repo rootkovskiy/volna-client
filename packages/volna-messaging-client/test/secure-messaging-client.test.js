@@ -38,6 +38,9 @@ test('secure client registers, persists, and restores without server-held recove
   const wrappingKey = random(32);
   let encryptedState = null;
   let available = 0;
+  let transparencyStatusCalls = 0;
+  let registrationAttempts = 0;
+  let firstRegistrationIdentity = null;
   let registeredIdentity = null;
   const messageStore = memoryMessageStore();
   const storage = {
@@ -55,6 +58,16 @@ test('secure client registers, persists, and restores without server-held recove
     listOwnDevices: async () => ({ identity: registeredIdentity, devices: [] }),
     createDeviceChallenge: async () => ({ challengeId: 'challenge_0001', challenge: 'AQIDBA', expiresAt: '2026-08-03T13:00:00.000Z' }),
     registerDevice: async (input) => {
+      registrationAttempts += 1;
+      const registrationIdentity = {
+        deviceId: input.deviceId,
+        credential: input.credential,
+        signaturePublicKey: input.signaturePublicKey,
+        accountIdentityPublicKey: input.accountIdentityPublicKey,
+        accountIdentitySignature: input.accountIdentitySignature,
+      };
+      if (firstRegistrationIdentity === null) firstRegistrationIdentity = registrationIdentity;
+      else assert.deepEqual(registrationIdentity, firstRegistrationIdentity);
       registeredIdentity = {
         accountId: 'account_alice',
         publicKey: input.accountIdentityPublicKey,
@@ -62,10 +75,15 @@ test('secure client registers, persists, and restores without server-held recove
           .update(Buffer.from(input.accountIdentityPublicKey, 'base64url'))
           .digest('hex'),
       };
+      if (registrationAttempts === 1) throw new Error('simulated lost registration response');
       return {
         identity: registeredIdentity,
-        device: { id: input.deviceId },
+        device: { id: input.deviceId, status: 'PENDING_TRANSPARENCY' },
       };
+    },
+    getDeviceTransparencyStatus: async () => {
+      transparencyStatusCalls += 1;
+      return { status: 'ACTIVE', retryAfterMs: 100 };
     },
     getDirectory: async () => ({
       identity: registeredIdentity,
@@ -104,11 +122,32 @@ test('secure client registers, persists, and restores without server-held recove
     transport,
     storage,
   });
-  const setup = await client.setupDevice();
+  await assert.rejects(client.setupDevice(), /simulated lost registration response/);
+  const pendingRecoverySecret = client.getPendingRecoverySecretForDisplay();
+  assert.equal(typeof pendingRecoverySecret, 'string');
+  const resumedRuntime = createMlsRuntime({ randomBytes: random, wrappingKeyProvider: storage.wrappingKeyProvider });
+  const resumed = createSecureMessagingClient({
+    accountId: 'account_alice',
+    deviceId: 'device_alice',
+    platform: 'web',
+    displayName: 'Alice browser',
+    runtime: resumedRuntime,
+    transport,
+    storage,
+  });
+  const pendingRestoration = await resumed.restore();
+  assert.equal(pendingRestoration.status, 'registration-pending');
+  const setup = await resumed.setupDevice();
   assert.equal(setup.status, 'ready');
   assert.equal(typeof setup.recoverySecret, 'string');
+  assert.equal(setup.recoverySecret, pendingRecoverySecret);
+  assert.equal(registrationAttempts, 2);
+  assert.equal(resumed.getPendingRecoverySecretForDisplay(), setup.recoverySecret);
+  assert.equal(transparencyStatusCalls, 1);
   assert.equal(available, 3);
   assert.equal(encryptedState.includes(setup.recoverySecret), false);
+  assert.deepEqual(await resumed.acknowledgeRecoverySecretSaved(), { status: 'cleared' });
+  assert.equal(resumed.getPendingRecoverySecretForDisplay(), null);
 
   const restoredRuntime = createMlsRuntime({ randomBytes: random, wrappingKeyProvider: storage.wrappingKeyProvider });
   const restored = createSecureMessagingClient({

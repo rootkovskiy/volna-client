@@ -6,6 +6,13 @@ import {
   verifyKeyDirectorySnapshot,
   verifyKeyDirectoryWitnessQuorum,
 } from './mls-runtime.mjs';
+import {
+  canonicalKeyTransparencyRootEntry,
+  normalizeC2spKeyTransparencyPolicy,
+  verifyC2spCheckpoint,
+  verifyKeyTransparencyMapProof,
+  verifyRfc6962Inclusion,
+} from './key-transparency.mjs';
 
 const {
   CHAT_CIPHERSUITE,
@@ -51,6 +58,104 @@ function fail(code, status) {
 function object(value, code) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) fail(code);
   return value;
+}
+
+function exactKeys(value, keys, code) {
+  if (Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) fail(code);
+}
+
+function hexBytes(value) {
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function verifyDirectoryKeyTransparencyEvidence({ evidence: evidenceValue, directory, checkpoint, policy, now }) {
+  const evidence = object(evidenceValue, 'directory_transparency_evidence');
+  exactKeys(evidence, ['version', 'rootEntry', 'mapProof', 'log'], 'directory_transparency_evidence_keys');
+  if (evidence.version !== 1) fail('directory_transparency_version');
+  const rootEntry = object(evidence.rootEntry, 'directory_transparency_root_entry');
+  let canonicalRootEntry;
+  let mapProof;
+  try {
+    canonicalRootEntry = canonicalKeyTransparencyRootEntry(rootEntry);
+    mapProof = verifyKeyTransparencyMapProof(evidence.mapProof);
+  } catch {
+    fail('directory_transparency_map_verification');
+  }
+  const expectedDeviceIds = directory.devices
+    .filter((device) => device.status !== 'REVOKED')
+    .map((device) => device.id)
+    .sort();
+  const expectedValue = {
+    version: 1,
+    directoryLabel: checkpoint.directoryLabel,
+    identityFingerprint: checkpoint.identityFingerprint,
+    entryCount: checkpoint.entryCount,
+    headHash: checkpoint.headHash,
+    deviceIds: expectedDeviceIds,
+  };
+  if (
+    checkpoint.headHash === null
+    || mapProof.key !== checkpoint.directoryLabel
+    || JSON.stringify(mapProof.value) !== JSON.stringify(expectedValue)
+    || rootEntry.root !== mapProof.root
+  ) fail('directory_transparency_map_binding');
+  const log = object(evidence.log, 'directory_transparency_log');
+  exactKeys(
+    log,
+    ['entry', 'index', 'treeSize', 'root', 'inclusionProof', 'checkpointNote', 'witnessNames', 'oldestWitnessAt'],
+    'directory_transparency_log_keys',
+  );
+  if (
+    text(log.entry, 2_048, 'directory_transparency_entry') !== canonicalRootEntry
+    || epoch(log.index, 'directory_transparency_log_index') === undefined
+    || epoch(log.treeSize, 'directory_transparency_log_size') === undefined
+    || typeof log.root !== 'string'
+    || !HEX_HASH_PATTERN.test(log.root)
+    || !Array.isArray(log.inclusionProof)
+    || log.inclusionProof.length > 64
+    || log.inclusionProof.some((hash) => typeof hash !== 'string' || !HEX_HASH_PATTERN.test(hash))
+    || !Array.isArray(log.witnessNames)
+  ) fail('directory_transparency_log');
+  let verified;
+  try {
+    verified = verifyC2spCheckpoint({
+      note: text(log.checkpointNote, 32 * 1024, 'directory_transparency_checkpoint'),
+      policy: {
+        origin: policy.origin,
+        logVkey: policy.logVkey,
+        threshold: policy.threshold,
+        maxAgeSeconds: policy.maxAgeSeconds,
+        witnessVkeys: policy.witnessVkeys,
+      },
+      now,
+    });
+    if (verified.treeSize !== log.treeSize || verified.root !== log.root) fail('directory_transparency_checkpoint_binding');
+    verifyRfc6962Inclusion({
+      leaf: new TextEncoder().encode(log.entry),
+      index: log.index,
+      treeSize: log.treeSize,
+      proof: log.inclusionProof,
+      root: log.root,
+    });
+  } catch (error) {
+    if (error instanceof OpaqueTransportError) throw error;
+    fail('directory_transparency_log_verification');
+  }
+  const witnessNames = log.witnessNames.map((name) => text(name, 255, 'directory_transparency_witness')).sort();
+  if (
+    new Set(witnessNames).size !== witnessNames.length
+    || JSON.stringify(witnessNames) !== JSON.stringify(verified.witnessNames)
+  ) fail('directory_transparency_witness_binding');
+  const oldestObservedAt = new Date(verified.oldestWitnessTimestamp * 1_000).toISOString();
+  if (requiredDate(log.oldestWitnessAt, 'directory_transparency_witness_time') !== oldestObservedAt) {
+    fail('directory_transparency_witness_time');
+  }
+  return {
+    checkpoint: { version: 1, ...checkpoint },
+    threshold: policy.threshold,
+    witnessIds: witnessNames.map((name) => `c2sp_${hexBytes(sha256(new TextEncoder().encode(name))).slice(0, 24)}`),
+    oldestObservedAt,
+  };
 }
 
 function id(value, code) {
@@ -106,7 +211,7 @@ function parseIdentity(value) {
 function parseDevice(value, identityPublicKey = undefined) {
   const device = object(value, 'device');
   if (device.platform !== 'ios' && device.platform !== 'android' && device.platform !== 'web') fail('device_platform');
-  if (device.status !== 'ACTIVE' && device.status !== 'REVOKED') fail('device_status');
+  if (!['PENDING_TRANSPARENCY', 'ACTIVE', 'REVOKED'].includes(device.status)) fail('device_status');
   if (!Array.isArray(device.capabilities)) fail('device_capabilities');
   return {
     id: id(device.id, 'device_id'),
@@ -120,6 +225,10 @@ function parseDevice(value, identityPublicKey = undefined) {
     accountIdentitySignature: text(device.accountIdentitySignature, 1024, 'device_identity_signature'),
     capabilities: device.capabilities.map((item) => text(item, 80, 'device_capability')),
     status: device.status,
+    transparencyGeneration: device.transparencyGeneration === null || device.transparencyGeneration === undefined
+      ? null
+      : epoch(device.transparencyGeneration, 'device_transparency_generation'),
+    activatedAt: optionalDate(device.activatedAt, 'device_activated_at'),
     registeredAt: optionalDate(device.registeredAt, 'device_registered_at'),
     lastSeenAt: optionalDate(device.lastSeenAt, 'device_last_seen_at'),
     revokedAt: optionalDate(device.revokedAt, 'device_revoked_at'),
@@ -407,6 +516,31 @@ export class OpaqueChatTransport {
   normalizeKeyTransparencyPolicy(value, allowInsecureDevelopmentOrigin) {
     if (value === undefined) return null;
     const policy = object(value, 'directory_witness_policy');
+    if (policy.mode === 'c2sp-map-v1') {
+      let normalized;
+      try {
+        normalized = normalizeC2spKeyTransparencyPolicy({
+          origin: policy.origin,
+          logVkey: policy.logVkey,
+          threshold: policy.threshold,
+          maxAgeSeconds: policy.maxAgeSeconds,
+          witnessVkeys: policy.witnessVkeys,
+        });
+      } catch {
+        fail('directory_transparency_policy');
+      }
+      if (normalized.threshold !== 2 || normalized.witnessVkeys.length !== 3 || normalized.maxAgeSeconds > 3_600) {
+        fail('directory_transparency_policy');
+      }
+      return Object.freeze({
+        mode: 'c2sp-map-v1',
+        origin: normalized.origin,
+        logVkey: normalized.logVkey,
+        threshold: 2,
+        maxAgeSeconds: normalized.maxAgeSeconds,
+        witnessVkeys: Object.freeze([...normalized.witnessVkeys]),
+      });
+    }
     if (!Array.isArray(policy.witnesses) || policy.witnesses.length < 2 || policy.witnesses.length > 8) {
       fail('directory_witness_policy');
     }
@@ -457,6 +591,7 @@ export class OpaqueChatTransport {
       return { id: witnessId, publicKey, origin: origin.origin };
     });
     return Object.freeze({
+      mode: 'semantic-witness-v1',
       threshold: policy.threshold,
       maxStatementAgeMs: policy.maxStatementAgeMs,
       requestTimeoutMs,
@@ -527,17 +662,32 @@ export class OpaqueChatTransport {
       || value.contentPlane !== 'opaque-only-for-mls-v1'
       || value.legacyHistoryServerReadable !== true
       || value.keyTransparencyRequired !== true
+      || value.keyTransparencyVersion !== 1
+      || !Number.isSafeInteger(value.keyTransparencyActivationTargetMs)
+      || value.keyTransparencyActivationTargetMs < 250
+      || value.keyTransparencyActivationTargetMs > 30_000
       || value.directoryPaginationVersion !== 1
     ) {
       fail('capabilities_mismatch');
     }
     const enrollmentEnabled = value.enrollmentEnabled === true;
+    const keyTransparencyPolicyStatus = value.keyTransparencyPolicyStatus === 'configured'
+      ? 'configured'
+      : value.keyTransparencyPolicyStatus === 'pending_operator_configuration'
+        ? 'pending_operator_configuration'
+        : fail('capabilities_mismatch');
     const directoryReceiptPublicKey = value.directoryReceiptPublicKey === null
       ? null
       : text(value.directoryReceiptPublicKey, 128, 'directory_receipt_public_key');
     if (
       (directoryReceiptPublicKey !== null && base64UrlToBytes(directoryReceiptPublicKey, 32).length !== 32)
-      || (enrollmentEnabled && directoryReceiptPublicKey === null)
+      || (enrollmentEnabled && keyTransparencyPolicyStatus !== 'configured')
+      || (enrollmentEnabled && this.keyTransparencyPolicy === null)
+      || (
+        enrollmentEnabled
+        && this.keyTransparencyPolicy?.mode === 'semantic-witness-v1'
+        && directoryReceiptPublicKey === null
+      )
     ) fail('capabilities_mismatch');
     return {
       protocolVersion: CHAT_PROTOCOL_VERSION,
@@ -550,6 +700,9 @@ export class OpaqueChatTransport {
       contentPlane: 'opaque-only-for-mls-v1',
       legacyHistoryServerReadable: true,
       keyTransparencyRequired: true,
+      keyTransparencyVersion: 1,
+      keyTransparencyPolicyStatus,
+      keyTransparencyActivationTargetMs: value.keyTransparencyActivationTargetMs,
       directoryPaginationVersion: 1,
       directoryReceiptPublicKey,
     };
@@ -578,6 +731,30 @@ export class OpaqueChatTransport {
     return {
       identity,
       devices: value.devices.map((device) => parseDevice(device, identity?.publicKey)),
+    };
+  }
+
+  async getDeviceTransparencyStatus(deviceId) {
+    const requestedDeviceId = id(deviceId, 'device_id');
+    const value = object(await this.request(
+      `/chats/e2ee/devices/${encodeQuery(requestedDeviceId)}/transparency`,
+    ), 'device_transparency_status');
+    if (
+      id(value.deviceId, 'device_id') !== requestedDeviceId
+      || !['PENDING_TRANSPARENCY', 'ACTIVE', 'REVOKED'].includes(value.status)
+      || (value.requiredGeneration !== null && !/^[1-9][0-9]{0,19}$/.test(value.requiredGeneration))
+      || (value.retryAfterMs !== null && (
+        !Number.isSafeInteger(value.retryAfterMs)
+        || value.retryAfterMs < 100
+        || value.retryAfterMs > 5_000
+      ))
+    ) fail('device_transparency_status');
+    return {
+      deviceId: requestedDeviceId,
+      status: value.status,
+      requiredGeneration: value.requiredGeneration,
+      retryAfterMs: value.retryAfterMs,
+      evidence: value.evidence === null ? null : object(value.evidence, 'device_transparency_evidence'),
     };
   }
 
@@ -693,6 +870,7 @@ export class OpaqueChatTransport {
     let identity = null;
     let devices = null;
     let witnessReceipt = null;
+    let keyTransparencyEvidence = null;
     let headHash;
     let entryCount;
     const entries = [];
@@ -722,7 +900,12 @@ export class OpaqueChatTransport {
         if (value.snapshotDetailsIncluded !== true) fail('directory_snapshot_details');
         identity = pageIdentity;
         devices = pageDevices;
-        witnessReceipt = object(value.witnessReceipt, 'directory_witness_receipt');
+        witnessReceipt = this.keyTransparencyPolicy.mode === 'semantic-witness-v1'
+          ? object(value.witnessReceipt, 'directory_witness_receipt')
+          : null;
+        keyTransparencyEvidence = value.keyTransparencyEvidence === null || value.keyTransparencyEvidence === undefined
+          ? null
+          : object(value.keyTransparencyEvidence, 'directory_transparency_evidence');
         headHash = pageHeadHash;
         entryCount = value.entryCount;
       } else if (
@@ -730,6 +913,7 @@ export class OpaqueChatTransport {
         || pageIdentity !== null
         || pageDevices.length !== 0
         || value.witnessReceipt !== null
+        || value.keyTransparencyEvidence != null
         || pageHeadHash !== headHash
         || value.entryCount !== entryCount
       ) fail('directory_snapshot_changed');
@@ -765,6 +949,18 @@ export class OpaqueChatTransport {
       entryCount,
       headHash,
     };
+    if (this.keyTransparencyPolicy.mode === 'c2sp-map-v1') {
+      const witnessQuorum = verifyDirectoryKeyTransparencyEvidence({
+        evidence: keyTransparencyEvidence,
+        directory,
+        checkpoint,
+        policy: this.keyTransparencyPolicy,
+        now: Math.floor(Date.now() / 1_000),
+      });
+      directory.verification.witnessQuorum = witnessQuorum;
+      directory.verification.keyTransparency = keyTransparencyEvidence;
+      return directory;
+    }
     const observationBody = JSON.stringify({
       snapshot: {
         accountId: directory.accountId,

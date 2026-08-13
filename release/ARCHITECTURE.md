@@ -11,8 +11,12 @@
 - `packages/volna-messaging-client/` owns all private-message plaintext,
   cryptographic state, MLS processing, endpoint projections, and transfer UI.
 - `packages/volna-key-directory-witness/` is a separate Node/PostgreSQL service
-  for independent operators. It is published with the client for review but is
-  never bundled into the Expo application.
+  containing the earlier semantic-witness reference implementation. It remains
+  published for review and compatibility evidence but is not the selected
+  production activation path and is never bundled into Expo.
+- `packages/volna-key-transparency-log/` is the separately deployed
+  C2SP/Tessera tile log for globally batched key-transparency map roots. It is
+  VOLNA-operated, externally cosigned, and never bundled into Expo.
 - `packages/content-policy/` and `packages/music-taxonomy/` are shared pure
   domain packages.
 - `public/` contains the PWA boot document, manifest, icons, and service worker.
@@ -31,15 +35,17 @@ public UI/composer
   -> proprietary server storing ciphertext and public protocol metadata
 ```
 
-Directory verification follows a separate path. The proprietary API signs a
-short-lived receipt over one exact, complete directory checkpoint. The client
-sends that receipt and the already verified public device directory directly to
-each pinned witness with no VOLNA cookie, token, or referrer. A witness verifies
-the receipt and every account-master device authorization, atomically retains the
-append-only prefix in its own PostgreSQL database, and signs the resulting
-checkpoint. The receipt prevents unauthenticated first-observation poisoning; it
-does not authorize VOLNA to rewrite, shorten, or fork a prefix already retained by
-an independent witness.
+Directory verification follows a separate path. The proprietary API maintains the
+account-master-authorized semantic directory chain and commits each current
+directory to a 32-level radix-256 sparse Merkle map. At most once per second, the
+latest global map root is appended to the public C2SP/Tessera log. The client
+verifies the complete directory chain, compressed map inclusion proof, RFC 6962
+log inclusion proof, VOLNA log signature, and fresh signatures from any two of
+three pinned independent C2SP witnesses. Witnesses receive only the global public
+checkpoint and enforce log append-only consistency; they do not receive account
+ids, usernames, device lists, VOLNA cookies, or message data. A newly registered
+device stays `PENDING_TRANSPARENCY` until this proof exists, while already active
+devices remain usable during a witness outage.
 
 For an `MLS_V1` conversation, the API receives ciphertext and public protocol
 metadata, not message plaintext or local search queries. A new device receives
@@ -62,8 +68,12 @@ Start a message-security review at:
 4. `src/opaque-transport.mjs` for the server boundary;
 5. `src/encrypted-message-store.mjs` for local projections;
 6. `apps/mobile/src/messaging/secureMessaging.ts` for host integration.
-7. `packages/volna-key-directory-witness/src/` for receipt verification, durable
-   compare-and-swap state, and the public HTTP boundary.
+7. `src/key-transparency.mjs` for sparse-map, RFC 6962, signed-note, and 2-of-3
+   C2SP verification;
+8. `packages/volna-key-transparency-log/` for the public Tessera personality and
+   operator boundary;
+9. `packages/volna-key-directory-witness/src/` only when reviewing the retained
+   earlier semantic-witness reference path.
 
 Some feature and StyleSheet modules are large because the current product
 groups closely related screens and shared tokens by domain. This is tracked as

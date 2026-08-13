@@ -3,7 +3,7 @@ export declare class OpaqueTransportError extends Error {
   readonly status?: number;
 }
 
-export type KeyTransparencyWitnessPolicy = {
+export type SemanticWitnessPolicy = {
   threshold: number;
   maxStatementAgeMs: number;
   requestTimeoutMs?: number;
@@ -13,6 +13,17 @@ export type KeyTransparencyWitnessPolicy = {
     publicKey: string;
   }>;
 };
+
+export type C2spKeyTransparencyPolicy = {
+  mode: 'c2sp-map-v1';
+  origin: string;
+  logVkey: string;
+  threshold: 2;
+  maxAgeSeconds: number;
+  witnessVkeys: [string, string, string];
+};
+
+export type KeyTransparencyWitnessPolicy = SemanticWitnessPolicy | C2spKeyTransparencyPolicy;
 
 export declare class OpaqueChatTransport {
   constructor(options: {
@@ -28,6 +39,13 @@ export declare class OpaqueChatTransport {
   createDeviceChallenge(): Promise<{ challengeId: string; challenge: string; expiresAt: string | null }>;
   registerDevice(input: unknown): Promise<Record<string, unknown>>;
   listOwnDevices(): Promise<Record<string, unknown>>;
+  getDeviceTransparencyStatus(deviceId: string): Promise<{
+    deviceId: string;
+    status: 'PENDING_TRANSPARENCY' | 'ACTIVE' | 'REVOKED';
+    requiredGeneration: string | null;
+    retryAfterMs: number | null;
+    evidence: Record<string, unknown> | null;
+  }>;
   createDeviceTransfer(input: unknown): Promise<Record<string, unknown>>;
   getDeviceTransfer(transferId: string): Promise<Record<string, unknown>>;
   connectDeviceTransferSource(transferId: string, input: unknown): Promise<Record<string, unknown>>;

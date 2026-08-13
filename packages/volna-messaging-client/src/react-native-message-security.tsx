@@ -51,7 +51,7 @@ type DeviceItem = {
   id: string;
   displayName: string;
   platform: 'ios' | 'android' | 'web';
-  status: 'ACTIVE' | 'REVOKED';
+  status: 'PENDING_TRANSPARENCY' | 'ACTIVE' | 'REVOKED';
   registeredAt: string;
   lastSeenAt: string;
   revokedAt: string | null;
@@ -61,6 +61,7 @@ type ScreenPhase =
   | 'loading'
   | 'disabled'
   | 'setup'
+  | 'transparency'
   | 'overview'
   | 'incoming'
   | 'scanner'
@@ -144,6 +145,12 @@ export function MessageSecurityScreen({
         const status = typeof localStatus.status === 'string' ? localStatus.status : 'needs-setup';
         if (status === 'ready') {
           await loadDevices();
+          const pendingRecoverySecret = client.getPendingRecoverySecretForDisplay();
+          if (active && typeof pendingRecoverySecret === 'string') {
+            setRecoverySecret(pendingRecoverySecret);
+            setPhase('recovery-created');
+            return;
+          }
           const pending = client.getPendingDeviceTransfers() as {
             outgoing?: Array<{ transferId?: unknown; phase?: unknown; verificationCode?: unknown }>;
           };
@@ -154,6 +161,17 @@ export function MessageSecurityScreen({
             setTransferStatus(typeof outgoing.phase === 'string' ? outgoing.phase : 'waiting-target-registration');
             setPhase(outgoing.phase === 'confirm-code' ? 'source-code' : 'source-progress');
           } else if (active) setPhase('overview');
+        } else if (status === 'registration-pending') {
+          setPhase('transparency');
+          const result = await client.setupDevice() as { recoverySecret?: unknown };
+          if (!active) return;
+          if (typeof result.recoverySecret === 'string') {
+            setRecoverySecret(result.recoverySecret);
+            setPhase('recovery-created');
+          } else {
+            await loadDevices();
+            if (active) setPhase('overview');
+          }
         } else if (status === 'transfer-pending') {
           const { client } = await getClient(accountId);
           const transfer = await client.startIncomingDeviceTransfer() as { qrPayload?: unknown; transferId?: unknown };
@@ -328,6 +346,7 @@ export function MessageSecurityScreen({
 
   const setupDevice = async (secret?: string) => {
     setIsBusy(true);
+    setPhase('transparency');
     try {
       const { client } = await getClient(accountId);
       const result = await client.setupDevice(secret ? { recoverySecret: secret.trim() } : undefined) as {
@@ -347,6 +366,22 @@ export function MessageSecurityScreen({
       }
     } catch (error) {
       onNotify(error instanceof Error ? error.message : 'Не удалось настроить защищённые сообщения', 'error');
+      setPhase(secret ? 'recovery' : 'setup');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const acknowledgeRecoverySecret = async () => {
+    setIsBusy(true);
+    try {
+      const { client } = await getClient(accountId);
+      await client.acknowledgeRecoverySecretSaved();
+      setRecoverySecret('');
+      await loadDevices();
+      setPhase('overview');
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : 'Не удалось подтвердить сохранение ключа', 'error');
     } finally {
       setIsBusy(false);
     }
@@ -418,7 +453,7 @@ export function MessageSecurityScreen({
   const header = (
     <View style={localStyles.header}>
       <Pressable accessibilityLabel="Назад" hitSlop={8} onPress={onBack} style={localStyles.iconButton}>
-        <ChevronLeft color="#090909" size={29} strokeWidth={2.1} />
+        <ChevronLeft color="#111" size={29} strokeWidth={2.1} />
       </Pressable>
       <Text style={localStyles.headerTitle}>Защищённые сообщения</Text>
     </View>
@@ -465,6 +500,15 @@ export function MessageSecurityScreen({
           </>
         ) : null}
 
+        {phase === 'transparency' ? (
+          <View accessibilityLiveRegion="polite" style={localStyles.transferCard}>
+            <ActivityIndicator color="#111" size="large" />
+            <Text style={localStyles.heroTitle}>Подтверждаем устройство</Text>
+            <Text style={localStyles.heroText}>Публикуем ключ в прозрачном журнале и ждём подписи минимум двух из трёх независимых witness‑операторов. Обычно это занимает несколько секунд.</Text>
+            <Text style={localStyles.statusHint}>Если кворум временно недоступен, устройство не получит доступ к защищённым чатам. Уже активные устройства продолжат работать.</Text>
+          </View>
+        ) : null}
+
         {phase === 'overview' ? (
           <>
             <View style={localStyles.heroCard}>
@@ -481,7 +525,7 @@ export function MessageSecurityScreen({
                   <View style={localStyles.deviceIcon}><DeviceIcon platform={device.platform} /></View>
                   <View style={localStyles.deviceCopy}>
                     <Text style={localStyles.deviceName}>{device.displayName}{device.id === currentDeviceId ? ' · это устройство' : ''}</Text>
-                    <Text style={localStyles.deviceMeta}>{device.status === 'ACTIVE' ? `Добавлено ${formatDeviceDate(device.registeredAt)}` : 'Отключено'}</Text>
+                    <Text style={localStyles.deviceMeta}>{device.status === 'ACTIVE' ? `Добавлено ${formatDeviceDate(device.registeredAt)}` : device.status === 'PENDING_TRANSPARENCY' ? 'Подтверждается независимыми операторами' : 'Отключено'}</Text>
                   </View>
                   {device.status === 'ACTIVE' && device.id !== currentDeviceId ? (
                     <Pressable accessibilityLabel={`Отключить ${device.displayName}`} hitSlop={8} onPress={() => revokeDevice(device)} style={localStyles.smallIconButton}>
@@ -546,7 +590,7 @@ export function MessageSecurityScreen({
               multiline
               onChangeText={setManualQrPayload}
               placeholder="volna://device-transfer/…"
-              placeholderTextColor="#8c96a0"
+              placeholderTextColor="#98a3ae"
               style={localStyles.codeInput}
               value={manualQrPayload}
             />
@@ -598,7 +642,7 @@ export function MessageSecurityScreen({
               autoCorrect={false}
               onChangeText={setRecoveryInput}
               placeholder="Вставьте ключ"
-              placeholderTextColor="#8c96a0"
+              placeholderTextColor="#98a3ae"
               secureTextEntry
               style={localStyles.singleInput}
               value={recoveryInput}
@@ -620,8 +664,8 @@ export function MessageSecurityScreen({
               <Text style={localStyles.secondaryButtonText}>Скопировать</Text>
             </Pressable>
             <Text style={localStyles.clipboardWarning}>После сохранения очистите системный буфер обмена: этот ключ позволяет авторизовать новое устройство.</Text>
-            <Pressable onPress={() => { setRecoverySecret(''); void loadDevices().then(() => setPhase('overview')); }} style={localStyles.primaryButton}>
-              <Text style={localStyles.primaryButtonText}>Я сохранил ключ</Text>
+            <Pressable disabled={isBusy} onPress={() => void acknowledgeRecoverySecret()} style={[localStyles.primaryButton, isBusy && localStyles.disabled]}>
+              {isBusy ? <ActivityIndicator color="#fff" /> : <Text style={localStyles.primaryButtonText}>Я сохранил ключ</Text>}
             </Pressable>
           </View>
         ) : null}
@@ -640,53 +684,54 @@ export function MessageSecurityScreen({
 }
 
 const localStyles = StyleSheet.create({
-  screen: { backgroundColor: '#f4f5f7', flex: 1 },
-  header: { alignItems: 'center', backgroundColor: '#fff', borderBottomColor: '#e7e9ec', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', minHeight: 58, paddingHorizontal: 10 },
-  iconButton: { alignItems: 'center', height: 48, justifyContent: 'center', width: 48 },
-  headerTitle: { color: '#090909', fontSize: 20, fontWeight: '700' },
-  content: { alignSelf: 'center', gap: 14, maxWidth: 620, padding: 16, paddingBottom: 48, width: '100%' },
+  screen: { backgroundColor: '#f3f5f7', flex: 1 },
+  header: { alignItems: 'center', backgroundColor: '#fff', borderBottomColor: '#d7dee5', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', minHeight: 52, paddingHorizontal: 8 },
+  iconButton: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 },
+  headerTitle: { color: '#111', fontSize: 16, fontWeight: '600' },
+  content: { alignSelf: 'center', gap: 8, maxWidth: 620, padding: 16, paddingBottom: 48, width: '100%' },
   center: { alignItems: 'center', flex: 1, justifyContent: 'center' },
-  centerCopy: { alignItems: 'center', gap: 13, justifyContent: 'center', minHeight: 360, paddingHorizontal: 22 },
-  heroCard: { alignItems: 'flex-start', backgroundColor: '#fff', borderRadius: 22, gap: 10, padding: 20 },
-  transferCard: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 22, gap: 14, padding: 20 },
-  heroTitle: { color: '#111', fontSize: 22, fontWeight: '700', lineHeight: 28, textAlign: 'center' },
-  heroText: { color: '#5d6670', fontSize: 15, lineHeight: 22, textAlign: 'center' },
-  fingerprint: { color: '#606a74', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 12, marginTop: 3 },
-  webWarning: { alignSelf: 'stretch', backgroundColor: '#fff4d6', borderRadius: 12, color: '#6c5000', fontSize: 13, lineHeight: 19, padding: 12, textAlign: 'left' },
-  sectionTitle: { color: '#111', fontSize: 14, fontWeight: '700', marginLeft: 4, marginTop: 8 },
-  card: { backgroundColor: '#fff', borderRadius: 20, overflow: 'hidden', padding: 16 },
-  cardTitle: { color: '#111', fontSize: 17, fontWeight: '700' },
-  cardText: { color: '#68717b', fontSize: 14, lineHeight: 20, marginBottom: 14, marginTop: 6 },
-  primaryButton: { alignItems: 'center', alignSelf: 'stretch', backgroundColor: '#111', borderRadius: 14, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 50, paddingHorizontal: 18 },
-  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  secondaryButton: { alignItems: 'center', alignSelf: 'stretch', backgroundColor: '#eef0f2', borderRadius: 14, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 50, paddingHorizontal: 18 },
+  centerCopy: { alignItems: 'center', gap: 12, justifyContent: 'center', minHeight: 360, paddingHorizontal: 22 },
+  heroCard: { alignItems: 'flex-start', backgroundColor: '#fff', borderRadius: 8, gap: 8, padding: 16 },
+  transferCard: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 8, gap: 12, padding: 16 },
+  heroTitle: { color: '#111', fontSize: 18, fontWeight: '600', lineHeight: 24, textAlign: 'center' },
+  heroText: { color: '#53606c', fontSize: 14, lineHeight: 21, textAlign: 'center' },
+  statusHint: { color: '#6f7b86', fontSize: 12, lineHeight: 17, textAlign: 'center' },
+  fingerprint: { color: '#606c78', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 12, marginTop: 3 },
+  webWarning: { alignSelf: 'stretch', backgroundColor: '#f3f5f7', borderRadius: 8, color: '#53606c', fontSize: 12, lineHeight: 17, padding: 12, textAlign: 'left' },
+  sectionTitle: { color: '#111', fontSize: 16, fontWeight: '600', lineHeight: 20, marginTop: 16 },
+  card: { backgroundColor: '#fff', borderRadius: 8, overflow: 'hidden', padding: 16 },
+  cardTitle: { color: '#111', fontSize: 16, fontWeight: '600', lineHeight: 22 },
+  cardText: { color: '#606c78', fontSize: 14, lineHeight: 20, marginBottom: 14, marginTop: 6 },
+  primaryButton: { alignItems: 'center', alignSelf: 'stretch', backgroundColor: '#111', borderRadius: 22, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 44, paddingBottom: 2, paddingHorizontal: 18 },
+  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  secondaryButton: { alignItems: 'center', alignSelf: 'stretch', backgroundColor: '#f3f5f7', borderRadius: 22, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 44, paddingBottom: 2, paddingHorizontal: 18 },
   secondaryButtonText: { color: '#111', fontSize: 15, fontWeight: '600' },
   linkButton: { alignItems: 'center', justifyContent: 'center', minHeight: 44, paddingHorizontal: 12 },
-  linkText: { color: '#111', fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' },
+  linkText: { color: '#218bdc', fontSize: 14, fontWeight: '600' },
   dangerLink: { color: '#b42318', fontSize: 14, fontWeight: '600' },
-  disabled: { opacity: 0.42 },
-  successIcon: { alignItems: 'center', backgroundColor: '#16803b', borderRadius: 18, height: 36, justifyContent: 'center', width: 36 },
-  successLarge: { alignItems: 'center', backgroundColor: '#16803b', borderRadius: 30, height: 60, justifyContent: 'center', width: 60 },
+  disabled: { opacity: 0.7 },
+  successIcon: { alignItems: 'center', backgroundColor: '#34c759', borderRadius: 18, height: 36, justifyContent: 'center', width: 36 },
+  successLarge: { alignItems: 'center', backgroundColor: '#34c759', borderRadius: 30, height: 60, justifyContent: 'center', width: 60 },
   deviceRow: { alignItems: 'center', flexDirection: 'row', minHeight: 68, paddingVertical: 8 },
-  rowBorder: { borderTopColor: '#eceef0', borderTopWidth: StyleSheet.hairlineWidth },
-  deviceIcon: { alignItems: 'center', backgroundColor: '#f0f1f3', borderRadius: 18, height: 38, justifyContent: 'center', width: 38 },
+  rowBorder: { borderTopColor: '#d7dee5', borderTopWidth: StyleSheet.hairlineWidth },
+  deviceIcon: { alignItems: 'center', backgroundColor: '#f3f5f7', borderRadius: 19, height: 38, justifyContent: 'center', width: 38 },
   deviceCopy: { flex: 1, marginHorizontal: 12 },
   deviceName: { color: '#111', fontSize: 15, fontWeight: '600' },
-  deviceMeta: { color: '#78818a', fontSize: 12, marginTop: 4 },
+  deviceMeta: { color: '#6f7b86', fontSize: 12, marginTop: 4 },
   smallIconButton: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 },
-  qrFrame: { backgroundColor: '#fff', borderColor: '#e1e4e7', borderRadius: 20, borderWidth: 1, padding: 12 },
-  codeCard: { alignItems: 'center', alignSelf: 'stretch', backgroundColor: '#f1f2f4', borderRadius: 16, gap: 5, padding: 14 },
-  codeLabel: { color: '#68717b', fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
+  qrFrame: { backgroundColor: '#fff', borderColor: '#d7dee5', borderRadius: 8, borderWidth: 1, padding: 12 },
+  codeCard: { alignItems: 'center', alignSelf: 'stretch', backgroundColor: '#f3f5f7', borderRadius: 8, gap: 5, padding: 14 },
+  codeLabel: { color: '#6f7b86', fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
   code: { color: '#111', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 31, fontWeight: '800', letterSpacing: 3, textAlign: 'center' },
   progress: { marginTop: 4 },
-  clipboardWarning: { color: '#7b5f14', fontSize: 12, lineHeight: 17, textAlign: 'center' },
-  camera: { alignSelf: 'stretch', aspectRatio: 1, borderRadius: 20, overflow: 'hidden' },
-  orText: { color: '#7b848d', fontSize: 13 },
-  codeInput: { alignSelf: 'stretch', backgroundColor: '#f4f5f6', borderRadius: 14, color: '#111', fontSize: 13, minHeight: 88, padding: 14, textAlignVertical: 'top' },
-  singleInput: { alignSelf: 'stretch', backgroundColor: '#f4f5f6', borderRadius: 14, color: '#111', fontSize: 15, minHeight: 50, paddingHorizontal: 14 },
+  clipboardWarning: { color: '#6f7b86', fontSize: 12, lineHeight: 17, textAlign: 'center' },
+  camera: { alignSelf: 'stretch', aspectRatio: 1, borderRadius: 8, overflow: 'hidden' },
+  orText: { color: '#6f7b86', fontSize: 13 },
+  codeInput: { alignSelf: 'stretch', backgroundColor: '#f3f5f7', borderRadius: 8, color: '#111', fontSize: 16, minHeight: 118, padding: 16, textAlignVertical: 'top' },
+  singleInput: { alignSelf: 'stretch', backgroundColor: '#f3f5f7', borderRadius: 8, color: '#111', fontSize: 16, minHeight: 44, paddingBottom: 2, paddingHorizontal: 16, paddingTop: 0, textAlignVertical: 'center' },
   toggleRow: { alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', gap: 10 },
-  checkbox: { alignItems: 'center', borderColor: '#b9c0c7', borderRadius: 6, borderWidth: 1.5, height: 24, justifyContent: 'center', width: 24 },
+  checkbox: { alignItems: 'center', borderColor: '#b9c3cd', borderRadius: 6, borderWidth: 1.5, height: 24, justifyContent: 'center', width: 24 },
   checkboxChecked: { backgroundColor: '#111', borderColor: '#111' },
-  toggleText: { color: '#3c444c', flex: 1, fontSize: 14, lineHeight: 19 },
-  recoveryCode: { alignSelf: 'stretch', backgroundColor: '#f1f2f4', borderRadius: 14, color: '#111', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 15, lineHeight: 22, padding: 14, textAlign: 'center' },
+  toggleText: { color: '#46515c', flex: 1, fontSize: 14, lineHeight: 19 },
+  recoveryCode: { alignSelf: 'stretch', backgroundColor: '#f3f5f7', borderRadius: 8, color: '#111', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 15, lineHeight: 22, padding: 14, textAlign: 'center' },
 });

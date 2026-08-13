@@ -10,6 +10,7 @@
     "packages/music-taxonomy",
     "packages/volna-messaging-client",
     "packages/volna-key-directory-witness",
+    "packages/volna-key-transparency-log",
     "public"
   ],
   "rootRuntimeFiles": [
@@ -48,6 +49,15 @@
     "WITNESS_PORT",
     "WITNESS_SIGNING_KEY",
     "WITNESS_TEST_DATABASE_URL"
+    ,"KT_APPEND_TOKEN"
+    ,"KT_LISTEN"
+    ,"KT_LOG_PRIVATE_KEY"
+    ,"KT_LOG_PRIVATE_KEY_FILE"
+    ,"KT_STORAGE_DIR"
+    ,"KT_TEST_ONLY_ALLOW_UNWITNESSED"
+    ,"KT_WITNESS_POLICY"
+    ,"KT_WITNESS_POLICY_FILE"
+    ,"VOLNA_ENV"
   ],
   "requiredArchiveRootFiles": [
     ".gitattributes",

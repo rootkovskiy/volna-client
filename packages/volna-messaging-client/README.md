@@ -17,12 +17,12 @@ for native/cross-implementation evaluation. Verified device-directory chains are
 pinned in encrypted endpoint state, so a rollback or changed chain prefix already
 seen by that device fails closed. Directory retrieval is immutable-snapshot
 paginated: the endpoint verifies the exact entry count and chain head before use.
-It then queries distinct pinned witness origins directly, without VOLNA cookies or
-tokens, and requires at least two fresh Ed25519 statements over that exact
-checkpoint. Each direct witness request has an eight-second default deadline and a
-64 KiB streaming response bound; collection stops at the first valid quorum and
-ignores failed, oversized, stale, or forked minority responses. If no witness policy
-is compiled into the client, enrollment, transfer, rekey, and rollout capabilities
+It then verifies a compressed proof from that directory into the global radix-256
+key-transparency map, the map-root entry's RFC 6962 inclusion in a C2SP/Tessera
+log, the VOLNA log signature, and fresh cosignatures from any two of three pinned
+independent witnesses. Witnesses receive only the global checkpoint, not an
+account directory or VOLNA credential. If the active log/witness policy is absent,
+pending, stale, or invalid, enrollment, transfer, rekey, and rollout capabilities
 remain locally disabled.
 
 Device changes now use a QR-bound X25519/HKDF/XChaCha20-Poly1305 transfer channel,
@@ -42,9 +42,10 @@ Recovery never reopens or dual-writes the legacy plaintext route.
 The complete first-party client source now has a verified Apache-2.0 release
 contour under `client-public/`, but native release artifacts are not yet reproducible
 or independently signed,
-the required witness protocol has no independently operated production witnesses,
-the complete physical-platform test matrix is unfinished, and the integration
-has not received an independent security review. Consequently
+the selected VOLNA log has not yet been registered and live-cosigned by the
+required independent witness quorum, the complete physical-platform test matrix is
+unfinished, and the integration has no commissioned independent audit (which is
+not a release gate). Consequently
 `CHAT_E2EE_ENROLLMENT_ENABLED` and `CHAT_E2EE_ROLLOUT_ENABLED` must remain false
 and the product must not advertise these chats as end-to-end encrypted.
 
@@ -100,7 +101,26 @@ code is what runs. It cannot cryptographically stop the origin owner from servin
 different JavaScript bundle later. Signed native clients with published hashes and
 separated release review provide the stronger assurance tier.
 
-## Independent witness integration
+## Key transparency and independent witnesses
+
+`@volna/messaging-client/key-transparency` is the selected production verifier. It
+implements strict canonical leaf/root contracts, 32-level radix-256 sparse-map
+proofs, RFC 6962 log inclusion, C2SP signed-note verification, and a fresh distinct
+2-of-3 cosignature policy. A directory mutation writes 33 path nodes before
+publication compaction; the proof carries only non-default siblings. New device
+registration persists its device/recovery identity first and then waits in
+`PENDING_TRANSPARENCY`, so a lost response or app restart resumes the same keys
+instead of registering another device. Existing active devices do not wait on the
+hot path.
+
+`packages/volna-key-transparency-log` is the public Tessera personality that accepts
+only canonical global map-root entries through a private authenticated append
+route and serves C2SP checkpoints/tiles publicly. It contains no account ids,
+usernames, device lists, or chat content. The checked-in production policy remains
+`pending_operator_registration` with no log vkey until the production key ceremony,
+public `/about` proof, and operator acceptance are complete.
+
+## Retained semantic-witness reference
 
 `@volna/messaging-client/key-directory-witness` exposes the public reference
 witness state machine. `observe(snapshot)` verifies the complete account-master-
@@ -129,7 +149,8 @@ is test-only. A production deployment still needs independently controlled
 operators and durable storage outside VOLNA. Statements for different entry counts
 do not by themselves prove prefix consistency; the reference witness performs that
 full-chain check before signing, and endpoint directory verification independently
-pins the chain it has already accepted.
+pins the chain it has already accepted. This earlier VOLNA-specific path remains
+reviewable and tested but is not counted toward the selected C2SP production quorum.
 
 ## Encrypted local history and search
 

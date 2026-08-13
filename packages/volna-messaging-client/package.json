@@ -46,6 +46,15 @@
       "import": "./src/key-directory-gossip.mjs",
       "default": "./src/key-directory-gossip.mjs"
     },
+    "./key-transparency": {
+      "types": "./src/key-transparency.d.mts",
+      "import": "./src/key-transparency.mjs",
+      "default": "./src/key-transparency.mjs"
+    },
+    "./key-transparency-policy": {
+      "types": "./src/key-transparency-policy.d.ts",
+      "default": "./key-transparency-policy.json"
+    },
     "./expo-storage-adapter": {
       "types": "./src/expo-storage-adapter.d.ts",
       "import": "./src/expo-storage-adapter.ts",
@@ -89,6 +98,7 @@
   },
   "files": [
     "DEPENDENCIES.md",
+    "key-transparency-policy.json",
     "LICENSE",
     "NOTICE",
     "pnpm-lock.yaml",
