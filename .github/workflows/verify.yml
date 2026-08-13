@@ -45,6 +45,14 @@ jobs:
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
 
+      - name: Reject the vulnerable unused Rust provider from the selected graph
+        shell: bash
+        run: |
+          if rustup run 1.88.0 cargo tree --locked --manifest-path packages/volna-messaging-client/rust/openmls-evaluation/Cargo.toml --invert libcrux-chacha20poly1305 --prefix none | grep -q '^libcrux-chacha20poly1305 '; then
+            echo 'libcrux-chacha20poly1305 must remain outside the selected OpenMLS feature graph' >&2
+            exit 1
+          fi
+
       - name: Verify source boundary, types, and tests
         run: pnpm verify
 

@@ -8,6 +8,13 @@ byte copy `pnpm-lock.public.yaml` because the npm pack format excludes the stand
 lockfile name; the boundary verifier enforces equality. The exact development
 toolchain is pinned in the package manifest as well.
 
+The standalone package workspace also overrides `postcss` to `8.5.26` and
+`uuid` to `11.1.1`. This is deliberately duplicated from the complete-client
+workspace: reviewers and package consumers must get the same patched dependency
+floor even when they install only `packages/volna-messaging-client`. The boundary
+verifier rejects either a missing override or any other resolved version in both
+standalone lockfile copies.
+
 | Component | Version | Role | Upstream |
 | --- | ---: | --- | --- |
 | `ts-mls` | `1.6.2` | RFC 9420 MLS state machine and wire format | `github.com/LukaJCB/ts-mls` |
@@ -31,6 +38,14 @@ rather than cryptographic primitives; their
 exact development resolutions and integrity hashes are still retained in the
 standalone lockfile because camera, clipboard, and QR behavior are part of the
 reviewable transfer path.
+
+The OpenMLS lock records optional `hpke-rs` provider packages that Cargo resolves
+but the evaluation does not compile: the selected `openmls_rust_crypto` graph uses
+the RustCrypto HPKE provider. CI explicitly proves that vulnerable
+`libcrux-chacha20poly1305` is absent from the selected feature graph. Dependency
+alerts for that unused optional lock entry may be dismissed only as `not_used`
+with this machine-checked evidence; enabling the libcrux provider requires a
+patched compatible release and a fresh review.
 
 Version pinning and permissive licenses do not establish security. The deterministic
 release-evidence builder now emits a CycloneDX inventory for the complete pnpm/Cargo
