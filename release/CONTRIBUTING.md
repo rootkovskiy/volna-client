@@ -10,6 +10,7 @@ Use Node.js 20, 22, or 24 and pnpm 11.7.0:
 ```sh
 pnpm install --frozen-lockfile
 pnpm verify
+pnpm verify:openmls
 pnpm audit --prod
 pnpm export:web
 pnpm export:android

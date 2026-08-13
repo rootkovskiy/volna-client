@@ -24,6 +24,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
+      - name: Reject newly introduced vulnerable dependencies
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+
       - name: Use Node.js 24
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -36,11 +42,14 @@ jobs:
       - name: Install the frozen dependency graph
         run: pnpm install --frozen-lockfile
 
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
+
       - name: Verify source boundary, types, and tests
         run: pnpm verify
 
       - name: Verify the pinned OpenMLS evaluation
-        run: pnpm verify:openmls
+        run: rustup run 1.88.0 pnpm verify:openmls
 
       - name: Audit production dependencies
         run: pnpm audit --prod

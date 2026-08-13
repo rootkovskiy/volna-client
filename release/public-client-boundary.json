@@ -40,6 +40,8 @@
   "requiredArchiveRootFiles": [
     ".gitattributes",
     ".gitignore",
+    ".github/dependabot.yml",
+    ".github/workflows/codeql.yml",
     ".github/workflows/verify.yml",
     "ARCHITECTURE.md",
     "CONTRIBUTING.md",
