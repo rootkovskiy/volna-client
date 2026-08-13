@@ -111,6 +111,9 @@ async function validateReleaseMetadata(manifest, failures) {
   if (!workflow.includes('run: rustup run 1.88.0 pnpm verify:openmls')) {
     failures.push('public CI must run the locked OpenMLS evaluation');
   }
+  if (!workflow.includes("--invert libcrux-chacha20poly1305 --prefix none | grep -q '^libcrux-chacha20poly1305 '")) {
+    failures.push('public CI must prove the vulnerable unused libcrux provider is outside the selected graph');
+  }
   if (workflow.includes('VOLNA_SKIP_NODE_INTEROP')) {
     failures.push('public CI must not permit bypassing the ts-mls/OpenMLS interoperability test');
   }
@@ -170,6 +173,22 @@ async function validateReleaseMetadata(manifest, failures) {
     const [, major, minor, patch] = match.map(Number);
     if (major < 8 || (major === 8 && (minor < 5 || (minor === 5 && patch < 18)))) {
       failures.push(`public lockfile contains vulnerable PostCSS ${major}.${minor}.${patch}`);
+    }
+  }
+  const releaseMessagingRoot = path.join(releaseRoot, 'packages', 'volna-messaging-client');
+  const standaloneMessagingRoot = await exists(releaseMessagingRoot)
+    ? releaseMessagingRoot
+    : path.join(repositoryRoot, 'packages', 'volna-messaging-client');
+  const standaloneWorkspace = await readFile(path.join(standaloneMessagingRoot, 'pnpm-workspace.yaml'), 'utf8');
+  const standaloneLock = await readFile(path.join(standaloneMessagingRoot, 'pnpm-lock.yaml'), 'utf8');
+  for (const [dependency, expected] of [['postcss', '8.5.26'], ['uuid', '11.1.1']]) {
+    if (!new RegExp(`^\\s{2}${dependency}:\\s+${expected.replaceAll('.', '\\.') }\\s*$`, 'm').test(standaloneWorkspace)) {
+      failures.push(`standalone messaging workspace must override ${dependency} to ${expected}`);
+    }
+    const resolved = [...standaloneLock.matchAll(new RegExp(`^\\s{2}${dependency.replaceAll('-', '\\-')}@([^:]+):`, 'gm'))]
+      .map((match) => match[1]);
+    if (resolved.length === 0 || resolved.some((version) => version !== expected)) {
+      failures.push(`standalone messaging lockfile must resolve only ${dependency}@${expected}`);
     }
   }
   const patchPath = path.join(releaseRoot, 'patches', 'image-size@1.2.1.patch');

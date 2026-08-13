@@ -19,6 +19,11 @@ otherwise resolves `uuid` 7.x, which is affected by the buffer-bounds advisory
 The override keeps the CommonJS `uuid.v4()` API used by that helper and is exercised
 by the isolated client verification/build flow.
 
+The same overrides and exact resolutions are enforced inside the standalone
+`packages/volna-messaging-client` workspace and both of its byte-identical lockfile
+copies. Installing or reviewing only that package therefore cannot silently
+reintroduce the older PostCSS or UUID graph.
+
 Expo and Metro currently resolve transitive `image-size` `1.2.1`, whose ICNS,
 JXL, and HEIF parsing family is covered by two high-severity infinite-loop
 advisories
@@ -43,9 +48,14 @@ pnpm verify:openmls
 ```
 
 `rust-toolchain.toml` pins the separately compiled OpenMLS evaluation to Rust
-1.88.0. The public CI runs its locked test on every PR and weekly scheduled check;
-this proves that the reference OpenMLS path builds and authenticates the VOLNA AAD,
-but it is not yet a wire-level interoperability test against the JavaScript client.
+1.88.0. The public CI runs its locked test on every PR and weekly scheduled check.
+The test performs bidirectional wire interoperability: OpenMLS creates a key
+package, `ts-mls` creates the group and Welcome, OpenMLS joins and sends an
+authenticated message, and `ts-mls` replies with the exact VOLNA AAD contract.
+Cargo records an unused optional libcrux provider in the lockfile; CI separately
+fails if its vulnerable ChaCha20-Poly1305 package ever enters the selected feature
+graph. A dismissed `not_used` alert is therefore scoped to the current graph and
+must be reopened if provider features change.
 
 An audit result is time-scoped evidence, not a permanent guarantee. New advisories
 must be evaluated against the locked graph before publishing another artifact.

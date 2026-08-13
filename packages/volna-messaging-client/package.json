@@ -93,6 +93,7 @@
     "NOTICE",
     "pnpm-lock.yaml",
     "pnpm-lock.public.yaml",
+    "pnpm-workspace.yaml",
     "PUBLIC_BOUNDARY.md",
     "README.md",
     "SECURITY.md",

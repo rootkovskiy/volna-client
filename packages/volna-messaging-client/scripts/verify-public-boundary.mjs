@@ -6,6 +6,8 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const manifest = JSON.parse(await readFile(path.join(packageRoot, 'public-boundary.json'), 'utf8'));
 const packageJson = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'));
 const failures = [];
+const standaloneWorkspace = await readFile(path.join(packageRoot, 'pnpm-workspace.yaml'), 'utf8');
+const standaloneLock = await readFile(path.join(packageRoot, 'pnpm-lock.yaml'), 'utf8');
 
 if (packageJson.private !== false) failures.push('package.json must explicitly set private=false');
 if (packageJson.license !== manifest.license) failures.push(`package license must be ${manifest.license}`);
@@ -23,6 +25,7 @@ const requiredPublishedFiles = [
   'THREAT_MODEL.md',
   'pnpm-lock.yaml',
   'pnpm-lock.public.yaml',
+  'pnpm-workspace.yaml',
 ];
 if (!Array.isArray(packageJson.files)) failures.push('package.json files allowlist is required');
 for (const required of requiredPublishedFiles) {
@@ -31,6 +34,16 @@ for (const required of requiredPublishedFiles) {
 }
 if (await readFile(path.join(packageRoot, 'pnpm-lock.yaml'), 'utf8') !== await readFile(path.join(packageRoot, 'pnpm-lock.public.yaml'), 'utf8')) {
   failures.push('pnpm-lock.public.yaml must exactly match pnpm-lock.yaml');
+}
+for (const [dependency, expected] of [['postcss', '8.5.26'], ['uuid', '11.1.1']]) {
+  if (!new RegExp(`^\\s{2}${dependency}:\\s+${expected.replaceAll('.', '\\.') }\\s*$`, 'm').test(standaloneWorkspace)) {
+    failures.push(`standalone workspace must override ${dependency} to ${expected}`);
+  }
+  const resolved = [...standaloneLock.matchAll(new RegExp(`^\\s{2}${dependency.replaceAll('-', '\\-')}@([^:]+):`, 'gm'))]
+    .map((match) => match[1]);
+  if (resolved.length === 0 || resolved.some((version) => version !== expected)) {
+    failures.push(`standalone lockfile must resolve only ${dependency}@${expected}`);
+  }
 }
 for (const [kind, dependencies] of Object.entries({
   dependencies: packageJson.dependencies,
