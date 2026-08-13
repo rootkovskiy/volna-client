@@ -9,7 +9,8 @@ lockfile name; the boundary verifier enforces equality. The exact development
 toolchain is pinned in the package manifest as well.
 
 The standalone package workspace also overrides `postcss` to `8.5.26` and
-`uuid` to `11.1.1`. This is deliberately duplicated from the complete-client
+`uuid` to `11.1.1`, and forces `socket.io-parser` to the reviewed `4.2.7`
+security floor. This is deliberately duplicated from the complete-client
 workspace: reviewers and package consumers must get the same patched dependency
 floor even when they install only `packages/volna-messaging-client`. The boundary
 verifier rejects either a missing override or any other resolved version in both

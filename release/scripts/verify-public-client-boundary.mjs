@@ -28,6 +28,17 @@ const serverOnlyImportPrefixes = [
   'prisma',
 ];
 const imageSizePatchSha256 = '01100757bdbd55c38cda4b40e79d1b358024fe9fee2d45ab7a9f72111758e8e3';
+const reviewedTransitiveOverrides = [
+  ['brace-expansion@<2.0.0', '1.1.18'],
+  ['brace-expansion@>=2.0.0 <3.0.0', '2.1.4'],
+  ['brace-expansion@>=4.0.0 <5.0.9', '5.0.9'],
+  ['js-yaml@>=3.0.0 <4.0.0', '3.15.1'],
+  ['js-yaml@>=4.0.0 <5.0.0', '4.3.1'],
+  ['nanoid@<3.3.17', '3.3.17'],
+  ['socket.io-parser@>=4.0.0 <4.2.7', '4.2.7'],
+  ['tar@<=7.5.20', '7.5.21'],
+  ['undici@<6.28.0', '6.28.0'],
+];
 
 const portable = (value) => value.replaceAll('\\', '/');
 const isInside = (candidate, root) => candidate === root || candidate.startsWith(`${root}${path.sep}`);
@@ -148,6 +159,11 @@ async function validateReleaseMetadata(manifest, failures) {
   if (!/^\s{2}uuid:\s+11\.1\.1\s*$/m.test(workspace)) {
     failures.push('public workspace must pin uuid to the reviewed patched version 11.1.1');
   }
+  for (const [selector, version] of reviewedTransitiveOverrides) {
+    if (!workspace.includes(`  "${selector}": ${version}`)) {
+      failures.push(`public workspace must retain reviewed override ${selector} -> ${version}`);
+    }
+  }
   for (const [kind, dependencies] of Object.entries({
     dependencies: packageJson.dependencies,
     devDependencies: packageJson.devDependencies,
@@ -166,6 +182,7 @@ async function validateReleaseMetadata(manifest, failures) {
     return;
   }
   const lock = await readFile(lockPath, 'utf8');
+  const lockPackages = lock.slice(lock.indexOf('\npackages:\n'), lock.indexOf('\nsnapshots:\n'));
   for (const forbidden of ['  apps/api:', '@nestjs/', '@prisma/', 'prisma@', 'argon2@', 'bullmq@', 'ioredis@']) {
     if (lock.includes(forbidden)) failures.push(`public lockfile contains backend-only dependency marker: ${forbidden}`);
   }
@@ -175,12 +192,30 @@ async function validateReleaseMetadata(manifest, failures) {
       failures.push(`public lockfile contains vulnerable PostCSS ${major}.${minor}.${patch}`);
     }
   }
+  for (const [dependency, allowedVersions] of Object.entries({
+    'brace-expansion': new Set(['1.1.18', '2.1.4', '5.0.9']),
+    'js-yaml': new Set(['3.15.1', '4.3.1']),
+    nanoid: new Set(['3.3.17']),
+    'socket.io-parser': new Set(['4.2.7']),
+    tar: new Set(['7.5.21']),
+    undici: new Set(['6.28.0']),
+  })) {
+    const resolved = [...lockPackages.matchAll(new RegExp(`^  ${dependency.replaceAll('-', '\\-')}@([^:]+):`, 'gm'))]
+      .map((match) => match[1]);
+    if (resolved.length === 0 || resolved.some((version) => !allowedVersions.has(version))) {
+      failures.push(`public lockfile contains an unreviewed ${dependency} resolution: ${resolved.join(', ') || 'missing'}`);
+    }
+  }
   const releaseMessagingRoot = path.join(releaseRoot, 'packages', 'volna-messaging-client');
   const standaloneMessagingRoot = await exists(releaseMessagingRoot)
     ? releaseMessagingRoot
     : path.join(repositoryRoot, 'packages', 'volna-messaging-client');
   const standaloneWorkspace = await readFile(path.join(standaloneMessagingRoot, 'pnpm-workspace.yaml'), 'utf8');
   const standaloneLock = await readFile(path.join(standaloneMessagingRoot, 'pnpm-lock.yaml'), 'utf8');
+  const standaloneLockPackages = standaloneLock.slice(
+    standaloneLock.indexOf('\npackages:\n'),
+    standaloneLock.indexOf('\nsnapshots:\n'),
+  );
   for (const [dependency, expected] of [['postcss', '8.5.26'], ['uuid', '11.1.1']]) {
     if (!new RegExp(`^\\s{2}${dependency}:\\s+${expected.replaceAll('.', '\\.') }\\s*$`, 'm').test(standaloneWorkspace)) {
       failures.push(`standalone messaging workspace must override ${dependency} to ${expected}`);
@@ -190,6 +225,13 @@ async function validateReleaseMetadata(manifest, failures) {
     if (resolved.length === 0 || resolved.some((version) => version !== expected)) {
       failures.push(`standalone messaging lockfile must resolve only ${dependency}@${expected}`);
     }
+  }
+  if (!standaloneWorkspace.includes('  "socket.io-parser@>=4.0.0 <4.2.7": 4.2.7')) {
+    failures.push('standalone messaging workspace must retain the reviewed socket.io-parser override');
+  }
+  const standaloneSocketParsers = [...standaloneLockPackages.matchAll(/^  socket\.io-parser@([^:]+):/gm)].map((match) => match[1]);
+  if (standaloneSocketParsers.length === 0 || standaloneSocketParsers.some((version) => version !== '4.2.7')) {
+    failures.push(`standalone messaging lockfile contains an unreviewed socket.io-parser resolution: ${standaloneSocketParsers.join(', ') || 'missing'}`);
   }
   const patchPath = path.join(releaseRoot, 'patches', 'image-size@1.2.1.patch');
   if (!(await exists(patchPath))) {
