@@ -19,10 +19,19 @@ otherwise resolves `uuid` 7.x, which is affected by the buffer-bounds advisory
 The override keeps the CommonJS `uuid.v4()` API used by that helper and is exercised
 by the isolated client verification/build flow.
 
-The same overrides and exact resolutions are enforced inside the standalone
+The release workspace also carries range-scoped patched floors for the transitive
+`brace-expansion`, `js-yaml`, `nanoid`, `socket.io-parser`, `tar`, and `undici`
+families. These close the reviewed 2026 denial-of-service, parser, archive, and
+HTTP advisories without collapsing packages across incompatible major versions.
+The boundary verifier pins both each selector and every allowed resolution, so a
+future install cannot silently return to a vulnerable version or select an
+unreviewed major. `socket.io-parser` is repeated in the standalone messaging
+workspace because its content-free realtime client is part of that package too.
+
+The relevant overrides and exact resolutions are enforced inside the standalone
 `packages/volna-messaging-client` workspace and both of its byte-identical lockfile
 copies. Installing or reviewing only that package therefore cannot silently
-reintroduce the older PostCSS or UUID graph.
+reintroduce the older PostCSS, UUID, or Socket.IO parser graph.
 
 Expo and Metro currently resolve transitive `image-size` `1.2.1`, whose ICNS,
 JXL, and HEIF parsing family is covered by two high-severity infinite-loop
