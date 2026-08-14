@@ -5,7 +5,7 @@ test, and reproduce the source without access to the proprietary backend.
 
 ## Review setup
 
-Use Node.js 20, 22, or 24 and pnpm 11.7.0:
+Use Node.js 22 or 24 and pnpm 11.7.0:
 
 ```sh
 pnpm install --frozen-lockfile

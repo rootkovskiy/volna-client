@@ -8,6 +8,13 @@ use the private security-contact process operated by the VOLNA maintainers.
 The following are security invariants for this package:
 
 - no implementation may add a plaintext transport or downgrade fallback;
+- `MATRIX_V1` content must remain inside `m.room.encrypted`; the custom msgtype,
+  body, device id, and strict VOLNA event are all encrypted event content, never
+  parallel cleartext metadata;
+- Matrix access credentials must remain inside the encrypted credential envelope;
+  explicit application logout revokes the current Matrix session, access tokens
+  stay short-lived, and an automatic refresh first requires a live authenticated
+  VOLNA session;
 - no message plaintext, content key, recovery secret, or unencrypted protocol state
   may be logged, sent to analytics/crash telemetry, or stored in AsyncStorage;
   AsyncStorage may contain only authenticated encrypted state envelopes, the
@@ -16,7 +23,12 @@ The following are security invariants for this package:
   implementations, never from a locally invented protocol; production use still
   requires published compatibility evidence and a documented public-review window
   for the dependency and this integration;
-- unexpected device/key changes are blocking and visible;
+- released MLS device/key changes are blocking and visible. Development Matrix
+  uses cross-signing, signed-device isolation, visible identity replacement and
+  Matrix to-device SAS/QR verification; full fingerprints remain inspectable;
+- the MLS witness proof is never represented as proof of a Matrix device key;
+  Matrix device identity is established by its own cross-signing and SAS/QR flow,
+  and independent witnesses are not required for that design;
 - a key directory is usable only after exact snapshot pagination/hash-chain
   verification, sparse-map inclusion, C2SP log inclusion/signature verification,
   and a fresh threshold of at least two distinct pinned Ed25519 witness

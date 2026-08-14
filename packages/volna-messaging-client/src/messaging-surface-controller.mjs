@@ -4,7 +4,7 @@ import contract from './index.js';
 const { normalizeContentEvent } = contract;
 const ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 const USERNAME_PATTERN = /^[a-z0-9_.-]{2,32}$/;
-const THREAD_MODES = new Set(['LEGACY_PLAINTEXT', 'MLS_V1']);
+const THREAD_MODES = new Set(['LEGACY_PLAINTEXT', 'MLS_V1', 'MATRIX_V1']);
 const SECURE_HISTORY_PLACEHOLDER = 'Зашифрованная история недоступна на этом устройстве';
 
 export class MessagingSurfaceError extends Error {
@@ -362,7 +362,7 @@ export function createMessagingSurfaceController(options) {
   };
 
   const assertNoDowngrade = async (accountId, thread) => {
-    if (thread.encryptionMode === 'MLS_V1') {
+    if (thread.encryptionMode === 'MLS_V1' || thread.encryptionMode === 'MATRIX_V1') {
       if (thread.protocolVersion !== 1) fail('unsupported_protocol');
       knownSecureThreads.add(thread.id);
       return;
@@ -386,7 +386,7 @@ export function createMessagingSurfaceController(options) {
     return handle.client.getMessages(threadId).map((message) => normalizeProjectedMessage(message, threadId));
   };
 
-  const searchLocalMessages = async (accountId, queryValue, { limit = 100 } = {}) => {
+  const searchMlsMessages = async (accountId, queryValue, { limit = 100 } = {}) => {
     identifier(accountId, 'account_id');
     if (typeof queryValue !== 'string') fail('message_search_query');
     const query = queryValue.trim();
@@ -415,13 +415,28 @@ export function createMessagingSurfaceController(options) {
   };
 
   const prepareOpenedThread = async (accountId, thread, { allowActivation = true } = {}) => {
-    await assertNoDowngrade(accountId, thread);
     if (thread.encryptionMode === 'MLS_V1') {
+      await assertNoDowngrade(accountId, thread);
       if (thread.protocolVersion !== 1) fail('unsupported_protocol');
       thread.messages = await secureMessages(accountId, thread.id, { sync: true });
       thread.lastMessageText = messagePreview(thread.messages.at(-1));
       return thread;
     }
+    if (options.matrixMessaging) {
+      const capabilities = await options.matrixMessaging.capabilities();
+      if (capabilities.enabled) {
+        const matrixThread = allowActivation
+          ? await options.matrixMessaging.openThread(accountId, thread)
+          : await options.matrixMessaging.decorateThread(accountId, thread);
+        if (matrixThread.encryptionMode === 'MATRIX_V1') {
+          await assertNoDowngrade(accountId, matrixThread);
+          knownSecureThreads.add(matrixThread.id);
+          return normalizeThread(matrixThread);
+        }
+        if (allowActivation) fail('matrix_activation_failed');
+      }
+    }
+    await assertNoDowngrade(accountId, thread);
     if (!allowActivation || thread.messages.length > 0) return thread;
     const capabilities = await options.loadMessagingCapabilities();
     if (!capabilities.rolloutEnabled) return thread;
@@ -439,8 +454,8 @@ export function createMessagingSurfaceController(options) {
     const items = [];
     for (const item of page.items) {
       const thread = normalizeThread(item);
-      await assertNoDowngrade(accountId, thread);
       if (thread.encryptionMode === 'MLS_V1') {
+        await assertNoDowngrade(accountId, thread);
         try {
           thread.messages = await secureMessages(accountId, thread.id);
           thread.lastMessageText = messagePreview(thread.messages.at(-1));
@@ -455,7 +470,17 @@ export function createMessagingSurfaceController(options) {
       }
       items.push(thread);
     }
-    return { items, nextCursor: typeof page.nextCursor === 'string' ? page.nextCursor : null };
+    const decoratedItems = options.matrixMessaging
+      ? await options.matrixMessaging.decorateThreads(accountId, items)
+      : items;
+    for (const thread of decoratedItems) {
+      await assertNoDowngrade(accountId, thread);
+      if (thread.encryptionMode === 'MATRIX_V1') knownSecureThreads.add(thread.id);
+    }
+    return {
+      items: decoratedItems.map((thread) => normalizeThread(thread)),
+      nextCursor: typeof page.nextCursor === 'string' ? page.nextCursor : null,
+    };
   };
 
   const openThread = async (accountId, partnerUsername, optionsValue = {}) => {
@@ -475,6 +500,10 @@ export function createMessagingSurfaceController(options) {
       await handle.client.sendEvent(thread.id, event);
       return secureMessages(accountId, thread.id);
     }
+    if (thread.encryptionMode === 'MATRIX_V1') {
+      if (!options.matrixMessaging) fail('matrix_runtime_missing');
+      return options.matrixMessaging.sendMessage(accountId, thread, draft);
+    }
     const response = await request(`/chats/${encodeURIComponent(thread.id)}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -492,6 +521,10 @@ export function createMessagingSurfaceController(options) {
       const event = handle.client.createMutationEvent('message.edit', identifier(messageId, 'message_id'), text);
       await handle.client.sendEvent(thread.id, event);
       return secureMessages(accountId, thread.id);
+    }
+    if (thread.encryptionMode === 'MATRIX_V1') {
+      if (!options.matrixMessaging) fail('matrix_runtime_missing');
+      return options.matrixMessaging.editMessage(accountId, thread, identifier(messageId, 'message_id'), text);
     }
     const response = await request(`/chats/${encodeURIComponent(thread.id)}/messages/${encodeURIComponent(identifier(messageId, 'message_id'))}`, {
       method: 'PATCH',
@@ -513,6 +546,10 @@ export function createMessagingSurfaceController(options) {
       const event = handle.client.createMutationEvent('message.reaction', identifier(messageId, 'message_id'), nextEmoji);
       await handle.client.sendEvent(thread.id, event);
       return secureMessages(accountId, thread.id);
+    }
+    if (thread.encryptionMode === 'MATRIX_V1') {
+      if (!options.matrixMessaging) fail('matrix_runtime_missing');
+      return options.matrixMessaging.reactToMessage(accountId, thread, identifier(messageId, 'message_id'), nextEmoji);
     }
     const response = await request(`/chats/${encodeURIComponent(thread.id)}/messages/${encodeURIComponent(identifier(messageId, 'message_id'))}/reaction`, {
       method: 'PUT',
@@ -583,6 +620,23 @@ export function createMessagingSurfaceController(options) {
     return record(await response.json(), 'resolved_music');
   };
 
+  const searchLocalMessages = async (accountId, queryValue, { limit = 100 } = {}) => {
+    const boundedLimit = Math.min(500, Math.max(1, limit));
+    const [mlsResults, matrixResults] = await Promise.all([
+      searchMlsMessages(accountId, queryValue, { limit: boundedLimit }),
+      options.matrixMessaging
+        ? options.matrixMessaging.searchLocalMessages(accountId, queryValue, { limit: boundedLimit })
+        : [],
+    ]);
+    const seen = new Set();
+    return [...matrixResults, ...mlsResults].filter((result) => {
+      const key = `${result.threadId}\0${result.message.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, boundedLimit);
+  };
+
   const subscribeRealtime = async ({ accountId, thread, onEncryptedEnvelope, onLegacyMessage, onLegacyReaction, onThreadUpdated, onActivity }) => {
     identifier(accountId, 'account_id');
     const accessToken = typeof options.getAccessToken === 'function' ? await options.getAccessToken() : undefined;
@@ -625,7 +679,15 @@ export function createMessagingSurfaceController(options) {
     socket.on('message_created', legacyMessage);
     socket.on('message_updated', legacyMessage);
     socket.on('message_reaction_updated', legacyReaction);
+    const releaseMatrixSubscription = options.matrixMessaging
+      ? await options.matrixMessaging.subscribe(accountId, (threadId) => {
+          onActivity?.();
+          onEncryptedEnvelope?.(threadId);
+          onThreadUpdated?.();
+        })
+      : () => undefined;
     return () => {
+      releaseMatrixSubscription();
       if (normalizedThread?.encryptionMode === 'LEGACY_PLAINTEXT') socket.emit('leave_thread', { threadId: normalizedThread.id });
       socket.off('connect', join);
       socket.off('thread_updated');
@@ -637,11 +699,64 @@ export function createMessagingSurfaceController(options) {
     };
   };
 
+  const getMatrixRoomSecurity = async (accountId, threadValue) => {
+    const thread = normalizeThread(threadValue);
+    if (thread.encryptionMode !== 'MATRIX_V1' || !options.matrixMessaging) fail('matrix_runtime_missing');
+    return options.matrixMessaging.getRoomSecurity(identifier(accountId, 'account_id'), thread);
+  };
+
+  const verifyMatrixDevice = async (accountId, threadValue, userId, deviceId, expectedEd25519) => {
+    const thread = normalizeThread(threadValue);
+    if (thread.encryptionMode !== 'MATRIX_V1' || !options.matrixMessaging) fail('matrix_runtime_missing');
+    return options.matrixMessaging.verifyDevice(
+      identifier(accountId, 'account_id'),
+      thread,
+      userId,
+      deviceId,
+      expectedEd25519,
+    );
+  };
+
+  const setupMatrixRecovery = async (accountId) => {
+    if (!options.matrixMessaging) fail('matrix_runtime_missing');
+    return options.matrixMessaging.setupRecovery(identifier(accountId, 'account_id'));
+  };
+
+  const recoverMatrixSecurity = async (accountId, recoveryKey) => {
+    if (!options.matrixMessaging || typeof recoveryKey !== 'string') fail('matrix_runtime_missing');
+    return options.matrixMessaging.recoverSecurity(identifier(accountId, 'account_id'), recoveryKey);
+  };
+
+  const startMatrixDeviceVerification = async (accountId, threadValue, userId, deviceId) => {
+    const thread = normalizeThread(threadValue);
+    if (thread.encryptionMode !== 'MATRIX_V1' || !options.matrixMessaging) fail('matrix_runtime_missing');
+    return options.matrixMessaging.startDeviceVerification(identifier(accountId, 'account_id'), thread, userId, deviceId);
+  };
+
+  const matrixVerificationAction = (method) => async (accountId, verificationId, payload) => {
+    if (!options.matrixMessaging) fail('matrix_runtime_missing');
+    return options.matrixMessaging[method](identifier(accountId, 'account_id'), verificationId, ...(payload === undefined ? [] : [payload]));
+  };
+
+  const acceptMatrixVerification = matrixVerificationAction('acceptVerification');
+  const startMatrixSasVerification = matrixVerificationAction('startSasVerification');
+  const generateMatrixQrVerification = matrixVerificationAction('generateQrVerification');
+  const scanMatrixQrVerification = matrixVerificationAction('scanQrVerification');
+  const confirmMatrixVerification = matrixVerificationAction('confirmVerification');
+  const mismatchMatrixVerification = matrixVerificationAction('mismatchVerification');
+  const cancelMatrixVerification = matrixVerificationAction('cancelVerification');
+
   return Object.freeze({
     editMessage,
+    acceptMatrixVerification,
+    cancelMatrixVerification,
+    confirmMatrixVerification,
+    generateMatrixQrVerification,
+    getMatrixRoomSecurity,
     listThreads,
     loadOwnMusic,
     openThread,
+    recoverMatrixSecurity,
     reactToMessage,
     resolveOwnAccountId,
     resolveMusic,
@@ -650,7 +765,13 @@ export function createMessagingSurfaceController(options) {
     searchLocalMessages,
     searchProfiles,
     sendMessage,
+    scanMatrixQrVerification,
+    setupMatrixRecovery,
+    startMatrixDeviceVerification,
+    startMatrixSasVerification,
     subscribeRealtime,
+    verifyMatrixDevice,
+    mismatchMatrixVerification,
   });
 }
 
@@ -662,5 +783,6 @@ export function messagingSurfaceErrorMessage(error) {
   if (code === 'security_setup_required') return 'Сначала настройте защищённые сообщения на этом устройстве';
   if (code === 'secure_state_missing') return 'На устройстве нет подтверждённого ключевого состояния этого чата';
   if (code === 'unsupported_protocol') return 'Для этого чата требуется обновление приложения';
+  if (code === 'matrix_activation_failed' || code === 'matrix_runtime_missing') return 'Защищённый Matrix-чат сейчас недоступен';
   return 'Не удалось выполнить действие с сообщениями';
 }

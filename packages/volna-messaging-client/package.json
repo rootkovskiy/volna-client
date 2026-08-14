@@ -94,6 +94,21 @@
       "types": "./src/media-policy.d.mts",
       "import": "./src/media-policy.mjs",
       "default": "./src/media-policy.mjs"
+    },
+    "./matrix-engine-web": {
+      "types": "./src/matrix-engine.d.ts",
+      "import": "./src/matrix-engine-web.ts",
+      "default": "./src/matrix-engine-web.ts"
+    },
+    "./matrix-engine-native": {
+      "types": "./src/matrix-engine.d.ts",
+      "import": "./src/matrix-engine-native.ts",
+      "default": "./src/matrix-engine-native.ts"
+    },
+    "./matrix-message-codec": {
+      "types": "./src/matrix-message-codec.d.mts",
+      "import": "./src/matrix-message-codec.mjs",
+      "default": "./src/matrix-message-codec.mjs"
     }
   },
   "files": [
@@ -124,6 +139,7 @@
     "@noble/ciphers": "2.1.1",
     "@noble/curves": "2.0.1",
     "@noble/hashes": "2.0.1",
+    "matrix-js-sdk": "42.1.0",
     "socket.io-client": "4.8.3",
     "ts-mls": "1.6.2"
   },
@@ -189,6 +205,6 @@
     "provenance": true
   },
   "engines": {
-    "node": ">=20 <25"
+    "node": ">=22 <25"
   }
 }

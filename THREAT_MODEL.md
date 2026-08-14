@@ -48,6 +48,13 @@ matched to that source.
   requires it.
 - Legacy chats remain server-readable. The server-blind confidentiality model
   applies only to a conversation explicitly activated as `MLS_V1`.
+- Development `MATRIX_V1` relies on Matrix device identity/cross-signing rather
+  than the MLS witness map. Web/PWA applies signed-device isolation, reports
+  cross-signing identity replacement, and verifies devices through Matrix
+  to-device QR/SAS. Exact session and account revocation plus direct-room removal
+  are implemented with durable retry. The remaining Matrix release risk is the
+  absent full native adapter, physical all-platform evidence and independently
+  matched signed artifacts—not an absent external witness.
 
 The protocol-level model is expanded in
 `packages/volna-messaging-client/THREAT_MODEL.md`.

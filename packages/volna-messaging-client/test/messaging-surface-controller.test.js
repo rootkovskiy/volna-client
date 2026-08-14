@@ -20,7 +20,7 @@ const thread = (encryptionMode) => ({
   unreadCount: 0,
   lastReadAt: null,
   encryptionMode,
-  protocolVersion: encryptionMode === 'MLS_V1' ? 1 : null,
+  protocolVersion: encryptionMode === 'MLS_V1' || encryptionMode === 'MATRIX_V1' ? 1 : null,
   mlsEpoch: encryptionMode === 'MLS_V1' ? '1' : null,
   encryptedSince: encryptionMode === 'MLS_V1' ? '2026-08-05T10:00:00.000Z' : null,
   legacyHistoryOnly: false,
@@ -96,6 +96,45 @@ test('MLS send keeps plaintext inside the public secure client and never calls a
     },
   }]);
   assert.equal(calls.some(({ url }) => url.includes(`/chats/${THREAD_ID}/messages`)), false);
+});
+
+test('Matrix send stays in the public Matrix engine and never calls a legacy message route', async () => {
+  const calls = [];
+  const sent = [];
+  const { createMessagingSurfaceController } = await import('../src/messaging-surface-controller.mjs');
+  const controller = createMessagingSurfaceController({
+    apiOrigin: 'https://api.example.test',
+    fetch: async (...args) => { calls.push(args); throw new Error('legacy transport must not run'); },
+    getSecureMessagingClient: async () => { throw new Error('MLS runtime must not run'); },
+    loadMessagingCapabilities: async () => ({ enrollmentEnabled: false, rolloutEnabled: false }),
+    matrixMessaging: {
+      capabilities: async () => ({ enabled: true, protocol: 'MATRIX_V1' }),
+      decorateThread: async (_accountId, value) => value,
+      decorateThreads: async (_accountId, values) => values,
+      openThread: async (_accountId, value) => value,
+      sendMessage: async (accountId, value, draft) => {
+        sent.push({ accountId, threadId: value.id, draft });
+        return [{
+          id: 'message_matrix_123',
+          threadId: value.id,
+          senderAccountId: accountId,
+          text: draft.text,
+          createdAt: '2026-08-14T00:00:00.000Z',
+          reactions: [],
+          securityMode: 'e2ee',
+        }];
+      },
+      editMessage: async () => [],
+      reactToMessage: async () => [],
+      searchLocalMessages: async () => [],
+      subscribe: async () => () => undefined,
+      release: async () => undefined,
+    },
+  });
+  const messages = await controller.sendMessage(ACCOUNT_ID, thread('MATRIX_V1'), { text: 'matrix секрет' });
+  assert.equal(messages[0].securityMode, 'e2ee');
+  assert.deepEqual(sent, [{ accountId: ACCOUNT_ID, threadId: THREAD_ID, draft: { text: 'matrix секрет' } }]);
+  assert.equal(calls.length, 0);
 });
 
 test('message search stays in the public endpoint client and never sends the query to the API', async () => {

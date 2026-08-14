@@ -7,7 +7,7 @@
   "main": "expo-router/entry",
   "packageManager": "pnpm@11.7.0",
   "engines": {
-    "node": ">=20 <25"
+    "node": ">=22 <25"
   },
   "scripts": {
     "start": "expo start",
@@ -32,6 +32,7 @@
     "@sentry/react-native": "7.2.0",
     "@shopify/flash-list": "2.0.2",
     "@volna/messaging-client": "workspace:*",
+    "@volna/matrix-native": "workspace:*",
     "expo": "54.0.36",
     "expo-audio": "1.1.1",
     "expo-auth-session": "7.0.11",

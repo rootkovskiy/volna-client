@@ -110,7 +110,7 @@ async function validateReleaseMetadata(manifest, failures) {
   if (packageJson.name !== manifest.name) failures.push('release package name does not match the boundary');
   if (packageJson.license !== manifest.license) failures.push('release package license does not match the boundary');
   if (packageJson.packageManager !== 'pnpm@11.7.0') failures.push('release package manager must be pnpm@11.7.0');
-  if (packageJson.engines?.node !== '>=20 <25') failures.push('release Node engine must exclude unsupported Node 25');
+  if (packageJson.engines?.node !== '>=22 <25') failures.push('release Node engine must require the Matrix SDK-compatible Node 22/24 range');
   if (packageJson.scripts?.['verify:openmls'] !== 'cargo test --locked --all-targets --manifest-path packages/volna-messaging-client/rust/openmls-evaluation/Cargo.toml') {
     failures.push('release must expose the pinned locked OpenMLS verification command');
   }

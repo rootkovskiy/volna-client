@@ -34,6 +34,21 @@ device keys, or production tokens.
   never message plaintext, message search queries, or recoverable device
   wrapping keys. Legacy chats remain server-readable while they exist.
 - An `MLS_V1` thread never falls back or dual-writes to plaintext routes.
+- A `MATRIX_V1` thread carries the strict VOLNA event only inside the encrypted
+  Matrix event and never falls back or dual-writes to plaintext routes. Matrix
+  metadata remains visible to the homeserver. The companion Synapse policy rejects
+  user-authored plaintext events, and the API freezes legacy writes while Matrix is
+  enabled.
+- Matrix device keys are not covered by the MLS Key Transparency claim. Web/PWA
+  uses Matrix cross-signing, signed-device isolation, identity-change warnings and
+  to-device QR/SAS verification; independent witnesses are not required for this
+  Matrix identity design. Full native parity and physical verification remain
+  release gates.
+- Matrix access tokens are short-lived and refresh first checks the authenticated
+  VOLNA session. Exact session-device registration, account-wide deletion/
+  suspension revocation, direct-room block removal and durable Synapse retry are
+  server lifecycle invariants. Pending push notification receipts are encrypted
+  locally and contain only thread/event routing ids, never message content.
 - Missing/stale witness quorum, invalid directory or sparse-map proof, log
   inclusion/signature failure, membership, AAD, media, or local-state failure is
   blocking and never causes plaintext fallback.

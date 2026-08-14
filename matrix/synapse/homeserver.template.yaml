@@ -1,0 +1,84 @@
+server_name: "volna.social"
+public_baseurl: "__MATRIX_PUBLIC_URL__/"
+pid_file: /matrix-data/homeserver.pid
+web_client_location: null
+report_stats: false
+
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    bind_addresses: ["0.0.0.0"]
+    resources:
+      - names: [client]
+        compress: true
+
+database:
+  name: psycopg2
+  args:
+    user: soyuz
+    password: soyuz
+    database: volna_matrix
+    host: postgres
+    port: 5432
+    cp_min: 2
+    cp_max: 10
+
+log_config: /config/log.config
+media_store_path: /matrix-data/media_store
+signing_key_path: /matrix-data/volna.social.signing.key
+macaroon_secret_key: "__MATRIX_MACAROON_SECRET__"
+form_secret: "__MATRIX_FORM_SECRET__"
+
+enable_registration: false
+enable_registration_without_verification: false
+allow_guest_access: false
+allow_public_rooms_without_auth: false
+allow_public_rooms_over_federation: false
+allow_profile_lookup_over_federation: false
+allow_device_name_lookup_over_federation: false
+url_preview_enabled: false
+enable_search: false
+enable_room_list_search: false
+presence:
+  enabled: false
+
+# Browser/PWA access tokens are deliberately short-lived. The public client asks
+# for a refresh token and re-checks the authenticated VOLNA session before every
+# automatic refresh. A complete Matrix session has an absolute 30-day lifetime,
+# after which the same endpoint device must obtain a fresh one-time VOLNA grant.
+session_lifetime: 30d
+refreshable_access_token_lifetime: 10m
+refresh_token_lifetime: 30d
+nonrefreshable_access_token_lifetime: 10m
+
+federation_domain_whitelist: []
+trusted_key_servers: []
+suppress_key_server_warning: true
+
+max_upload_size: 1M
+rc_message:
+  per_second: 20
+  burst_count: 40
+rc_login:
+  address:
+    per_second: 5
+    burst_count: 20
+  account:
+    per_second: 5
+    burst_count: 20
+  failed_attempts:
+    per_second: 1
+    burst_count: 5
+
+app_service_config_files:
+  - /config/volna-appservice.yaml
+
+modules:
+  - module: volna_matrix_module.VolnaMatrixModule
+    config:
+      consume_login_url: "__VOLNA_MATRIX_INTERNAL_API_URL__/messaging/matrix/internal/consume-login"
+      can_send_url: "__VOLNA_MATRIX_INTERNAL_API_URL__/messaging/matrix/internal/can-send"
+      shared_secret: "__MATRIX_AUTH_SHARED_SECRET__"
+      server_name: "volna.social"

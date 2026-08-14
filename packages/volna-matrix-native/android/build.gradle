@@ -1,0 +1,17 @@
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'social.volna.matrix'
+version = '0.1.0'
+
+android {
+  namespace 'social.volna.matrix'
+  defaultConfig { minSdkVersion 24 }
+}
+
+dependencies {
+  // Official Apache-2.0 Matrix Rust SDK FFI distribution. The artifact bundles
+  // arm64-v8a, armeabi-v7a, x86, and x86_64 native libraries.
+  implementation 'org.matrix.rustcomponents:sdk-android:26.08.13'
+}
