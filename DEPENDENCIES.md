@@ -5,6 +5,11 @@ client-only pnpm lockfile. Workspace packages are included as source; proprietar
 server packages and their dependency graph are absent. `release-evidence.json` and
 the CycloneDX 1.6 SBOM describe the resolved graph used for review.
 
+The public messaging workspace pins Apache-2.0 `matrix-js-sdk` `42.1.0` for the
+development Web/PWA Matrix path. Its official Rust/WASM crypto backend is loaded
+only from the messaging surface. The native export deliberately does not bundle
+this browser SDK; Kotlin/Swift Matrix Rust bindings remain a release gate.
+
 `pnpm-workspace.yaml` additionally overrides `postcss` to `8.5.26`. Expo's
 transitive ranges otherwise permitted `8.4.49`, which is affected by arbitrary
 file-read/source-map advisories

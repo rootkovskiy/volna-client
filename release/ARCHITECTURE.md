@@ -17,6 +17,9 @@
 - `packages/volna-key-transparency-log/` is the separately deployed
   C2SP/Tessera tile log for globally batched key-transparency map roots. It is
   VOLNA-operated, externally cosigned, and never bundled into Expo.
+- `matrix/` contains the inspectable Synapse login/policy module and hardened
+  configuration templates. Synapse itself is a separately deployed AGPL-3.0
+  service and is never bundled into Expo.
 - `packages/content-policy/` and `packages/music-taxonomy/` are shared pure
   domain packages.
 - `public/` contains the PWA boot document, manifest, icons, and service worker.
@@ -58,6 +61,40 @@ Production E2EE enrollment and rollout are hard-disabled while the release
 gates in `SECURITY.md` remain incomplete. Legacy chats remain server-readable;
 the client must label them accordingly and must never present them as E2EE.
 
+## Matrix messaging path
+
+```text
+public VOLNA UI/codec
+  -> Web/PWA matrix-js-sdk Rust/WASM crypto
+  -> encrypted Matrix room event
+  -> Synapse storing ciphertext and Matrix metadata
+```
+
+`MATRIX_V1` is a development-only headless-engine path. VOLNA issues a one-time
+login grant, maps existing `ChatThread` participants to pseudonymous Matrix ids,
+and retains room membership/state control. Synapse checks the current VOLNA
+block/privacy policy before accepting every encrypted send and rejects every
+user-authored plaintext event. Ten-minute access tokens refresh only after an
+authenticated VOLNA-session check. Each exact Matrix device is registered to its
+VOLNA session: logout/session expiry removes it, account deletion/suspension
+removes all devices and memberships, and blocks remove both direct-room members.
+Failed Synapse lifecycle commands retry from critical Redis. Text, reactions,
+music, locations and entity cards use the same bounded public VOLNA event codec
+inside ciphertext; old legacy history remains visibly server-readable.
+
+Web/PWA dynamically loads `matrix-js-sdk` 42.1.0 only from the messaging surface.
+Its public security sheet owns Matrix cross-signing, signed-device isolation,
+identity-change warnings, SAS emoji/decimal and QR verification, secret-storage
+setup, one-time recovery-key display/import and room-key backup recovery. An
+encrypted local message outbox and a separate encrypted content-free notification
+queue survive endpoint restart; the API validates the exact encrypted Matrix event
+before committing generic push/realtime delivery. `packages/volna-matrix-native`
+pins official Android/iOS Rust FFI artifacts, but native clients fail closed until
+the complete manager adapter and physical tests exist. The old MLS witness policy
+does not authenticate Matrix device keys and independent witnesses are not a
+Matrix release dependency. Production configuration rejects Matrix enablement
+until the remaining native/artifact gates are complete.
+
 ## Review map
 
 Start a message-security review at:
@@ -67,12 +104,14 @@ Start a message-security review at:
 3. `src/mls-runtime.mjs` for MLS transitions;
 4. `src/opaque-transport.mjs` for the server boundary;
 5. `src/encrypted-message-store.mjs` for local projections;
-6. `apps/mobile/src/messaging/secureMessaging.ts` for host integration.
-7. `src/key-transparency.mjs` for sparse-map, RFC 6962, signed-note, and 2-of-3
+6. `src/matrix-engine-web.ts` and `src/matrix-message-codec.mjs` for Matrix;
+7. `matrix/synapse/volna_matrix_module.py` for one-time login and send policy;
+8. `apps/mobile/src/messaging/secureMessaging.ts` for host integration;
+9. `src/key-transparency.mjs` for sparse-map, RFC 6962, signed-note, and 2-of-3
    C2SP verification;
-8. `packages/volna-key-transparency-log/` for the public Tessera personality and
+10. `packages/volna-key-transparency-log/` for the public Tessera personality and
    operator boundary;
-9. `packages/volna-key-directory-witness/src/` only when reviewing the retained
+11. `packages/volna-key-directory-witness/src/` only when reviewing the retained
    earlier semantic-witness reference path.
 
 Some feature and StyleSheet modules are large because the current product

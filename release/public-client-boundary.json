@@ -9,8 +9,10 @@
     "packages/content-policy",
     "packages/music-taxonomy",
     "packages/volna-messaging-client",
+    "packages/volna-matrix-native",
     "packages/volna-key-directory-witness",
     "packages/volna-key-transparency-log",
+    "matrix",
     "public"
   ],
   "rootRuntimeFiles": [
@@ -33,6 +35,7 @@
   "allowedWorkspaceImports": [
     "@volna/content-policy",
     "@volna/messaging-client",
+    "@volna/matrix-native",
     "@volna/music-taxonomy"
   ],
   "allowedClientEnvironmentVariables": [

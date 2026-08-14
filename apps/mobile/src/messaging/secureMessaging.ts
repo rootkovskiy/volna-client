@@ -4,6 +4,7 @@ import type { C2spKeyTransparencyPolicy } from '@volna/messaging-client/opaque-t
 import { createMessagingSurfaceController } from '@volna/messaging-client/messaging-surface-controller';
 import { fetch as expoFetch } from 'expo/fetch';
 import { apiFetch, apiUrl, getApiSessionToken } from '../api/client';
+import { matrixMessagingManager } from './matrixMessaging';
 
 const keyTransparencyPolicy: C2spKeyTransparencyPolicy | undefined =
   keyTransparencyPolicyDocument.status === 'active'
@@ -29,7 +30,19 @@ const manager = createExpoSecureMessagingManager({
 
 export const getSecureMessagingClient = manager.getSecureMessagingClient;
 export const loadMessagingCapabilities = manager.loadMessagingCapabilities;
-export const releaseSecureMessagingClient = manager.releaseSecureMessagingClient;
+export const releaseSecureMessagingClient = async (accountId: string) => {
+  await Promise.all([
+    manager.releaseSecureMessagingClient(accountId),
+    matrixMessagingManager.release(accountId),
+  ]);
+};
+
+export const logoutSecureMessagingClient = async (accountId: string) => {
+  await Promise.all([
+    manager.releaseSecureMessagingClient(accountId),
+    matrixMessagingManager.logout(accountId),
+  ]);
+};
 
 export const messagingSurfaceController = createMessagingSurfaceController({
   apiOrigin: apiUrl,
@@ -38,4 +51,5 @@ export const messagingSurfaceController = createMessagingSurfaceController({
   getSecureMessagingClient: manager.getSecureMessagingClient,
   includeCredentials: true,
   loadMessagingCapabilities: manager.loadMessagingCapabilities,
+  matrixMessaging: matrixMessagingManager,
 });

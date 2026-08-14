@@ -18,6 +18,19 @@
 - a malicious key directory attempting an unexplained device addition or rollback,
   which clients must make detectable and blocking.
 
+The development Matrix path delegates room encryption and device keys to the
+official Matrix Rust crypto backend. Synapse can observe room membership, Matrix
+device ids, timing, ciphertext size and traffic patterns, but the strict VOLNA
+message event is inside `m.room.encrypted`. The VOLNA policy bridge controls room
+membership/state, rejects every user-authored plaintext event, and fails sends
+closed against current block/privacy rules. The public UI uses Matrix cross-signing,
+signed-device isolation, identity-change warnings and to-device SAS/QR verification;
+full Ed25519 keys remain inspectable. The separate MLS transparency map does not
+authenticate Matrix keys and independent witnesses are not required for Matrix.
+The API registers exact Matrix devices to VOLNA sessions and durably retries
+logout/expiry/account/block membership revocation. The remaining release boundary
+is native parity, physical evidence and independently matched signed artifacts.
+
 Directory responses are bound to one immutable head and exact entry count across
 all cursor pages. Before using the result, the public client verifies the account-
 master chain, a compressed radix-256 sparse-map proof, RFC 6962 inclusion of that
@@ -65,6 +78,12 @@ from a media provider the user explicitly chooses to play.
   garbage-collected heap, even though mutable byte arrays are cleared best-effort;
 - the pinned `ts-mls` integration and VOLNA glue have not received an independent
   security audit and must not be described as audited;
+- the Matrix Web/PWA engine is development-only, and native applications reject
+  Matrix activation until the pinned official Matrix Rust SDK FFI distributions
+  are connected to the complete manager contract and physically tested;
+- exact local/remote session-device, account-wide and block-room revocation is
+  implemented with durable retry, but cannot substitute for an MLS Remove Commit
+  if the separate custom MLS path is ever released;
 - C2SP verification and checkpoint gossip are implemented, and three external
   operators are pinned as the intended policy, but the VOLNA production log key
   does not yet exist and those operators have not registered/cosigned it. E2EE

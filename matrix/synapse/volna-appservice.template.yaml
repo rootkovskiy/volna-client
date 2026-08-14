@@ -1,0 +1,16 @@
+id: volna-messaging
+url: null
+as_token: "__MATRIX_APPSERVICE_TOKEN__"
+hs_token: "__MATRIX_HS_TOKEN__"
+sender_localpart: volna_messaging
+rate_limited: false
+namespaces:
+  users:
+    - exclusive: true
+      regex: "^@volna_[0-9a-f]{32}:volna\\.social$"
+    - exclusive: true
+      regex: "^@volna_messaging:volna\\.social$"
+  aliases:
+    - exclusive: true
+      regex: "^#volna_dm_[0-9a-f]{40}:volna\\.social$"
+  rooms: []

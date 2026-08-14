@@ -1,6 +1,7 @@
 import type { MessagingCapabilities, MessagingClientHandle } from './expo-secure-messaging';
+import type { MatrixMessagingManager, MatrixRoomSecurity, MatrixVerificationState } from './matrix-engine';
 
-export type MessagingMode = 'LEGACY_PLAINTEXT' | 'MLS_V1';
+export type MessagingMode = 'LEGACY_PLAINTEXT' | 'MLS_V1' | 'MATRIX_V1';
 export type MessagingPartner = { id: string; username: string; name: string; avatarUrl: string | null; isVerified: boolean };
 export type MessagingAttachment =
   | { kind: 'location'; latitude: number; longitude: number; accuracy?: number }
@@ -44,6 +45,7 @@ export declare function createMessagingSurfaceController(options: {
   fetch: typeof globalThis.fetch;
   getSecureMessagingClient(accountId: string): Promise<MessagingClientHandle>;
   loadMessagingCapabilities(): Promise<MessagingCapabilities>;
+  matrixMessaging?: MatrixMessagingManager;
   getAccessToken?(): string | undefined | Promise<string | undefined>;
   includeCredentials?: boolean;
 }): {
@@ -55,6 +57,18 @@ export declare function createMessagingSurfaceController(options: {
   resolveOwnAccountId(): Promise<string>;
   searchProfiles(query: string, options?: { shareRecipients?: boolean }): Promise<MessagingPartner[]>;
   searchLocalMessages(accountId: string, query: string, options?: { limit?: number }): Promise<Array<{ threadId: string; message: MessagingMessage }>>;
+  getMatrixRoomSecurity(accountId: string, thread: MessagingThread): Promise<MatrixRoomSecurity>;
+  verifyMatrixDevice(accountId: string, thread: MessagingThread, userId: string, deviceId: string, expectedEd25519: string): Promise<MatrixRoomSecurity>;
+  setupMatrixRecovery(accountId: string): Promise<{ recoveryKey: string }>;
+  recoverMatrixSecurity(accountId: string, recoveryKey: string): Promise<void>;
+  startMatrixDeviceVerification(accountId: string, thread: MessagingThread, userId: string, deviceId: string): Promise<MatrixVerificationState>;
+  acceptMatrixVerification(accountId: string, verificationId: string): Promise<MatrixVerificationState>;
+  startMatrixSasVerification(accountId: string, verificationId: string): Promise<MatrixVerificationState>;
+  generateMatrixQrVerification(accountId: string, verificationId: string): Promise<MatrixVerificationState>;
+  scanMatrixQrVerification(accountId: string, verificationId: string, qrCodeBase64: string): Promise<MatrixVerificationState>;
+  confirmMatrixVerification(accountId: string, verificationId: string): Promise<MatrixVerificationState>;
+  mismatchMatrixVerification(accountId: string, verificationId: string): Promise<MatrixVerificationState>;
+  cancelMatrixVerification(accountId: string, verificationId: string): Promise<MatrixVerificationState>;
   searchAttachments(query: string): Promise<{ accounts: Array<Record<string, unknown>>; communities: Array<Record<string, unknown>>; events: Array<Record<string, unknown>> }>;
   loadOwnMusic(): Promise<Array<Record<string, any>>>;
   searchMusic(query: string): Promise<Array<Record<string, any>>>;

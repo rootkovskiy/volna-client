@@ -1,7 +1,8 @@
 # Cryptographic dependency record
 
 The production decision is pinned to exact versions; floating ranges are forbidden.
-All direct JavaScript cryptographic dependencies currently declare the MIT license.
+The direct JavaScript cryptographic dependencies are permissively licensed: the
+existing HPKE/Noble/MLS stack is MIT and Matrix JS SDK is Apache-2.0.
 `pnpm-lock.yaml` is part of the public checkout boundary and records integrity hashes
 for a standalone `--frozen-lockfile` install. Published tarballs include the exact
 byte copy `pnpm-lock.public.yaml` because the npm pack format excludes the standard
@@ -27,6 +28,7 @@ standalone lockfile copies.
 | `@noble/curves` | `2.0.1` | Ed25519 and X25519 | `github.com/paulmillr/noble-curves` |
 | `@noble/hashes` | `2.0.1` | SHA-256 and HKDF | `github.com/paulmillr/noble-hashes` |
 | `openmls` | `0.8.1` | Native/cross-implementation evaluation only | `github.com/openmls/openmls` |
+| `matrix-js-sdk` | `42.1.0` | Web/PWA Matrix client with official Rust/WASM crypto backend | `github.com/matrix-org/matrix-js-sdk` |
 
 The public React Native/Web transfer surface additionally pins Expo 54-compatible
 `expo-camera` `17.0.10`, `expo-clipboard` `8.0.8`, `react-native-qrcode-svg`

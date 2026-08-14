@@ -8,7 +8,8 @@ application host, routes, UI, networking and storage adapters, service worker,
 shared client packages, and the gated end-to-end encrypted messaging
 implementation. It also contains the separately deployable reference
 key-directory witness service under `packages/volna-key-directory-witness` and the
-standard C2SP/Tessera map-root log under `packages/volna-key-transparency-log` so an
+standard C2SP/Tessera map-root log under `packages/volna-key-transparency-log` and
+the inspectable Matrix Synapse login/policy templates under `matrix/` so an
 independent reviewer can inspect the exact endpoint verifier and append-only log
 personality. The semantic witness is retained reference code; the selected fast
 production path is the globally batched C2SP log cosigned by external operators.
@@ -20,7 +21,7 @@ documented network boundaries visible in this source.
 
 ## Verify
 
-Use Node 20, 22, or 24 and pnpm 11.7.0:
+Use Node 22 or 24 and pnpm 11.7.0:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -53,6 +54,15 @@ to replace JavaScript after publication.
 Production E2EE is currently hard-disabled. Legacy chats remain server-readable;
 only a future conversation explicitly activated as `MLS_V1` receives the
 server-blind message-content guarantee described in the security documents.
+The development-only `MATRIX_V1` path uses the official Web/PWA Matrix Rust/WASM
+crypto backend with cross-signing, signed-device isolation, identity-change
+warnings, SAS/QR verification, secret storage, recovery-key import and room-key
+backup recovery. Its credentials, unsent events and content-free notification
+receipts are encrypted locally. The public source also pins the official Android
+and iOS Rust FFI distributions, but the complete native manager adapter and
+physical-device evidence remain unfinished, so production stays blocked. The MLS
+witness policy is not presented as verification of Matrix keys; Matrix's own
+cross-signing and SAS/QR flow provides that identity layer.
 Public implementations and owner-run copies do not count as independent operation:
 production still requires the real VOLNA log to be live-cosigned by at least two
 pinned operators outside VOLNA's cloud accounts, key custody, database control,

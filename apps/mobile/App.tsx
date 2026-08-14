@@ -66,7 +66,7 @@ import {
   SettingsScreen,
   SubscriptionScreen,
 } from './src/screens/SettingsScreens';
-import { messagingSurfaceController, releaseSecureMessagingClient } from './src/messaging/secureMessaging';
+import { logoutSecureMessagingClient, messagingSurfaceController, releaseSecureMessagingClient } from './src/messaging/secureMessaging';
 import { fromApiMessagePrivacy, toApiMessagePrivacy, uploadAvatarAsset, uploadEventPosterAsset } from './src/domain';
 import type {
   Profile,
@@ -309,7 +309,7 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
       clearNotificationBadge();
       registeredPushTokenRef.current = null;
       void clearStoredSessionToken();
-      if (sessionAccountIdRef.current) void releaseSecureMessagingClient(sessionAccountIdRef.current);
+      if (sessionAccountIdRef.current) void logoutSecureMessagingClient(sessionAccountIdRef.current);
       if (Platform.OS === 'web') {
         void baseFetch(`${apiUrl}/auth/logout`, {
           method: 'POST',
@@ -870,12 +870,12 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
         body: JSON.stringify({ token: tokenToUnregister, platform: Platform.OS }),
       }).catch(() => undefined);
     }
+    if (currentAccountId) await logoutSecureMessagingClient(currentAccountId);
     await fetch(`${apiUrl}/auth/logout`, {
       method: 'POST',
       headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : undefined,
     }).catch(() => undefined);
     await clearStoredSessionToken();
-    if (currentAccountId) await releaseSecureMessagingClient(currentAccountId);
     if (session?.account.id) {
       await AsyncStorage.removeItem(lastScreenStorageKey(session.account.id)).catch(() => undefined);
     }

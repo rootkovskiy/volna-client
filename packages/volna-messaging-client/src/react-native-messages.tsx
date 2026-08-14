@@ -1,4 +1,6 @@
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import * as Clipboard from 'expo-clipboard';
+import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { Image as ExpoImage } from 'expo-image';
 import * as Location from 'expo-location';
 import {
@@ -6,6 +8,7 @@ import {
   CalendarDays,
   Check,
   ChevronLeft,
+  Copy,
   Disc3,
   LockKeyhole,
   MapPin,
@@ -21,6 +24,8 @@ import {
   UserRound,
   UsersRound,
   X,
+  KeyRound,
+  QrCode,
 } from 'lucide-react-native';
 import {
   createContext,
@@ -56,6 +61,7 @@ import {
   type TextStyle,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
+import QRCode from 'react-native-qrcode-svg';
 import {
   messagePreview,
   messagingSurfaceErrorMessage,
@@ -65,11 +71,17 @@ import {
   type MessagingSurfaceController,
   type MessagingThread,
 } from './messaging-surface-controller.mjs';
+import type { MatrixDeviceSecurity, MatrixRoomSecurity, MatrixVerificationState } from './matrix-engine';
+import { base64UrlToBytes, bytesToBase64Url } from './mls-runtime.mjs';
 import { safeHttpsUrl, trustedPublicMediaUrl } from './media-policy.mjs';
 
 const VERIFIED_BADGE_PATH = 'M20.396 11c-.018-.646-.215-1.275-.57-1.816-.354-.54-.852-.972-1.438-1.246.223-.607.27-1.264.14-1.897-.131-.634-.437-1.218-.882-1.687-.47-.445-1.053-.75-1.687-.882-.633-.13-1.29-.083-1.897.14-.273-.587-.704-1.086-1.245-1.44S11.647 1.62 11 1.604c-.646.017-1.273.213-1.813.568s-.969.854-1.24 1.44c-.608-.223-1.267-.272-1.902-.14-.635.13-1.22.436-1.69.882-.445.47-.749 1.055-.878 1.688-.13.633-.08 1.29.144 1.896-.587.274-1.087.705-1.443 1.245-.356.54-.555 1.17-.574 1.817.02.647.218 1.276.574 1.817.356.54.856.972 1.443 1.245-.224.606-.274 1.263-.144 1.896.13.634.433 1.218.877 1.688.47.443 1.054.747 1.687.878.633.132 1.29.084 1.897-.136.274.586.705 1.084 1.246 1.439.54.354 1.17.551 1.816.569.647-.016 1.276-.213 1.817-.567s.972-.854 1.245-1.44c.604.239 1.266.296 1.903.164.636-.132 1.22-.447 1.68-.907.46-.46.776-1.044.908-1.681s.075-1.299-.165-1.903c.586-.274 1.084-.705 1.439-1.246.354-.54.551-1.17.569-1.816zM9.662 14.85l-3.429-3.428 1.293-1.302 2.072 2.072 4.4-4.794 1.347 1.246z';
 const REACTIONS = ['❤️', '👍', '🔥', '😂', '😮', '😢'];
 const SEARCH_DELAY_MS = 1_000;
+
+function matrixFingerprint(value: string) {
+  return value.match(/.{1,4}/g)?.join(' ') ?? value;
+}
 
 function errorCode(error: unknown) {
   return typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : null;
@@ -257,7 +269,7 @@ export function VolnaMessagesScreen({
         <Avatar partner={item.partner} />
         <View style={ui.threadCopy}>
           <View style={ui.threadHeader}><View style={ui.threadNameLine}><VerifiedName isVerified={item.partner.isVerified} name={item.partner.name} style={ui.threadName} /><Text numberOfLines={1} style={ui.threadUsername}>@{item.partner.username}</Text></View><Text style={ui.threadTime}>{formatChatTime(item.lastMessageAt)}</Text></View>
-          <View style={ui.threadMeta}><Text numberOfLines={1} style={ui.threadPreview}>{item.lastMessageText || 'Чат создан'}</Text>{item.encryptionMode === 'MLS_V1' ? <LockKeyhole color="#6f7b86" size={13} /> : null}{item.unreadCount > 0 ? <View style={ui.unreadBadge}><Text style={ui.unreadText}>{item.unreadCount > 99 ? '99+' : item.unreadCount}</Text></View> : null}</View>
+          <View style={ui.threadMeta}><Text numberOfLines={1} style={ui.threadPreview}>{item.lastMessageText || 'Чат создан'}</Text>{item.encryptionMode !== 'LEGACY_PLAINTEXT' ? <LockKeyhole color="#6f7b86" size={13} /> : null}{item.unreadCount > 0 ? <View style={ui.unreadBadge}><Text style={ui.unreadText}>{item.unreadCount > 99 ? '99+' : item.unreadCount}</Text></View> : null}</View>
         </View>
       </Pressable>}
       showsVerticalScrollIndicator={false}
@@ -347,6 +359,15 @@ export function VolnaChatScreen({
   const [messageMenu, setMessageMenu] = useState<MessagingMessage | null>(null);
   const [editing, setEditing] = useState<MessagingMessage | null>(null);
   const [customReaction, setCustomReaction] = useState('');
+  const [matrixSecurityOpen, setMatrixSecurityOpen] = useState(false);
+  const [matrixSecurity, setMatrixSecurity] = useState<MatrixRoomSecurity | null>(null);
+  const [matrixSecurityLoading, setMatrixSecurityLoading] = useState(false);
+  const [matrixRecoveryKey, setMatrixRecoveryKey] = useState('');
+  const [matrixRecoveryInput, setMatrixRecoveryInput] = useState('');
+  const [matrixVerification, setMatrixVerification] = useState<MatrixVerificationState | null>(null);
+  const [matrixScannerOpen, setMatrixScannerOpen] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const matrixScanLocked = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
 
   const open = useCallback(async (allowActivation = true, showLoading = true) => {
@@ -417,21 +438,100 @@ export function VolnaChatScreen({
     } catch (error) { Alert.alert('Сообщения', messagingSurfaceErrorMessage(error)); }
   };
 
+  const openMatrixSecurity = async () => {
+    if (!thread || thread.encryptionMode !== 'MATRIX_V1') return;
+    setMatrixSecurityOpen(true);
+    setMatrixSecurityLoading(true);
+    try {
+      const next = await controller.getMatrixRoomSecurity(accountId, thread);
+      setMatrixSecurity(next);
+      setMatrixVerification((current) => next.pendingVerifications.find((item) => item.id === current?.id) ?? next.pendingVerifications[0] ?? current);
+    }
+    catch (error) { Alert.alert('Проверка Matrix', messagingSurfaceErrorMessage(error)); }
+    finally { setMatrixSecurityLoading(false); }
+  };
+
+  useEffect(() => {
+    if (!matrixSecurityOpen || !thread || thread.encryptionMode !== 'MATRIX_V1') return;
+    const timer = setInterval(() => {
+      void controller.getMatrixRoomSecurity(accountId, thread).then((next) => {
+        setMatrixSecurity(next);
+        setMatrixVerification((current) => next.pendingVerifications.find((item) => item.id === current?.id) ?? next.pendingVerifications[0] ?? current);
+      }).catch(() => undefined);
+    }, 1_500);
+    return () => clearInterval(timer);
+  }, [accountId, controller, matrixSecurityOpen, thread?.id, thread?.encryptionMode]);
+
+  const runMatrixSecurityAction = async (action: () => Promise<MatrixVerificationState>) => {
+    setMatrixSecurityLoading(true);
+    try { setMatrixVerification(await action()); }
+    catch (error) { Alert.alert('Проверка Matrix', messagingSurfaceErrorMessage(error)); }
+    finally { setMatrixSecurityLoading(false); }
+  };
+
+  const startMatrixVerification = (device: MatrixDeviceSecurity) => {
+    if (!thread) return;
+    void runMatrixSecurityAction(() => controller.startMatrixDeviceVerification(accountId, thread, device.userId, device.deviceId));
+  };
+
+  const setupMatrixRecovery = async () => {
+    setMatrixSecurityLoading(true);
+    try { setMatrixRecoveryKey((await controller.setupMatrixRecovery(accountId)).recoveryKey); }
+    catch (error) { Alert.alert('Восстановление Matrix', messagingSurfaceErrorMessage(error)); }
+    finally { setMatrixSecurityLoading(false); }
+  };
+
+  const recoverMatrix = async () => {
+    if (!matrixRecoveryInput.trim()) return;
+    setMatrixSecurityLoading(true);
+    try {
+      await controller.recoverMatrixSecurity(accountId, matrixRecoveryInput);
+      setMatrixRecoveryInput('');
+      if (thread) setMatrixSecurity(await controller.getMatrixRoomSecurity(accountId, thread));
+      Alert.alert('Matrix', 'Ключи и резервная копия сообщений восстановлены');
+    } catch (error) { Alert.alert('Восстановление Matrix', messagingSurfaceErrorMessage(error)); }
+    finally { setMatrixSecurityLoading(false); }
+  };
+
+  const openMatrixScanner = async () => {
+    const permission = cameraPermission?.granted ? cameraPermission : await requestCameraPermission();
+    if (!permission.granted) { Alert.alert('QR-проверка', 'Разрешите доступ к камере или используйте эмодзи-код'); return; }
+    matrixScanLocked.current = false;
+    setMatrixScannerOpen(true);
+  };
+
+  const scanMatrixQr = ({ raw, data }: BarcodeScanningResult) => {
+    if (!matrixVerification || matrixScanLocked.current) return;
+    matrixScanLocked.current = true;
+    const source = raw || data;
+    const qrBytes = Uint8Array.from(source, (character) => character.charCodeAt(0) & 0xff);
+    setMatrixScannerOpen(false);
+    void runMatrixSecurityAction(() => controller.scanMatrixQrVerification(accountId, matrixVerification.id, bytesToBase64Url(qrBytes)));
+  };
+
   if (loading && !thread) return <View style={ui.screen}><Header onBack={onBack} title="Сообщения" /><View style={ui.center}><ActivityIndicator color="#111" /></View></View>;
   if (loadError || !thread) {
     const setupRequired = errorCode(loadError) === 'security_setup_required';
     return <View style={ui.screen}><Header onBack={onBack} title="Сообщения" /><View style={ui.blocked}><ShieldAlert color="#111" size={34} /><Text style={ui.blockedTitle}>{setupRequired ? 'Настройте защищённые сообщения' : 'Чат временно недоступен'}</Text><Text style={ui.blockedText}>{messagingSurfaceErrorMessage(loadError)}</Text>{setupRequired && onOpenMessageSecurity ? <Pressable onPress={onOpenMessageSecurity} style={ui.primaryButton}><Text style={ui.primaryButtonText}>Открыть настройку</Text></Pressable> : <Pressable onPress={() => void open(true)} style={ui.secondaryButton}><Text style={ui.secondaryButtonText}>Повторить</Text></Pressable>}</View></View>;
   }
 
+  const isProtected = thread.encryptionMode !== 'LEGACY_PLAINTEXT';
+  const securityLabel = thread.encryptionMode === 'MATRIX_V1'
+    ? 'Сквозное шифрование Matrix · сервер не видит новые сообщения'
+    : isProtected
+      ? 'Сквозное шифрование · сервер не видит содержимое'
+      : 'Обычный чат · содержимое доступно серверу';
+
   return <MessagingAudioProvider><View style={ui.screen}>
     <Header onBack={onBack}>
       <Pressable accessibilityLabel={`Открыть профиль ${thread.partner.name}`} onPress={() => void onOpenProfile(thread.partner.username)} style={ui.chatIdentity}><Avatar partner={thread.partner} size={38} /><View style={ui.chatIdentityCopy}><VerifiedName isVerified={thread.partner.isVerified} name={thread.partner.name} style={ui.headerTitle} /><Text style={ui.chatUsername}>@{thread.partner.username}</Text></View></Pressable>
     </Header>
-    <View style={[ui.securityBanner, thread.encryptionMode === 'MLS_V1' ? ui.securityBannerProtected : ui.securityBannerLegacy]}>{thread.encryptionMode === 'MLS_V1' ? <LockKeyhole color="#323a43" size={14} /> : <ShieldAlert color="#6f7b86" size={14} />}<Text style={ui.securityBannerText}>{thread.encryptionMode === 'MLS_V1' ? 'Сквозное шифрование · сервер не видит содержимое' : 'Обычный чат · содержимое доступно серверу'}</Text></View>
+    <Pressable accessibilityHint={thread.encryptionMode === 'MATRIX_V1' ? 'Показать отпечатки устройств для независимого сравнения' : undefined} accessibilityRole={thread.encryptionMode === 'MATRIX_V1' ? 'button' : undefined} disabled={thread.encryptionMode !== 'MATRIX_V1'} onPress={() => void openMatrixSecurity()} style={[ui.securityBanner, isProtected ? ui.securityBannerProtected : ui.securityBannerLegacy]}>{isProtected ? <LockKeyhole color="#323a43" size={14} /> : <ShieldAlert color="#6f7b86" size={14} />}<Text style={ui.securityBannerText}>{securityLabel}</Text></Pressable>
+    {thread.encryptionMode === 'MATRIX_V1' && thread.legacyHistoryOnly ? <View style={[ui.securityBanner, ui.securityBannerLegacy]}><ShieldAlert color="#6f7b86" size={14} /><Text style={ui.securityBannerText}>История до Matrix остаётся обычным чатом; новые сообщения защищены</Text></View> : null}
     {syncError ? <View accessibilityRole="alert" style={ui.syncErrorBanner}><ShieldAlert color="#7d4e00" size={14} /><Text style={ui.syncErrorText}>{`Безопасная синхронизация приостановлена: ${messagingSurfaceErrorMessage(syncError)}`}</Text></View> : null}
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={ui.chatShell}>
       <ScrollView contentContainerStyle={ui.messages} onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })} ref={scrollRef} showsVerticalScrollIndicator={false}>
-        {thread.messages.map((message, index) => <MessageRow accountId={accountId} key={message.id} message={message} onLongPress={() => setMessageMenu(message)} onOpenEvent={onOpenEvent} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onReact={(emoji) => void react(message, emoji)} previous={thread.messages[index - 1]} />)}
+        {thread.messages.map((message, index) => { const interactive = thread.encryptionMode !== 'MATRIX_V1' || message.securityMode === 'e2ee'; return <MessageRow accountId={accountId} interactive={interactive} key={message.id} message={message} onLongPress={() => setMessageMenu(message)} onOpenEvent={onOpenEvent} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onReact={(emoji) => void react(message, emoji)} previous={thread.messages[index - 1]} />; })}
       </ScrollView>
       {attachment ? <DraftAttachment attachment={attachment} onRemove={() => setAttachment(null)} /> : null}
       <View style={ui.composer}>
@@ -448,21 +548,67 @@ export function VolnaChatScreen({
     <Sheet isVisible={Boolean(messageMenu)} onClose={() => setMessageMenu(null)} title="Реакция">
       <View style={ui.reactionPicker}>{REACTIONS.map((emoji) => { const selected = messageMenu?.reactions.some((reaction) => reaction.accountId === accountId && reaction.emoji === emoji) === true; return <Pressable accessibilityLabel={`Реакция ${emoji}`} accessibilityState={{ selected }} key={emoji} onPress={() => messageMenu && void react(messageMenu, emoji)} style={[ui.reactionButton, selected && ui.reactionButtonSelected]}><Text style={ui.reactionEmoji}>{emoji}</Text></Pressable>; })}</View>
       <View style={ui.customReaction}><TextInput maxLength={32} onChangeText={setCustomReaction} placeholder="Любой эмодзи" placeholderTextColor="#98a3ae" style={ui.customReactionInput} value={customReaction} /><Pressable disabled={!customReaction.trim()} onPress={() => messageMenu && void react(messageMenu, customReaction)} style={ui.customReactionButton}><Text style={ui.customReactionButtonText}>Добавить</Text></Pressable></View>
-      {messageMenu?.senderAccountId === accountId && messageMenu.text && Date.now() - Date.parse(messageMenu.createdAt) <= 60_000 ? <Pressable onPress={() => { setEditing(messageMenu); setText(messageMenu.text ?? ''); setAttachment(null); setMessageMenu(null); }} style={ui.sheetAction}><Text style={ui.sheetActionText}>Редактировать</Text></Pressable> : null}
+      {messageMenu?.senderAccountId === accountId && messageMenu.text && (thread.encryptionMode !== 'MATRIX_V1' || messageMenu.securityMode === 'e2ee') && Date.now() - Date.parse(messageMenu.createdAt) <= 60_000 ? <Pressable onPress={() => { setEditing(messageMenu); setText(messageMenu.text ?? ''); setAttachment(null); setMessageMenu(null); }} style={ui.sheetAction}><Text style={ui.sheetActionText}>Редактировать</Text></Pressable> : null}
     </Sheet>
+    <Sheet isVisible={matrixSecurityOpen} onClose={() => setMatrixSecurityOpen(false)} title="Проверка шифрования">
+      <Text style={ui.matrixSecurityIntro}>Сравните Ed25519-отпечаток устройства собеседника при встрече, по звонку или другому доверенному каналу. Сервер VOLNA не участвует в сравнении.</Text>
+      {matrixSecurityLoading ? <ActivityIndicator color="#111" style={ui.sheetLoader} /> : null}
+      {matrixSecurity ? <>
+        <Text style={ui.matrixSecuritySection}>Ваши устройства</Text>
+        {matrixSecurity.ownDevices.map((device) => <MatrixDeviceRow device={device} key={`${device.userId}:${device.deviceId}`} />)}
+        <Text style={ui.matrixSecuritySection}>Устройства @{thread.partner.username}</Text>
+        {matrixSecurity.partnerIdentityChanged ? <View style={ui.matrixWarning}><ShieldAlert color="#8a4f00" size={17} /><Text style={ui.matrixWarningText}>Криптографическая личность собеседника изменилась. Отправка заблокирована до новой проверки.</Text></View> : null}
+        {matrixSecurity.partnerDevices.length ? matrixSecurity.partnerDevices.map((device) => <MatrixDeviceRow device={device} key={`${device.userId}:${device.deviceId}`} onVerify={() => startMatrixVerification(device)} />) : <Text style={ui.hint}>Собеседник ещё не опубликовал ключ устройства</Text>}
+        <Text style={ui.matrixSecuritySection}>Восстановление</Text>
+        {matrixSecurity.secretStorageReady ? <View style={ui.matrixVerified}><Check color="#2f6e45" size={14} /><Text style={ui.matrixVerifiedText}>ключ и резервная копия настроены</Text></View> : <>
+          <Text style={ui.hint}>Создайте ключ один раз и сохраните вне VOLNA. Он нужен для нового устройства и старой истории.</Text>
+          <Pressable disabled={matrixSecurityLoading} onPress={() => void setupMatrixRecovery()} style={ui.matrixPrimaryAction}><KeyRound color="#fff" size={16} /><Text style={ui.matrixPrimaryActionText}>Создать ключ восстановления</Text></Pressable>
+          <TextInput autoCapitalize="none" autoCorrect={false} multiline onChangeText={setMatrixRecoveryInput} placeholder="Или введите существующий ключ" placeholderTextColor="#98a3ae" style={ui.matrixRecoveryInput} value={matrixRecoveryInput} />
+          <Pressable disabled={!matrixRecoveryInput.trim()} onPress={() => void recoverMatrix()} style={ui.matrixSecondaryAction}><Text style={ui.matrixSecondaryActionText}>Восстановить ключи</Text></Pressable>
+        </>}
+        {matrixRecoveryKey ? <View style={ui.matrixRecoveryCard}><Text style={ui.matrixRecoveryTitle}>Сохраните ключ сейчас</Text><Text selectable style={ui.matrixRecoveryKey}>{matrixRecoveryKey}</Text><Pressable onPress={() => void Clipboard.setStringAsync(matrixRecoveryKey)} style={ui.matrixSecondaryAction}><Copy color="#53606c" size={15} /><Text style={ui.matrixSecondaryActionText}>Скопировать</Text></Pressable><Pressable onPress={() => setMatrixRecoveryKey('')} style={ui.matrixPrimaryAction}><Check color="#fff" size={16} /><Text style={ui.matrixPrimaryActionText}>Я сохранил ключ</Text></Pressable></View> : null}
+        {matrixVerification ? <MatrixVerificationCard
+          busy={matrixSecurityLoading}
+          onAccept={() => void runMatrixSecurityAction(() => controller.acceptMatrixVerification(accountId, matrixVerification.id))}
+          onCancel={() => void runMatrixSecurityAction(() => controller.cancelMatrixVerification(accountId, matrixVerification.id))}
+          onConfirm={() => void runMatrixSecurityAction(() => controller.confirmMatrixVerification(accountId, matrixVerification.id))}
+          onGenerateQr={() => void runMatrixSecurityAction(() => controller.generateMatrixQrVerification(accountId, matrixVerification.id))}
+          onMismatch={() => void runMatrixSecurityAction(() => controller.mismatchMatrixVerification(accountId, matrixVerification.id))}
+          onScanQr={() => void openMatrixScanner()}
+          onStartSas={() => void runMatrixSecurityAction(() => controller.startMatrixSasVerification(accountId, matrixVerification.id))}
+          verification={matrixVerification}
+        /> : null}
+        <Text style={ui.matrixCryptoVersion}>{matrixSecurity.cryptoVersion}</Text>
+      </> : null}
+    </Sheet>
+    <Modal animationType="slide" onRequestClose={() => setMatrixScannerOpen(false)} visible={matrixScannerOpen}><SafeAreaView style={ui.matrixScanner}><View style={ui.matrixScannerHeader}><Text style={[ui.sheetTitle, { color: '#fff' }]}>Сканируйте Matrix QR</Text><Pressable accessibilityLabel="Закрыть" onPress={() => setMatrixScannerOpen(false)}><X color="#fff" size={25} /></Pressable></View><CameraView barcodeScannerSettings={{ barcodeTypes: ['qr'] }} facing="back" onBarcodeScanned={scanMatrixQr} style={ui.matrixCamera} /><Text style={ui.matrixScannerHint}>Если камера не распознаёт бинарный QR, используйте проверку по эмодзи — она даёт ту же криптографическую гарантию.</Text></SafeAreaView></Modal>
   </View></MessagingAudioProvider>;
 }
 
-function MessageRow({ accountId, message, onLongPress, onOpenEvent, onOpenProfile, onOpenPublicPage, onReact, previous }: { accountId: string; message: MessagingMessage; onLongPress: () => void; onOpenEvent: (eventId: string) => void; onOpenProfile: (username: string) => void | Promise<void>; onOpenPublicPage: (username: string) => void | Promise<void>; onReact: (emoji: string) => void; previous?: MessagingMessage }) {
+function MatrixVerificationCard({ busy, onAccept, onCancel, onConfirm, onGenerateQr, onMismatch, onScanQr, onStartSas, verification }: { busy: boolean; onAccept: () => void; onCancel: () => void; onConfirm: () => void; onGenerateQr: () => void; onMismatch: () => void; onScanQr: () => void; onStartSas: () => void; verification: MatrixVerificationState }) {
+  const qrBytes = verification.qrCodeBase64 ? base64UrlToBytes(verification.qrCodeBase64, 2048) : null;
+  return <View style={ui.matrixVerificationCard}><Text style={ui.matrixRecoveryTitle}>Проверка устройства</Text><Text style={ui.hint}>{verification.initiatedByMe ? 'Ожидаем подтверждения на другом устройстве.' : 'Другое устройство просит криптографическую проверку.'}</Text>{verification.phase === 'requested' && !verification.initiatedByMe ? <Pressable disabled={busy} onPress={onAccept} style={ui.matrixPrimaryAction}><Text style={ui.matrixPrimaryActionText}>Принять проверку</Text></Pressable> : null}{verification.phase === 'ready' ? <View style={ui.matrixActionRow}><Pressable disabled={busy} onPress={onStartSas} style={ui.matrixPrimaryAction}><Text style={ui.matrixPrimaryActionText}>Эмодзи-код</Text></Pressable><Pressable disabled={busy} onPress={onGenerateQr} style={ui.matrixSecondaryAction}><QrCode color="#53606c" size={16} /><Text style={ui.matrixSecondaryActionText}>Показать QR</Text></Pressable><Pressable disabled={busy} onPress={onScanQr} style={ui.matrixSecondaryAction}><Text style={ui.matrixSecondaryActionText}>Сканировать QR</Text></Pressable></View> : null}{verification.sasEmoji.length ? <><View style={ui.matrixEmojiRow}>{verification.sasEmoji.map(([emoji, name]) => <View key={`${emoji}:${name}`} style={ui.matrixEmoji}><Text style={ui.matrixEmojiGlyph}>{emoji}</Text><Text style={ui.matrixEmojiName}>{name}</Text></View>)}</View>{verification.sasDecimal ? <Text style={ui.matrixDecimal}>{verification.sasDecimal.join('   ')}</Text> : null}<Text style={ui.hint}>Сравните все эмодзи на обоих устройствах.</Text><View style={ui.matrixActionRow}><Pressable onPress={onConfirm} style={ui.matrixPrimaryAction}><Text style={ui.matrixPrimaryActionText}>Совпадает</Text></Pressable><Pressable onPress={onMismatch} style={ui.matrixSecondaryAction}><Text style={ui.matrixSecondaryActionText}>Не совпадает</Text></Pressable></View></> : null}{qrBytes ? <View style={ui.matrixQr}><QRCode backgroundColor="#fff" color="#000" ecl="L" quietZone={8} size={230} value={[{ data: qrBytes, mode: 'byte' }] as never} /></View> : null}{verification.phase === 'done' ? <View style={ui.matrixVerified}><Check color="#2f6e45" size={14} /><Text style={ui.matrixVerifiedText}>проверка завершена</Text></View> : null}{verification.phase !== 'done' && verification.phase !== 'cancelled' ? <Pressable disabled={busy} onPress={onCancel} style={ui.matrixCancelAction}><Text style={ui.matrixCancelText}>Отменить проверку</Text></Pressable> : null}</View>;
+}
+
+function MatrixDeviceRow({ device, onVerify }: { device: MatrixDeviceSecurity; onVerify?: () => void }) {
+  return <View style={ui.matrixDeviceCard}>
+    <View style={ui.matrixDeviceHeader}><View style={ui.flex}><Text style={ui.matrixDeviceName}>{device.displayName || device.deviceId}{device.current ? ' · это устройство' : ''}</Text><Text style={ui.matrixDeviceId}>{device.deviceId}</Text></View>{device.verified ? <View style={ui.matrixVerified}><Check color="#2f6e45" size={14} /><Text style={ui.matrixVerifiedText}>проверено</Text></View> : null}</View>
+    <Text style={ui.matrixFingerprintLabel}>Ed25519</Text>
+    <Text selectable style={ui.matrixFingerprint}>{matrixFingerprint(device.ed25519)}</Text>
+    <View style={ui.matrixDeviceActions}><Pressable accessibilityLabel="Скопировать Ed25519-отпечаток" onPress={() => void Clipboard.setStringAsync(device.ed25519)} style={ui.matrixCopyButton}><Copy color="#53606c" size={15} /><Text style={ui.matrixCopyText}>Скопировать</Text></Pressable>{onVerify && !device.verified ? <Pressable onPress={onVerify} style={ui.matrixVerifyButton}><Text style={ui.matrixVerifyText}>Подтвердить после сравнения</Text></Pressable> : null}</View>
+  </View>;
+}
+
+function MessageRow({ accountId, interactive, message, onLongPress, onOpenEvent, onOpenProfile, onOpenPublicPage, onReact, previous }: { accountId: string; interactive: boolean; message: MessagingMessage; onLongPress: () => void; onOpenEvent: (eventId: string) => void; onOpenProfile: (username: string) => void | Promise<void>; onOpenPublicPage: (username: string) => void | Promise<void>; onReact: (emoji: string) => void; previous?: MessagingMessage }) {
   const own = message.senderAccountId === accountId;
   const showDay = !previous || dayKey(previous.createdAt) !== dayKey(message.createdAt);
   const reactions = Object.entries(message.reactions.reduce<Record<string, { count: number; mine: boolean }>>((result, reaction) => { const current = result[reaction.emoji] ?? { count: 0, mine: false }; result[reaction.emoji] = { count: current.count + 1, mine: current.mine || reaction.accountId === accountId }; return result; }, {}));
-  return <View>{showDay ? <View style={ui.daySeparator}><Text style={ui.dayText}>{formatDay(message.createdAt)}</Text></View> : null}<View style={[ui.messageRow, own && ui.messageRowOwn]}><View style={[ui.messageStack, own && ui.messageStackOwn]}><Pressable delayLongPress={350} onLongPress={onLongPress} style={[ui.messageGroup, own && ui.messageGroupOwn]}>
+  return <View>{showDay ? <View style={ui.daySeparator}><Text style={ui.dayText}>{formatDay(message.createdAt)}</Text></View> : null}<View style={[ui.messageRow, own && ui.messageRowOwn]}><View style={[ui.messageStack, own && ui.messageStackOwn]}><Pressable delayLongPress={350} onLongPress={interactive ? onLongPress : undefined} style={[ui.messageGroup, own && ui.messageGroupOwn]}>
     {message.deletedAt ? <View style={[ui.bubble, own && ui.bubbleOwn]}><Text style={[ui.deletedText, own && ui.ownMuted]}>Сообщение удалено</Text><Timestamp label={formatClock(message.createdAt)} own={own} /></View> : <>
       {message.attachment ? <AttachmentCard attachment={message.attachment} messageId={message.id} onOpenEvent={onOpenEvent} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} own={own} /> : null}
       {message.text ? <View style={[ui.bubble, own && ui.bubbleOwn]}><Text style={[ui.bubbleText, own && ui.bubbleTextOwn]}>{message.text}</Text><Timestamp label={message.editedAt ? `изменено ${formatClock(message.editedAt)}` : formatClock(message.createdAt)} own={own} /></View> : !message.attachment ? <View style={[ui.bubble, own && ui.bubbleOwn]}><Text style={[ui.deletedText, own && ui.ownMuted]}>Неподдерживаемое сообщение</Text></View> : null}
     </>}
-  </Pressable>{reactions.length ? <View style={[ui.reactionRow, own && ui.reactionRowOwn]}>{reactions.map(([emoji, value]) => <Pressable accessibilityLabel={`Реакция ${emoji}, ${value.count}`} accessibilityState={{ selected: value.mine }} key={emoji} onPress={() => onReact(emoji)} style={[ui.reactionChip, value.mine && ui.reactionChipMine]}><Text style={ui.reactionText}>{emoji}{value.count > 1 ? ` ${value.count}` : ''}</Text></Pressable>)}</View> : null}</View></View></View>;
+  </Pressable>{reactions.length ? <View style={[ui.reactionRow, own && ui.reactionRowOwn]}>{reactions.map(([emoji, value]) => <Pressable accessibilityLabel={`Реакция ${emoji}, ${value.count}`} accessibilityState={{ selected: value.mine, disabled: !interactive }} disabled={!interactive} key={emoji} onPress={() => onReact(emoji)} style={[ui.reactionChip, value.mine && ui.reactionChipMine]}><Text style={ui.reactionText}>{emoji}{value.count > 1 ? ` ${value.count}` : ''}</Text></Pressable>)}</View> : null}</View></View></View>;
 }
 
 function Timestamp({ label, own }: { label: string; own: boolean }) { return <Text style={[ui.timestamp, own && ui.timestampOwn]}>{label}</Text>; }
@@ -606,6 +752,8 @@ const ui = StyleSheet.create({
   empty: { minHeight: 176, flex: 1, padding: 24, alignItems: 'center', justifyContent: 'center', gap: 8 }, emptyTitle: { color: '#111', fontSize: 16, fontWeight: '600', textAlign: 'center' }, emptyText: { color: '#6f7b86', fontSize: 14, lineHeight: 20, textAlign: 'center' },
   primaryButton: { minHeight: 44, marginTop: 10, paddingHorizontal: 20, borderRadius: 22, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' }, primaryButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' }, secondaryButton: { minHeight: 44, marginTop: 8, paddingHorizontal: 20, borderRadius: 22, backgroundColor: '#f3f5f7', alignItems: 'center', justifyContent: 'center' }, secondaryButtonText: { color: '#111', fontSize: 14, fontWeight: '600' },
   sheetBackdrop: { flex: 1, paddingTop: 70, justifyContent: 'flex-end', alignItems: 'center' }, sheetBackdropFill: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.64)' }, sheetSurface: { width: '100%', maxWidth: 600, maxHeight: '88%', borderTopLeftRadius: 12, borderTopRightRadius: 12, backgroundColor: '#fff', overflow: 'hidden' }, sheetHeader: { minHeight: 64, paddingLeft: 20, paddingRight: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sheetTitle: { color: '#111', fontSize: 20, lineHeight: 26, fontWeight: '600' }, sheetBody: { paddingHorizontal: 16, paddingBottom: 22, gap: 8 }, sheetLoader: { marginVertical: 24 }, sheetAction: { minHeight: 52, alignItems: 'center', justifyContent: 'center' }, sheetActionText: { color: '#111', fontSize: 15, fontWeight: '600' },
+  matrixSecurityIntro: { color: '#53606c', fontSize: 14, lineHeight: 20, marginBottom: 8 }, matrixSecuritySection: { color: '#111', fontSize: 16, lineHeight: 22, fontWeight: '600', marginTop: 10 }, matrixCryptoVersion: { color: '#7a8793', fontSize: 11, lineHeight: 16, marginTop: 8 }, matrixDeviceCard: { borderWidth: StyleSheet.hairlineWidth, borderColor: '#dce2e8', borderRadius: 12, padding: 12, gap: 8, backgroundColor: '#f8fafb' }, matrixDeviceHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 }, matrixDeviceName: { color: '#111', fontSize: 14, lineHeight: 19, fontWeight: '600' }, matrixDeviceId: { color: '#7a8793', fontSize: 11, lineHeight: 16 }, matrixVerified: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, backgroundColor: '#e1f1e6' }, matrixVerifiedText: { color: '#2f6e45', fontSize: 11, lineHeight: 15, fontWeight: '600' }, matrixFingerprintLabel: { color: '#7a8793', fontSize: 11, lineHeight: 15, textTransform: 'uppercase' }, matrixFingerprint: { color: '#25313c', fontSize: 13, lineHeight: 20, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', web: 'monospace' }) }, matrixDeviceActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 2 }, matrixCopyButton: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd3da', paddingHorizontal: 11 }, matrixCopyText: { color: '#53606c', fontSize: 12, fontWeight: '600' }, matrixVerifyButton: { minHeight: 38, flexGrow: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 9, paddingHorizontal: 12, backgroundColor: '#111' }, matrixVerifyText: { color: '#fff', fontSize: 12, lineHeight: 16, fontWeight: '600', textAlign: 'center' },
+  matrixWarning: { padding: 12, borderRadius: 10, backgroundColor: '#fff1cf', flexDirection: 'row', alignItems: 'flex-start', gap: 8 }, matrixWarningText: { flex: 1, color: '#7d4e00', fontSize: 13, lineHeight: 18 }, matrixPrimaryAction: { minHeight: 42, paddingHorizontal: 14, borderRadius: 10, backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, matrixPrimaryActionText: { color: '#fff', fontSize: 13, fontWeight: '600' }, matrixSecondaryAction: { minHeight: 42, paddingHorizontal: 14, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd3da', backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, matrixSecondaryActionText: { color: '#53606c', fontSize: 13, fontWeight: '600' }, matrixRecoveryInput: { minHeight: 76, padding: 12, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd3da', color: '#111', fontSize: 14, lineHeight: 20, textAlignVertical: 'top' }, matrixRecoveryCard: { padding: 14, borderRadius: 12, backgroundColor: '#fff1cf', gap: 10 }, matrixRecoveryTitle: { color: '#111', fontSize: 15, lineHeight: 20, fontWeight: '600' }, matrixRecoveryKey: { color: '#25313c', fontSize: 13, lineHeight: 21, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', web: 'monospace' }) }, matrixVerificationCard: { padding: 14, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd3da', gap: 10 }, matrixActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, matrixEmojiRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6 }, matrixEmoji: { width: 60, alignItems: 'center', gap: 2 }, matrixEmojiGlyph: { fontSize: 28 }, matrixEmojiName: { color: '#7a8793', fontSize: 9, textAlign: 'center' }, matrixDecimal: { color: '#111', fontSize: 22, fontWeight: '600', letterSpacing: 1, textAlign: 'center' }, matrixQr: { padding: 12, alignSelf: 'center', borderRadius: 12, backgroundColor: '#fff' }, matrixCancelAction: { minHeight: 40, alignItems: 'center', justifyContent: 'center' }, matrixCancelText: { color: '#8a3d3d', fontSize: 13, fontWeight: '600' }, matrixScanner: { flex: 1, backgroundColor: '#000' }, matrixScannerHeader: { minHeight: 58, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, matrixCamera: { flex: 1 }, matrixScannerHint: { padding: 18, color: '#fff', fontSize: 13, lineHeight: 18, textAlign: 'center' },
   personRow: { minHeight: 62, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 11 }, personCopy: { flex: 1, minWidth: 0 }, personName: { color: '#111', fontSize: 15, lineHeight: 20, fontWeight: '600' }, personUsername: { color: '#7d8894', fontSize: 12, lineHeight: 17 }, hint: { paddingVertical: 24, color: '#7d8894', fontSize: 14, textAlign: 'center' }, sendCircle: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' },
   chatIdentity: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }, chatIdentityCopy: { flex: 1, minWidth: 0 }, chatUsername: { marginTop: -1, color: '#6f7b86', fontSize: 12 }, securityBanner: { minHeight: 34, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, securityBannerProtected: { backgroundColor: '#e8edf2' }, securityBannerLegacy: { backgroundColor: '#f3f5f7' }, securityBannerText: { color: '#53606c', fontSize: 12, lineHeight: 17 }, syncErrorBanner: { minHeight: 40, paddingHorizontal: 16, paddingVertical: 7, backgroundColor: '#fff1cf', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, syncErrorText: { flexShrink: 1, color: '#7d4e00', fontSize: 12, lineHeight: 17, textAlign: 'center' },
   blocked: { flex: 1, padding: 28, alignItems: 'center', justifyContent: 'center', gap: 10 }, blockedTitle: { color: '#111', fontSize: 18, lineHeight: 24, fontWeight: '600', textAlign: 'center' }, blockedText: { color: '#6f7b86', fontSize: 14, lineHeight: 20, textAlign: 'center' }, chatShell: { flex: 1 }, messages: { flexGrow: 1, justifyContent: 'flex-end', paddingHorizontal: 12, paddingVertical: 14, gap: 4 }, daySeparator: { alignItems: 'center', paddingVertical: 10 }, dayText: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14, overflow: 'hidden', color: '#6f7b86', backgroundColor: '#f3f5f7', fontSize: 12 },

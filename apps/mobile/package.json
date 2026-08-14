@@ -7,6 +7,7 @@
     "@volna/content-policy": "workspace:*",
     "@volna/music-taxonomy": "workspace:*",
     "@volna/messaging-client": "workspace:*",
+    "@volna/matrix-native": "workspace:*",
     "@expo/vector-icons": "15.1.1",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@sentry/react-native": "~7.2.0",
