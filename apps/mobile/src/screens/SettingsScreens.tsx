@@ -1,9 +1,11 @@
-import { Bell, Check, ChevronLeft, ChevronRight, Copy, Eye, KeyRound, Search, ShieldCheck, Star, Trash2, UserMinus, UserPlus, X } from 'lucide-react-native';
+import { ChatPrivacyControls } from '../components/ChatPrivacyControls';
+import { ScreenTopBar } from '../components/ScreenTopBar';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { Bell, Check, ChevronRight, Copy, Eye, KeyRound, Search, ShieldCheck, Star, Trash2, UserMinus, UserPlus, X } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -35,7 +37,7 @@ type NotificationDeliveryMode = 'OFF' | 'IN_APP' | 'IN_APP_AND_PUSH';
 type NotificationPreferenceItem = { eventType: NotificationEventType; label: string; hint: string; requiredInApp?: boolean };
 type EventReminderOffsetMinutes = 180 | 1440 | 4320 | 10080;
 
-const eventReminderOptions: ReadonlyArray<{ value: EventReminderOffsetMinutes; label: string }> = [
+export const eventReminderOptions: ReadonlyArray<{ value: EventReminderOffsetMinutes; label: string }> = [
   { value: 180, label: 'В день события' },
   { value: 1440, label: 'За сутки' },
   { value: 4320, label: 'За 3 дня' },
@@ -82,14 +84,7 @@ export function SubscriptionScreen({
 
   return (
     <View style={styles.subscriptionScreen}>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable accessibilityLabel="Назад" onPress={onBack} style={styles.topBarIconButton}>
-            <ChevronLeft color="#090909" size={29} />
-          </Pressable>
-          <Text style={styles.topBarTitle}>Подписка</Text>
-        </View>
-      </View>
+      <ScreenTopBar onBack={onBack} title="Подписка" />
       <View style={styles.subscriptionScreenContent}>
         <View style={styles.subscriptionStatusCard}>
           <View style={styles.subscriptionStatusIcon}>
@@ -448,14 +443,7 @@ export function AdminScreen({ authToken, embedded = false, onBack, onNotify }: {
 
   return (
     <>
-      {!embedded ? <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable accessibilityLabel="Назад" accessibilityRole="button" onPress={onBack} style={styles.topBarIconButton}>
-            <ChevronLeft size={29} color="#090909" />
-          </Pressable>
-          <Text style={styles.topBarTitle}>Админка</Text>
-        </View>
-      </View> : null}
+      {!embedded ? <ScreenTopBar onBack={onBack} title="Админка" /> : null}
       <View style={styles.adminScreen}>
         <View style={styles.adminTabs}>
           <Pressable accessibilityRole="tab" accessibilityState={{ selected: section === 'dashboard' }} onPress={() => setSection('dashboard')} style={[styles.adminTab, section === 'dashboard' && styles.adminTabActive]}><Text style={[styles.adminTabText, section === 'dashboard' && styles.adminTabTextActive]}>Главное</Text></Pressable>
@@ -494,7 +482,7 @@ export function AdminScreen({ authToken, embedded = false, onBack, onNotify }: {
                 return <CatalogCategoryTile accessibilityLabel={`${cover ? 'Изменить' : 'Добавить'} обложку категории ${option.label}`} category={option.label} countLabel={cover ? 'Изменить' : 'Добавить'} coverUrl={cover?.imageUrl} key={option.value} onPress={() => void pickCategoryCover('locations', option.value)} />;
               })}
             </View>
-            {isCategoryCoverSaving ? <View style={styles.loadingRow}><ActivityIndicator color="#111" /><Text style={styles.adminSectionDescription}>Сохраняем обложку…</Text></View> : null}
+            {isCategoryCoverSaving ? <View style={styles.loadingRow}><LoadingIndicator /><Text style={styles.adminSectionDescription}>Сохраняем обложку…</Text></View> : null}
           </ScrollView>
         ) : section === 'messages' ? (
           <ScrollView contentContainerStyle={styles.adminContent} refreshControl={<AppRefreshControl refreshing={isLoading} onRefresh={() => void loadInformationMessages()} />}>
@@ -518,7 +506,7 @@ export function AdminScreen({ authToken, embedded = false, onBack, onNotify }: {
             <Text style={styles.adminSectionDescription}>Эти имена считаются занятыми одновременно для профилей и сообществ. Уже существующий владелец может сохранить своё имя, но после освобождения его никто не займёт.</Text>
             <View style={styles.adminInviteForm}>
               <View style={styles.adminUsernameInput}><Text style={styles.adminUsernamePrefix}>@</Text><TextInput autoCapitalize="none" autoCorrect={false} maxLength={30} value={reservedUsernameInput} onChangeText={(value) => setReservedUsernameInput(value.replace(/^@/, '').toLowerCase().replace(/[^a-z0-9_]/g, ''))} placeholder="username" placeholderTextColor="#98a3ae" style={styles.adminUsernameTextInput} /></View>
-              <Pressable accessibilityRole="button" accessibilityState={{ disabled: !/^[a-z0-9_]{3,30}$/.test(reservedUsernameInput) || isReservedUsernameSaving }} disabled={!/^[a-z0-9_]{3,30}$/.test(reservedUsernameInput) || isReservedUsernameSaving} onPress={() => void reserveUsername()} style={[styles.adminPrimaryButton, (!/^[a-z0-9_]{3,30}$/.test(reservedUsernameInput) || isReservedUsernameSaving) && styles.disabledButton]}>{isReservedUsernameSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.adminPrimaryButtonText}>Добавить в резерв</Text>}</Pressable>
+              <Pressable accessibilityRole="button" accessibilityState={{ disabled: !/^[a-z0-9_]{3,30}$/.test(reservedUsernameInput) || isReservedUsernameSaving }} disabled={!/^[a-z0-9_]{3,30}$/.test(reservedUsernameInput) || isReservedUsernameSaving} onPress={() => void reserveUsername()} style={[styles.adminPrimaryButton, (!/^[a-z0-9_]{3,30}$/.test(reservedUsernameInput) || isReservedUsernameSaving) && styles.disabledButton]}>{isReservedUsernameSaving ? <LoadingIndicator tone="inverse" size="small" /> : <Text style={styles.adminPrimaryButtonText}>Добавить в резерв</Text>}</Pressable>
             </View>
             <Text style={styles.adminListTitle}>Список</Text>
             {reservedUsernames.map((item) => <View key={item.username} style={styles.adminPageCard}><View style={styles.adminPageCopy}><Text style={styles.adminPageName}>@{item.username}</Text><Text style={styles.adminPageMeta}>{item.createdBy ? `Добавил @${item.createdBy.username}` : 'Системный резерв'}{item.occupiedBy === 'ACCOUNT' ? ' · занят профилем' : item.occupiedBy === 'PUBLIC_PAGE' ? ' · занят сообществом' : ''}</Text></View><Pressable accessibilityLabel={`Убрать @${item.username} из резерва`} onPress={() => releaseUsername(item.username)} style={styles.adminDeleteButton}><Trash2 size={19} color="#d93025" /></Pressable></View>)}
@@ -532,7 +520,7 @@ export function AdminScreen({ authToken, embedded = false, onBack, onNotify }: {
             {!pendingPages.length && !isLoading ? <Text style={styles.adminEmptyText}>Новых сообществ на модерации нет</Text> : null}
             <Text style={styles.adminSectionTitle}>Новое информационное сообщество</Text>
             <Text style={styles.adminSectionDescription}>Страница без владельца публикуется сразу. Существующие сообщества редактируются на их обычных страницах в режиме администрирования.</Text>
-            <View style={styles.adminUsernameInput}><Text style={styles.adminUsernamePrefix}>@</Text><TextInput autoCapitalize="none" autoCorrect={false} maxLength={30} value={form.username} onChangeText={(username) => setForm({ ...form, username: username.replace(/^@/, '').toLowerCase().replace(/[^a-z0-9_]/g, '') })} placeholder="url-name" placeholderTextColor="#98a3ae" style={styles.adminUsernameTextInput} />{pageUsernameState === 'checking' ? <ActivityIndicator color="#6f7b86" size="small" /> : null}{pageUsernameState === 'available' ? <Check color="#2fa84f" size={20} strokeWidth={2.4} /> : null}{pageUsernameState === 'taken' || pageUsernameState === 'invalid' ? <X color="#c62828" size={19} strokeWidth={2.4} /> : null}</View>
+            <View style={styles.adminUsernameInput}><Text style={styles.adminUsernamePrefix}>@</Text><TextInput autoCapitalize="none" autoCorrect={false} maxLength={30} value={form.username} onChangeText={(username) => setForm({ ...form, username: username.replace(/^@/, '').toLowerCase().replace(/[^a-z0-9_]/g, '') })} placeholder="url-name" placeholderTextColor="#98a3ae" style={styles.adminUsernameTextInput} />{pageUsernameState === 'checking' ? <LoadingIndicator size="small" /> : null}{pageUsernameState === 'available' ? <Check color="#2fa84f" size={20} strokeWidth={2.4} /> : null}{pageUsernameState === 'taken' || pageUsernameState === 'invalid' ? <X color="#c62828" size={19} strokeWidth={2.4} /> : null}</View>
             {pageUsernameState === 'available' ? <Text style={styles.adminUsernameAvailable}>URL свободен</Text> : null}
             {pageUsernameState === 'taken' ? <Text style={styles.adminUsernameError}>Этот URL уже занят</Text> : null}
             {pageUsernameState === 'invalid' ? <Text style={styles.adminUsernameError}>От 3 до 30 латинских букв, цифр или _</Text> : null}
@@ -651,12 +639,7 @@ export function ModerationScreen({ authToken, embedded = false, onBack, onNotify
   };
   return (
     <>
-      {!embedded ? <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable onPress={onBack} style={styles.topBarIconButton}><ChevronLeft size={29} color="#090909" /></Pressable>
-          <Text style={styles.topBarTitle}>Модерация</Text>
-        </View>
-      </View> : null}
+      {!embedded ? <ScreenTopBar onBack={onBack} title="Модерация" /> : null}
       <FlashList
         data={reports}
         keyExtractor={(report) => report.id}
@@ -944,7 +927,7 @@ export function ModerationCenterScreen({
   const isAdmin = accountRole === 'ADMIN';
   return (
     <View style={styles.moderationCenter}>
-      <View style={styles.topBar}><View style={styles.topBarLeft}><Pressable onPress={onBack} style={styles.topBarIconButton}><ChevronLeft size={29} color="#090909" /></Pressable><Text style={styles.topBarTitle}>Модерация</Text></View></View>
+      <ScreenTopBar onBack={onBack} title="Модерация" />
       {isAdmin ? <View style={styles.moderationCenterControls}>
         <View style={styles.moderationAdminModeCard}><View style={styles.sideMenuAdminModeCopy}><ShieldCheck color="#111" size={22} /><View style={styles.adminPageCopy}><Text style={styles.sideMenuText}>Режим администрирования</Text><Text style={styles.sideMenuAdminModeHint}>Права владельца для управления сообществами</Text></View></View><VolnaSwitch accessibilityLabel="Режим администрирования" onValueChange={onChangeAdminMode} value={adminMode} /></View>
         <View style={styles.moderationCenterTabs}>
@@ -970,22 +953,30 @@ export function SettingsScreen({
   initialInvisibleMode,
   initialMessagePrivacy,
   initialReadReceiptsPrivacy,
+  initialOnlinePrivacy,
+  initialAllowConnectMatchMessages,
   initialShowBirthYear,
   initialShowSavedMusicOnProfile,
   initialShowUploadedMusicOnProfile,
   onBack,
+  onOpenMessageSecurity,
   onSave,
 }: {
   initialInvisibleMode: boolean;
   initialMessagePrivacy: MessagePrivacy;
   initialReadReceiptsPrivacy: MessagePrivacy;
+  initialOnlinePrivacy: MessagePrivacy;
+  initialAllowConnectMatchMessages: boolean;
   initialShowBirthYear: boolean;
   initialShowSavedMusicOnProfile: boolean;
   initialShowUploadedMusicOnProfile: boolean;
   onBack: () => void;
+  onOpenMessageSecurity: () => void;
   onSave: (data: {
     messagePrivacy: MessagePrivacy;
     readReceiptsPrivacy: MessagePrivacy;
+    onlinePrivacy: MessagePrivacy;
+    allowConnectMatchMessages: boolean;
     invisibleMode: boolean;
     showSavedMusicOnProfile: boolean;
     showUploadedMusicOnProfile: boolean;
@@ -994,25 +985,26 @@ export function SettingsScreen({
 }) {
   const [messagePrivacy, setMessagePrivacy] = useState<MessagePrivacy>(initialMessagePrivacy);
   const [readReceiptsPrivacy, setReadReceiptsPrivacy] = useState<MessagePrivacy>(initialReadReceiptsPrivacy);
+  const [onlinePrivacy, setOnlinePrivacy] = useState<MessagePrivacy>(initialOnlinePrivacy);
+  const [allowConnectMatchMessages, setAllowConnectMatchMessages] = useState(initialAllowConnectMatchMessages);
   const [showBirthYear, setShowBirthYear] = useState(initialShowBirthYear);
   const [isInvisibleMode, setIsInvisibleMode] = useState(initialInvisibleMode);
   const [showSavedMusicOnProfile, setShowSavedMusicOnProfile] = useState(initialShowSavedMusicOnProfile);
   const [showUploadedMusicOnProfile, setShowUploadedMusicOnProfile] = useState(initialShowUploadedMusicOnProfile);
+  const savedPrivacy = useRef({ messagePrivacy: initialMessagePrivacy, readReceiptsPrivacy: initialReadReceiptsPrivacy,
+    allowConnectMatchMessages: initialAllowConnectMatchMessages,
+    onlinePrivacy: initialOnlinePrivacy, invisibleMode: initialInvisibleMode, showSavedMusicOnProfile: initialShowSavedMusicOnProfile,
+    showUploadedMusicOnProfile: initialShowUploadedMusicOnProfile, showBirthYear: initialShowBirthYear });
+  const pendingPrivacy = useRef<typeof savedPrivacy.current | null>(null);
+  const privacyWriter = useRef(false);
+  const privacyMounted = useRef(true);
+  useEffect(() => { privacyMounted.current = true; return () => { privacyMounted.current = false; pendingPrivacy.current = null; }; }, []);
   const [isSaving, setIsSaving] = useState(false);
   const [notificationModes, setNotificationModes] = useState<Record<string, NotificationDeliveryMode>>({});
   const [eventReminderOffsetsMinutes, setEventReminderOffsetsMinutes] = useState<EventReminderOffsetMinutes[]>([1440]);
   const [notificationsLoading, setNotificationsLoading] = useState(true);
   const [pushPermission, setPushPermission] = useState(() => currentWebPushPermission());
   const [isPushEnabled, setIsPushEnabled] = useState(() => currentWebPushPermission() === 'granted');
-  const messagePrivacyOptions: Array<{ label: string; value: MessagePrivacy }> = [
-    { label: 'Подписки', value: 'following' },
-    { label: 'Все', value: 'everyone' },
-  ];
-  const privacyOptions: Array<{ label: string; value: MessagePrivacy }> = [
-    { label: 'Никто', value: 'nobody' },
-    { label: 'Подписки', value: 'following' },
-    { label: 'Все', value: 'everyone' },
-  ];
   const saveSettings = async (
     nextMessagePrivacy: MessagePrivacy,
     nextReadReceiptsPrivacy: MessagePrivacy,
@@ -1020,22 +1012,41 @@ export function SettingsScreen({
     nextShowSavedMusicOnProfile = showSavedMusicOnProfile,
     nextShowUploadedMusicOnProfile = showUploadedMusicOnProfile,
     nextShowBirthYear = showBirthYear,
+    nextOnlinePrivacy = onlinePrivacy,
+    nextAllowConnectMatchMessages = allowConnectMatchMessages,
   ) => {
-    setIsSaving(true);
-
-    try {
-      await onSave({
+    pendingPrivacy.current = {
         messagePrivacy: nextMessagePrivacy,
         readReceiptsPrivacy: nextReadReceiptsPrivacy,
+        onlinePrivacy: nextOnlinePrivacy,
+        allowConnectMatchMessages: nextAllowConnectMatchMessages,
         invisibleMode: nextInvisibleMode,
         showSavedMusicOnProfile: nextShowSavedMusicOnProfile,
         showUploadedMusicOnProfile: nextShowUploadedMusicOnProfile,
         showBirthYear: nextShowBirthYear,
-      });
-    } catch (saveError) {
-      reportApiError(saveError instanceof Error ? saveError.message : 'Не удалось сохранить настройки');
+    };
+    if (privacyWriter.current) return;
+    privacyWriter.current = true;
+    setIsSaving(true);
+    try {
+      while (pendingPrivacy.current && privacyMounted.current) {
+        const next = pendingPrivacy.current;
+        pendingPrivacy.current = null;
+        try { await onSave(next); savedPrivacy.current = next; }
+        catch (saveError) {
+          if (!privacyMounted.current || pendingPrivacy.current) continue;
+          const saved = savedPrivacy.current;
+          setMessagePrivacy(saved.messagePrivacy); setReadReceiptsPrivacy(saved.readReceiptsPrivacy);
+          setAllowConnectMatchMessages(saved.allowConnectMatchMessages);
+          setOnlinePrivacy(saved.onlinePrivacy); setIsInvisibleMode(saved.invisibleMode);
+          setShowSavedMusicOnProfile(saved.showSavedMusicOnProfile); setShowUploadedMusicOnProfile(saved.showUploadedMusicOnProfile);
+          setShowBirthYear(saved.showBirthYear);
+          reportApiError(saveError instanceof Error ? saveError.message : 'Не удалось сохранить настройки');
+        }
+      }
     } finally {
-      setIsSaving(false);
+      privacyWriter.current = false;
+      if (privacyMounted.current) setIsSaving(false);
     }
   };
 
@@ -1120,7 +1131,7 @@ export function SettingsScreen({
 
   const renderNotificationPreferences = (items: NotificationPreferenceItem[]) => (
     notificationsLoading
-      ? <ActivityIndicator color="#111" />
+      ? <LoadingIndicator />
       : items.map((item, index) => <View key={item.eventType}>
         {index ? <View style={styles.settingsDivider} /> : null}
         <Text style={styles.settingsLabel}>{item.label}</Text>
@@ -1158,15 +1169,9 @@ export function SettingsScreen({
 
   return (
     <>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable onPress={onBack} style={styles.topBarIconButton}>
-            <ChevronLeft size={29} color="#090909" strokeWidth={2.1} />
-          </Pressable>
-          <Text style={styles.topBarTitle}>Настройки и приватность</Text>
-        </View>
-      </View>
+      <ScreenTopBar onBack={onBack} title="Настройки и приватность" />
       <ScrollView contentContainerStyle={styles.settingsContent} showsVerticalScrollIndicator={false}>
+        <Pressable accessibilityRole="button" onPress={onOpenMessageSecurity} style={[styles.settingsCard, { flexDirection: 'row', alignItems: 'center', gap: 12 }]}><ShieldCheck color="#111" size={22} /><View style={{ flex: 1 }}><Text style={styles.settingsLabel}>Защита сообщений</Text><Text style={styles.settingsHint}>Ваши устройства и восстановление доступа</Text></View><ChevronRight color="#7b848d" size={21} /></Pressable>
         <Text style={styles.settingsSectionTitle}>Уведомления</Text>
         <View style={styles.settingsCard}>
           <View style={styles.settingsSwitchRow}><View style={styles.settingsSwitchCopy}><View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><Bell color="#111" size={20} /><Text style={styles.settingsLabel}>Push-уведомления</Text></View><Text style={styles.settingsHint}>{Platform.OS !== 'web' ? 'Разрешение управляется настройками приложения на устройстве' : isPushEnabled ? 'Разрешены на этом устройстве' : pushPermission === 'denied' ? 'Запрещены в настройках браузера' : pushPermission === 'unsupported' ? 'Не поддерживаются этим браузером' : 'Отключены на этом устройстве'}</Text></View><VolnaSwitch accessibilityLabel="Push-уведомления" disabled={Platform.OS !== 'web' || pushPermission === 'unsupported'} onValueChange={(value) => void setSystemPushEnabled(value)} value={isPushEnabled} /></View>
@@ -1215,11 +1220,14 @@ export function SettingsScreen({
 
         <Text style={[styles.settingsSectionTitle, styles.settingsSectionTitleSpaced]}>Конфиденциальность</Text>
         <View style={styles.settingsCard}>
-          <Text style={styles.settingsLabel}>Кто может мне писать</Text>
-          <AnimatedSegmentedControl accessibilityLabel="Кто может мне писать" containerStyle={styles.privacySegment} onChange={(value) => { setMessagePrivacy(value); void saveSettings(value, readReceiptsPrivacy, isInvisibleMode); }} options={messagePrivacyOptions} value={messagePrivacy} />
-          <View style={styles.settingsDivider} />
-          <Text style={styles.settingsLabel}>Кто может видеть статус мною прочитанных сообщений</Text>
-          <AnimatedSegmentedControl accessibilityLabel="Кто может видеть статус мною прочитанных сообщений" containerStyle={styles.privacySegment} onChange={(value) => { setReadReceiptsPrivacy(value); void saveSettings(messagePrivacy, value, isInvisibleMode); }} options={privacyOptions} value={readReceiptsPrivacy} />
+          <ChatPrivacyControls
+            messagePrivacy={messagePrivacy} readReceiptsPrivacy={readReceiptsPrivacy} onlinePrivacy={onlinePrivacy}
+            allowConnectMatchMessages={allowConnectMatchMessages}
+            onMessagePrivacyChange={value => { setMessagePrivacy(value); void saveSettings(value, readReceiptsPrivacy, isInvisibleMode); }}
+            onReadReceiptsPrivacyChange={value => { setReadReceiptsPrivacy(value); void saveSettings(messagePrivacy, value, isInvisibleMode); }}
+            onOnlinePrivacyChange={value => { setOnlinePrivacy(value); void saveSettings(messagePrivacy, readReceiptsPrivacy, isInvisibleMode, showSavedMusicOnProfile, showUploadedMusicOnProfile, showBirthYear, value); }}
+            onConnectMatchMessagesChange={value => { setAllowConnectMatchMessages(value); void saveSettings(messagePrivacy, readReceiptsPrivacy, isInvisibleMode, showSavedMusicOnProfile, showUploadedMusicOnProfile, showBirthYear, onlinePrivacy, value); }}
+          />
           <View style={styles.settingsDivider} />
           <Text style={styles.settingsLabel}>Кто видит мой возраст в Коннекте</Text>
           <AnimatedSegmentedControl
@@ -1272,12 +1280,10 @@ export function PasswordSecurityScreen({
   forced = false,
   onBack,
   onChangePassword,
-  onOpenMessageSecurity,
 }: {
   forced?: boolean;
   onBack: () => void;
   onChangePassword: (data: { currentPassword: string; newPassword: string }) => Promise<void>;
-  onOpenMessageSecurity?: () => void;
 }) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -1336,14 +1342,7 @@ export function PasswordSecurityScreen({
 
   return (
     <>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          {!forced ? <Pressable onPress={onBack} style={styles.topBarIconButton}>
-            <ChevronLeft size={29} color="#090909" strokeWidth={2.1} />
-          </Pressable> : null}
-          <Text style={styles.topBarTitle}>{forced ? 'Создайте постоянный пароль' : 'Пароль и безопасность'}</Text>
-        </View>
-      </View>
+      <ScreenTopBar onBack={onBack} canGoBack={!forced} title={forced ? 'Создайте постоянный пароль' : 'Пароль и безопасность'} />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.securityShell}>
         <ScrollView contentContainerStyle={styles.settingsContent} showsVerticalScrollIndicator={false}>
           <Text style={styles.settingsSectionTitle}>{forced ? 'Вы вошли по временному паролю. Перед продолжением замените его своим.' : 'Смена пароля'}</Text>
@@ -1386,28 +1385,10 @@ export function PasswordSecurityScreen({
               onPress={submit}
               style={[styles.saveProfileButton, styles.saveProfileButtonSpacing, (isSaving || getPasswordStrength(newPassword) === 'low') && styles.disabledButton]}
             >
-              {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveProfileText}>Сохранить пароль</Text>}
+              {isSaving ? <LoadingIndicator tone="inverse" /> : <Text style={styles.saveProfileText}>Сохранить пароль</Text>}
             </Pressable>
           </View>
-          {!forced && onOpenMessageSecurity ? (
-            <>
-              <Text style={[styles.settingsSectionTitle, styles.settingsSectionTitleSpaced]}>Сообщения</Text>
-              <Pressable
-                accessibilityHint="Устройства, перенос и ключ восстановления"
-                onPress={onOpenMessageSecurity}
-                style={[styles.settingsCard, { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 76 }]}
-              >
-                <View style={{ alignItems: 'center', backgroundColor: '#f0f1f3', borderRadius: 19, height: 38, justifyContent: 'center', width: 38 }}>
-                  <ShieldCheck color="#111" size={21} strokeWidth={1.8} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingsLabel}>Защищённые сообщения</Text>
-                  <Text style={styles.settingsHint}>Устройства, перенос истории и ключ восстановления</Text>
-                </View>
-                <ChevronRight color="#7b848d" size={21} />
-              </Pressable>
-            </>
-          ) : null}
+
         </ScrollView>
       </KeyboardAvoidingView>
     </>

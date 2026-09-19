@@ -15,6 +15,8 @@
     "src/expo-storage-adapter.ts",
     "src/expo-secure-messaging.ts",
     "src/react-native-message-security.tsx",
-    "src/react-native-messages.tsx"
+    "src/react-native-messages.tsx",
+    "src/matrix-engine-native.ts",
+    "src/matrix-engine-web.ts"
   ]
 }

@@ -1,11 +1,11 @@
 export type ProfileEvent = {
   id: string;
-  organizerPageId: string;
+  organizerPageId: string | null;
   organizerPage: {
     id: string;
     username: string;
     name: string;
-  };
+  } | null;
   title: string;
   type: string;
   typeLabel: string;
@@ -132,6 +132,8 @@ export type Profile = {
   isPrivate: boolean;
   messagePrivacy: ApiMessagePrivacy;
   readReceiptsPrivacy: ApiMessagePrivacy;
+  onlinePrivacy?: ApiMessagePrivacy;
+  allowConnectMatchMessages?: boolean;
   invisibleMode: boolean;
   showSavedMusicOnProfile: boolean;
   showUploadedMusicOnProfile: boolean;
@@ -141,7 +143,6 @@ export type Profile = {
   connectInterests: string[];
   connectPhotos: ConnectPhoto[];
   connectAbout: string;
-  connectFaceVerified?: boolean;
   gender: Gender | null;
   isInformational: boolean;
   canManageInformationalProfile?: boolean;
@@ -179,6 +180,8 @@ export type Account = {
   cityId: string | null;
   messagePrivacy: ApiMessagePrivacy;
   readReceiptsPrivacy: ApiMessagePrivacy;
+  onlinePrivacy?: ApiMessagePrivacy;
+  allowConnectMatchMessages?: boolean;
   invisibleMode: boolean;
   showSavedMusicOnProfile: boolean;
   showUploadedMusicOnProfile: boolean;
@@ -223,12 +226,14 @@ export type ProfileMode =
   | 'notFound'
   | 'ownProfile';
 export type ProfileContentTab = 'events' | 'music' | 'locations' | 'feed' | 'photos';
-export type PublicPageContentTab = 'events' | 'music' | 'team' | 'partners' | 'products' | 'feed' | 'photos';
+export type PublicPageContentTab = 'events' | 'schedule' | 'music' | 'team' | 'partners' | 'products' | 'feed' | 'photos';
 export type PublicPageListTab = 'locations' | 'organizations';
-export type MessagePrivacy = 'everyone' | 'following' | 'nobody';
+export type MessagePrivacy = 'everyone' | 'friends' | 'nobody';
+// FOLLOWING remains the wire code for mutual ACTIVE friendship, for client compatibility.
 export type ApiMessagePrivacy = 'EVERYONE' | 'FOLLOWING' | 'NOBODY';
 export type ConnectGoal = 'ANY' | 'COLLABORATION' | 'FRIENDSHIP' | 'DATING' | 'VOLUNTEERS' | 'EMPLOYEES';
 export type Gender = 'MALE' | 'FEMALE' | 'OTHER';
+export type MusicCatalogDestination = { category: 'playlists'; playlistId?: string } | { category: 'listen' | 'radios' | 'downloads' };
 export type NavigationState = {
   activeTab: AppTab;
   profileMode: ProfileMode;
@@ -240,6 +245,7 @@ export type NavigationState = {
   postId: string | null;
   eventId: string | null;
   browserPath: string | null;
+  musicCatalogDestination?: MusicCatalogDestination | null;
 };
 
 export type CursorPage<T> = { items: T[]; nextCursor: string | null };
@@ -327,6 +333,8 @@ export type PublicPage = {
   instagramUrl: string | null;
   threadsUrl: string | null;
   telegramUrl: string | null;
+  eventDiscoveryEnabled: boolean;
+  radioScheduleDiscoveryEnabled: boolean;
   youtubeUrl: string | null;
   letterboxdUrl: string | null;
   about: string;
@@ -357,6 +365,7 @@ export type PublicPagePermission =
   | 'MEDIA_MANAGE'
   | 'MUSIC_MANAGE'
   | 'EVENTS_MANAGE'
+  | 'SCHEDULE_MANAGE'
   | 'PRODUCTS_MANAGE'
   | 'TEAM_MANAGE'
   | 'PARTNERS_MANAGE'
@@ -377,12 +386,21 @@ export type PublicPageDetail = PublicPage & {
   teamCount: number;
   partnersCount: number;
   productsCount: number;
+  radioScheduleCount: number;
   team: PublicPageTeamMember[];
   partners: PartnerReference[];
   products: PublicPageProduct[];
   audioReleases: PublicPageAudioRelease[];
   administrators: Array<{ id: string; permissions: PublicPagePermission[]; account: Pick<Profile, 'id' | 'username' | 'name' | 'avatarUrl'> }>;
   myPermissions: PublicPagePermission[];
+};
+export type PublicPageRadioScheduleItem = {
+  id: string;
+  title: string;
+  hostName: string | null;
+  startsAt: string;
+  endsAt: string;
+  sourceUrl: string | null;
 };
 export type PublicPageProduct = {
   id: string;
@@ -456,6 +474,8 @@ export type CreateCommunityInput = {
   instagramUrl?: string;
   threadsUrl?: string;
   telegramUrl?: string;
+  eventDiscoveryEnabled?: boolean;
+  radioScheduleDiscoveryEnabled?: boolean;
   youtubeUrl?: string;
   letterboxdUrl?: string;
   about: string;
@@ -468,12 +488,13 @@ export type EventTypeOption = {
 export type EventParticipationStatus = 'GOING' | 'WATCHING';
 export type EventSummary = {
   id: string;
-  organizerPageId: string;
+  organizerPageId: string | null;
   organizerPage: {
     id: string;
     username: string;
     name: string;
-  };
+  } | null;
+  cityId: string | null;
   title: string;
   type: string;
   typeLabel: string;
@@ -527,7 +548,8 @@ export type EventArtistDraft = {
 export type CreateEventInput = {
   posterLocalUri: string;
   posterThumbnailLocalUri?: string;
-  organizerPageId: string;
+  organizerPageId?: string;
+  cityId: string;
   venuePageId?: string;
   venueName: string;
   venueAddress: string;
@@ -729,4 +751,3 @@ export type QuotedPost =
   | (Omit<AppPost, 'originalPost' | 'viewerLiked' | 'likesCount' | 'repostsCount' | 'sharesCount' | 'canDelete'> & { isDeleted: false })
   | { id: string; isDeleted: true; createdAt: string; updatedAt?: string };
 export type SocialLinkKind = 'bandcamp' | 'instagram' | 'letterboxd' | 'soundcloud' | 'telegram' | 'threads' | 'youtube';
-

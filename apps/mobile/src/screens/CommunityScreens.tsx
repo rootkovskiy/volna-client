@@ -1,8 +1,18 @@
-import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, EllipsisVertical, Globe2, Handshake, Heart, Images, Info, List, MapPin, Pause, Pencil, Phone, Play, Plus, Radio, Save, Search, Settings, Share2, ShoppingBag, SlidersHorizontal, TriangleAlert, UserRound, UsersRound, X } from 'lucide-react-native';
+import { useEditorAutosave } from '../components/useEditorAutosave';
+import { EntityUsernameLookup } from '../components/EntityUsernameLookup';
+import { CommunityOwnershipSection } from '../components/CommunityOwnershipSection';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { SearchField, searchFieldStyles } from '@volna/messaging-client/search-field';
+import { ContentTabIndicator } from '../components/ContentTabIndicator';
+import { ConnectProfileInterests } from '../components/ConnectProfileInterests';
+import { ConnectLikeIcon } from '../components/ConnectLikeIcon';
+import { MotionSurface } from '@volna/messaging-client/ui-motion';
+import { useScreenScroll, useScreenChoice } from '../components/ScreenContinuity';
+import { CalendarClock, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, EllipsisVertical, Globe2, Handshake, Heart, Images, Info, List, MapPin, MessageSquare, Pause, Pencil, Phone, Play, Plus, Radio, Save, Search, Settings, Share2, ShoppingBag, SlidersHorizontal, TriangleAlert, UserRound, UsersRound, X } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
-import * as Location from 'expo-location';
+import { connectLocationSync } from '../location/connectLocation';
 import { createElement, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Easing, KeyboardAvoidingView, LayoutAnimation, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { Alert, Animated, Easing, KeyboardAvoidingView, LayoutAnimation, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
@@ -25,14 +35,16 @@ import { AudioReleaseAttachmentCard } from '../components/AudioReleaseAttachment
 import { boundedPlaybackQueue } from '../components/audioPlayerCore';
 import { ExternalReleaseEditorField } from '../components/ExternalReleaseEditorField';
 import { buildPlayableQueue, getBandcampRelease } from '../music/musicRuntime';
-import { AvatarCropModal, AvatarPreviewModal, ConnectInterestSelector, ConnectPhotosEditor, MusicGenreSelector, PrimaryTrackCatalogSearch, PrimaryTrackInlinePreview, ProfileSafetyModal, SocialIcon, SocialLinkInput, TrackPlayerPill, type PrimaryExternalTrackCandidate } from './ProfileScreens';
+import { AvatarCropModal, AvatarPreviewModal, clampPrimaryTrackStartSeconds, ConnectInterestSelector, ConnectPhotosEditor, MusicGenreSelector, PrimaryTrackCatalogSearch, PrimaryTrackInlinePreview, ProfileSafetyModal, SocialIcon, SocialLinkInput, TrackPlayerPill, type PrimaryExternalTrackCandidate } from './ProfileScreens';
 import { EventCard, EventDetailScreen } from './EventScreens';
-import { CalendarPickerModal } from './CreateEventScreen';
+import { CalendarPickerModal } from '../components/CalendarPickerModal';
 import { CatalogCategoryTile, locationCategoryOptions, useCategoryCovers } from '../components/CatalogCategoryTile';
 import { CatalogInnerHeader } from '../components/CatalogInnerHeader';
+import { CatalogBackArea } from '../components/CatalogBackArea';
 import { EditorAutosaveStatus } from '../components/EditorAutosaveStatus';
+import { RadioScheduleSection } from '../components/RadioSchedule';
 import { apiFetch as fetch, apiUrl, readApiError, remoteSearchDebounceMs } from '../api/client';
-import { audioReleaseGenreLimit, avatarThumbnail, connectInterestLabels, connectPhotoThumbnail, countryOptions, formatCityName, formatCountryCity, getAvatarInitial, groupMusicGenreChips, isMusicSubgenreValue, normalizePhoneDigits, normalizeSocialLink, normalizeUsernameInput, phoneCountryOptions, postImageThumbnail, publicPageTypeGroups, publicPageTypeLabels, releasePrimaryGenreLimit, russianPlural, splitInternationalPhone, uploadAvatarAsset, uploadConnectPhotoAsset, uploadPostImageAsset } from '../domain';
+import { audioReleaseGenreLimit, avatarThumbnail, connectPhotoThumbnail, countryOptions, formatCityName, formatCountryCity, getAvatarInitial, groupMusicGenreChips, isMusicSubgenreValue, normalizePhoneDigits, normalizeSocialLink, normalizeUsernameInput, phoneCountryOptions, postImageThumbnail, publicPageTypeGroups, publicPageTypeLabels, releasePrimaryGenreLimit, russianPlural, splitInternationalPhone, uploadAvatarAsset, uploadConnectPhotoAsset, uploadPostImageAsset } from '../domain';
 import { styles } from '../styles';
 import { resolveForegroundLocation } from '../location/foregroundLocation';
 import { normalizeExternalHttpsUrl } from '../security/externalUrls.mjs';
@@ -56,6 +68,7 @@ const allPublicPagePermissions: PublicPagePermission[] = [
   'MEDIA_MANAGE',
   'MUSIC_MANAGE',
   'EVENTS_MANAGE',
+  'SCHEDULE_MANAGE',
   'PRODUCTS_MANAGE',
   'TEAM_MANAGE',
   'PARTNERS_MANAGE',
@@ -83,6 +96,7 @@ const publicPagePermissionGroups: Array<{
       { value: 'MEDIA_MANAGE', label: 'Медиа', description: 'Фотографии и обложки во вкладках сообщества.' },
       { value: 'MUSIC_MANAGE', label: 'Музыка', description: 'Релизы и музыкальные материалы.' },
       { value: 'EVENTS_MANAGE', label: 'События', description: 'Создание и редактирование событий.' },
+      { value: 'SCHEDULE_MANAGE', label: 'Расписание', description: 'Публикация и редактирование расписания радиостанции.' },
       { value: 'PRODUCTS_MANAGE', label: 'Товары', description: 'Товары, изображения и ссылки для заказа.' },
       { value: 'TEAM_MANAGE', label: 'Команда', description: 'Состав команды сообщества.' },
       { value: 'PARTNERS_MANAGE', label: 'Партнёры', description: 'Список партнёров сообщества.' },
@@ -221,7 +235,6 @@ function normalizeCommunityWebsite(value: string) {
 export function MyCommunitiesScreen({
   onBack,
   onCreateCommunity,
-  onCreateEvent,
   onEditCommunity,
   onOpenCommunityCabinet,
   onNotify,
@@ -229,7 +242,6 @@ export function MyCommunitiesScreen({
 }: {
   onBack: () => void;
   onCreateCommunity: () => void;
-  onCreateEvent: () => void;
   onEditCommunity: (username: string) => Promise<void>;
   onOpenCommunityCabinet: (username: string) => Promise<void>;
   onNotify: (message: string, type?: ToastMessage['type']) => void;
@@ -254,26 +266,19 @@ export function MyCommunitiesScreen({
   }, [onNotify]);
 
   useEffect(() => { void load(); }, [load]);
-  const canCreateEvent = pages.some((page) => page.moderationStatus === 'APPROVED');
 
   return (
     <View style={styles.myCommunitiesScreen}>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable accessibilityLabel="Назад" onPress={onBack} style={styles.topBarIconButton}><ChevronLeft color="#111" size={29} strokeWidth={2.1} /></Pressable>
-          <Text style={styles.topBarTitle}>Мои сообщества</Text>
-        </View>
-      </View>
+      <ScreenTopBar onBack={onBack} title="Мои сообщества" />
       <ScrollView
         contentContainerStyle={styles.myCommunitiesContent}
         refreshControl={<AppRefreshControl refreshing={isRefreshing} onRefresh={() => load(true)} />}
       >
         <View style={styles.myCommunitiesActions}>
           <Pressable onPress={onCreateCommunity} style={styles.myCommunitiesPrimaryAction}><Plus color="#fff" size={21} strokeWidth={2} /><Text style={styles.myCommunitiesPrimaryActionText}>Создать сообщество</Text></Pressable>
-          <Pressable disabled={!canCreateEvent} onPress={onCreateEvent} style={[styles.myCommunitiesSecondaryAction, !canCreateEvent && styles.disabledButton]}><CalendarDays color="#111" size={20} strokeWidth={2} /><Text style={styles.myCommunitiesSecondaryActionText}>Создать событие</Text></Pressable>
         </View>
         <Text style={styles.myCommunitiesSectionTitle}>Сообщества в управлении</Text>
-        {isLoading ? <ActivityIndicator color="#111" style={{ marginTop: 24 }} /> : null}
+        {isLoading ? <LoadingIndicator style={{ marginTop: 24 }} /> : null}
         {!isLoading && !pages.length ? <View style={styles.myCommunitiesEmpty}><UsersRound color="#7d8894" size={32} strokeWidth={1.8} /><Text style={styles.myCommunitiesEmptyTitle}>Сообществ пока нет</Text><Text style={styles.myCommunitiesEmptyText}>Создайте первое сообщество — оно появится здесь сразу после отправки на модерацию.</Text></View> : null}
         {pages.map((page) => (
           <View key={page.id} style={[styles.myCommunityRow, page.moderationStatus !== 'APPROVED' && styles.sideMenuPageItemInactive]}>
@@ -330,19 +335,14 @@ export function CommunityCabinetScreen({ authToken, isOwner, onBack, onNotify, p
     if (response.ok) setAuditLog(await response.json());
   }, [authToken, isOwner, page.username]);
   useEffect(() => { void loadAuditLog(); }, [loadAuditLog]);
-  const actionLabels: Record<string, string> = { PROFILE_UPDATED: 'изменил профиль сообщества', TEAM_MEMBER_SAVED: 'изменил состав команды', TEAM_MEMBER_REMOVED: 'удалил участника команды', PARTNER_SAVED: 'добавил или изменил партнёра', PARTNER_REMOVED: 'удалил партнёра', ACCESS_SAVED: 'изменил доступ к управлению', ACCESS_REMOVED: 'удалил доступ к управлению', PRODUCT_ADDED: 'добавил товар', PRODUCT_REMOVED: 'удалил товар', AUDIO_RELEASE_ADDED: 'добавил музыкальный релиз', AUDIO_RELEASE_REMOVED: 'удалил музыкальный релиз', EVENT_CREATED: 'создал событие', EVENT_UPDATED: 'изменил событие', EVENT_REMOVED: 'удалил событие', EVENT_PARTNER_ADDED: 'добавил партнёра события', EVENT_PARTNER_REMOVED: 'удалил партнёра события', EVENT_LINEUP_UPDATED: 'изменил лайнап события', POST_CREATED: 'опубликовал запись', POST_REPOSTED: 'сделал репост', POST_REMOVED: 'удалил публикацию', TELEGRAM_FEED_CONNECTED: 'подключил Telegram Feed', TELEGRAM_FEED_DISCONNECTED: 'отключил Telegram Feed' };
+  const actionLabels: Record<string, string> = { OWNERSHIP_TRANSFER_REQUESTED: 'предложил передать владение', OWNERSHIP_TRANSFER_CANCELLED: 'отменил передачу владения', OWNERSHIP_TRANSFER_ACCEPTED: 'принял владение', PROFILE_UPDATED: 'изменил профиль сообщества', TEAM_MEMBER_SAVED: 'изменил состав команды', TEAM_MEMBER_REMOVED: 'удалил участника команды', PARTNER_SAVED: 'добавил или изменил партнёра', PARTNER_REMOVED: 'удалил партнёра', ACCESS_SAVED: 'изменил доступ к управлению', ACCESS_REMOVED: 'удалил доступ к управлению', PRODUCT_ADDED: 'добавил товар', PRODUCT_REMOVED: 'удалил товар', AUDIO_RELEASE_ADDED: 'добавил музыкальный релиз', AUDIO_RELEASE_REMOVED: 'удалил музыкальный релиз', EVENT_CREATED: 'создал событие', EVENT_UPDATED: 'изменил событие', EVENT_REMOVED: 'удалил событие', EVENT_PARTNER_ADDED: 'добавил партнёра события', EVENT_PARTNER_REMOVED: 'удалил партнёра события', EVENT_LINEUP_UPDATED: 'изменил лайнап события', POST_CREATED: 'опубликовал запись', POST_REPOSTED: 'сделал репост', POST_REMOVED: 'удалил публикацию', TELEGRAM_FEED_CONNECTED: 'подключил Telegram Feed', TELEGRAM_FEED_DISCONNECTED: 'отключил Telegram Feed' };
   const auditSubject = (details: Record<string, unknown> | null) => {
     const value = details?.title ?? details?.name ?? details?.username;
     return typeof value === 'string' && value.trim() ? ` «${value.trim()}»` : '';
   };
   return (
     <View style={styles.myCommunitiesScreen}>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable accessibilityLabel="Назад" onPress={onBack} style={styles.topBarIconButton}><ChevronLeft color="#111" size={29} strokeWidth={2.1} /></Pressable>
-          <Text style={styles.topBarTitle}>Кабинет сообщества</Text>
-        </View>
-      </View>
+      <ScreenTopBar onBack={onBack} title="Кабинет сообщества" />
       <ScrollView contentContainerStyle={styles.communityCabinetContent} showsVerticalScrollIndicator={false}>
         {canManageTelegramFeed ? <View style={styles.communityCabinetSection}>
           <Text style={[styles.editSectionTitle, styles.communityCabinetSectionTitle]}>Telegram Feed</Text>
@@ -352,6 +352,7 @@ export function CommunityCabinetScreen({ authToken, isOwner, onBack, onNotify, p
           <Text style={[styles.editSectionTitle, styles.communityCabinetSectionTitle]}>Доступ к управлению</Text>
           <CommunityAdministrationSection authToken={authToken} grantablePermissions={grantablePermissions} initialAdministrators={page.administrators || []} onChanged={loadAuditLog} onNotify={onNotify} pageUsername={page.username} />
         </View> : null}
+        {isOwner ? <CommunityOwnershipSection key={page.id} pageUsername={page.username} onChanged={loadAuditLog} onLostOwnership={onBack} /> : null}
         {isOwner ? <View style={styles.communityCabinetSection}>
           <Text style={[styles.editSectionTitle, styles.communityCabinetSectionTitle]}>Журнал действий</Text>
           <View style={styles.communityAuditCard}>{auditLog.length ? auditLog.map((item) => <View key={item.id} style={styles.communityAuditRow}><Text style={styles.communityAuditText}><Text style={styles.communityAuditActor}>{item.actor.name}</Text> {actionLabels[item.action] ?? 'изменил сообщество'}{auditSubject(item.details)}</Text><Text style={styles.communityAuditMeta}>@{item.actor.username} · {new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(item.createdAt))}</Text></View>) : <Text style={styles.settingsHint}>Изменений пока нет</Text>}</View>
@@ -457,7 +458,7 @@ function TelegramFeedSection({ authToken, onChanged, onNotify, page }: { authTok
     ]);
   };
 
-  if (isLoading) return <View style={styles.telegramFeedCard}><ActivityIndicator color="#111" /></View>;
+  if (isLoading) return <View style={styles.telegramFeedCard}><LoadingIndicator /></View>;
   if (status?.connection) return <View style={styles.telegramFeedCard}>
     <View style={styles.telegramFeedConnectedHeader}>{status.connection.avatarUrl ? <Image accessibilityLabel={`Аватар Telegram-канала ${status.connection.channelTitle}`} source={{ uri: `${apiUrl}${status.connection.avatarUrl}`, headers: { Authorization: `Bearer ${authToken}` } }} style={styles.telegramFeedChannelAvatar} /> : <View style={styles.telegramFeedIcon}><Radio color="#111" size={20} /></View>}<View style={styles.telegramFeedCopy}><Text numberOfLines={1} style={styles.telegramFeedTitle}>{status.connection.channelTitle}</Text><Text style={styles.telegramFeedMeta}>@{status.connection.channelUsername} · подключено</Text></View><Check color="#2db75d" size={21} strokeWidth={2.2} /></View>
     <Text style={styles.telegramFeedHint}>{status.historyImportConfigured ? 'Последние 10 публикаций импортируются при подключении. Новые публикации синхронизируются автоматически.' : 'Новые публикации будут синхронизироваться автоматически. Импорт последних 10 появится после настройки MTProto.'}</Text>
@@ -465,7 +466,7 @@ function TelegramFeedSection({ authToken, onChanged, onNotify, page }: { authTok
   </View>;
   return <View style={styles.telegramFeedCard}>
     <Text style={styles.telegramFeedHint}>Нажмите кнопку и выберите публичный канал в Telegram. Права бота: чтение публикаций сообщества.</Text>
-    <Pressable accessibilityRole="button" disabled={isSaving || isConnecting || !status?.configured} onPress={() => void connect()} style={[styles.telegramFeedPrimaryButton, (isSaving || isConnecting || !status?.configured) && styles.disabledButton]}>{isSaving || isConnecting ? <ActivityIndicator color="#fff" size="small" /> : <Plus color="#fff" size={18} />}<Text style={styles.telegramFeedPrimaryButtonText}>{isConnecting ? 'Ожидаем выбор канала' : 'Подключить Telegram'}</Text></Pressable>
+    <Pressable accessibilityRole="button" disabled={isSaving || isConnecting || !status?.configured} onPress={() => void connect()} style={[styles.telegramFeedPrimaryButton, (isSaving || isConnecting || !status?.configured) && styles.disabledButton]}>{isSaving || isConnecting ? <LoadingIndicator tone="inverse" size="small" /> : <Plus color="#fff" size={18} />}<Text style={styles.telegramFeedPrimaryButtonText}>{isConnecting ? 'Ожидаем выбор канала' : 'Подключить Telegram'}</Text></Pressable>
     {!status?.configured ? <Text style={styles.telegramFeedError}>Telegram-бот пока не настроен на сервере.</Text> : null}
   </View>;
 }
@@ -660,14 +661,7 @@ export function CreateCommunityScreen({
 
   return (
     <>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable onPress={onBack} style={styles.topBarIconButton}>
-            <ChevronLeft size={29} color="#090909" strokeWidth={2.1} />
-          </Pressable>
-          <Text style={styles.topBarTitle}>Создать сообщество</Text>
-        </View>
-      </View>
+      <ScreenTopBar onBack={onBack} title="Создать сообщество" />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.editShell}>
         <ScrollView
           contentContainerStyle={[styles.editContent, styles.createCommunityContent]}
@@ -698,7 +692,7 @@ export function CreateCommunityScreen({
                   value={username}
                 />
                 <View pointerEvents="none" style={styles.usernameStatusSlot}>
-                  {usernameState === 'checking' ? <ActivityIndicator color="#7d8894" size="small" /> : null}
+                  {usernameState === 'checking' ? <LoadingIndicator size="small" /> : null}
                   {usernameState === 'available' ? <Check color="#2fa84f" size={20} strokeWidth={2.4} /> : null}
                   {usernameState === 'taken' || usernameState === 'invalid' ? <X color="#c62828" size={19} strokeWidth={2.4} /> : null}
                 </View>
@@ -764,7 +758,7 @@ export function CreateCommunityScreen({
         </ScrollView>
         <View pointerEvents="box-none" style={[styles.stickySaveArea, styles.createCommunityStickySaveArea]}>
           <Pressable disabled={isSaving} onPress={submit} style={[styles.saveProfileButton, isSaving && styles.disabledButton]}>
-            {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveProfileText}>Создать</Text>}
+            {isSaving ? <LoadingIndicator tone="inverse" /> : <Text style={styles.saveProfileText}>Создать</Text>}
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -798,22 +792,28 @@ export function CreateCommunityScreen({
 
 export function LocationsScreen({
   defaultLocation,
+  onNotify,
   onOpenMenu,
   onOpenMessages,
   onOpenNotifications,
   onOpenProfile,
   onOpenPublicPage,
+  onTogglePublicPageFollow,
+  ownAccountId,
 }: {
   defaultLocation: { cityId: string | null; cityName: string; countryCode?: string; countryName: string };
+  onNotify: (message: string, type?: ToastMessage['type']) => void;
   onOpenMenu: () => void;
   onOpenMessages: () => void;
   onOpenNotifications: () => void;
   onOpenProfile: (username: string) => Promise<void>;
   onOpenPublicPage: (username: string) => Promise<void>;
+  onTogglePublicPageFollow: (username: string, followStatus: PublicPage['followStatus']) => Promise<void>;
+  ownAccountId: string;
 }) {
   const { covers: categoryCovers, reload: reloadCategoryCovers } = useCategoryCovers();
-  const [activeCatalogTab, setActiveCatalogTab] = useState<'locations' | 'communities'>('locations');
-  const [query, setQuery] = useState('');
+  const [activeCatalogTab, setActiveCatalogTab] = useScreenChoice<'locations' | 'communities'>('locations:tab', 'locations');
+  const [query, setQuery] = useScreenChoice('locations:query', '');
   const [pages, setPages] = useState<PublicPage[]>([]);
   const [accounts, setAccounts] = useState<PublicAccount[]>([]);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -821,7 +821,7 @@ export function LocationsScreen({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [selectedLocationCategory, setSelectedLocationCategory] = useState<LocationCategory | null>(null);
+  const [selectedLocationCategory, setSelectedLocationCategory] = useScreenChoice<LocationCategory | null>('locations:category', null);
   const [locationCategoryCounts, setLocationCategoryCounts] = useState<Record<LocationCategory, number> | null>(null);
   const profileCatalogLocation: CatalogLocation = {
     cityId: defaultLocation.cityId ?? '',
@@ -829,7 +829,7 @@ export function LocationsScreen({
     countryCode: defaultLocation.countryCode ?? '',
     countryName: defaultLocation.countryName,
   };
-  const [locationFilters, setLocationFilters] = useState({
+  const [locationFilters, setLocationFilters] = useScreenChoice('locations:filters', {
     ...profileCatalogLocation,
     types: [] as string[],
   });
@@ -841,6 +841,7 @@ export function LocationsScreen({
   });
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [isLocationFiltersOpen, setIsLocationFiltersOpen] = useState(false);
+  const [followMutationUsernames, setFollowMutationUsernames] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -903,6 +904,7 @@ export function LocationsScreen({
           pagesResponse.json() as Promise<CursorPage<PublicPage>>,
           accountsResponse.json() as Promise<CursorPage<PublicAccount>>,
         ]);
+        if (signal?.aborted) return;
         setPages(pageResults.items);
         setAccounts(accountResults.items);
         setNextCursor(null);
@@ -928,6 +930,7 @@ export function LocationsScreen({
       });
       if (!response.ok) throw new Error(await readApiError(response, 'Не удалось загрузить каталог'));
       const page = await response.json() as CursorPage<PublicPage>;
+      if (signal?.aborted) return;
       setPages((current) => reset ? page.items : [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]);
       setAccounts([]);
       setNextCursor(page.nextCursor);
@@ -975,31 +978,65 @@ export function LocationsScreen({
 
   useEffect(() => { void loadLocationCategoryCounts(); }, [loadLocationCategoryCounts]);
 
-  const loadingState = isInitialLoading ? <View style={styles.loadingRow}><ActivityIndicator color="#111" /></View> : null;
-  const footer = isLoadingMore ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null;
+  const toggleCatalogFollow = useCallback(async (page: PublicPage) => {
+    if (followMutationUsernames.has(page.username) || page.ownerId === ownAccountId) return;
+    setFollowMutationUsernames((current) => new Set(current).add(page.username));
+    try {
+      await onTogglePublicPageFollow(page.username, page.followStatus);
+      const nextFollowStatus: PublicPage['followStatus'] = page.followStatus
+        ? null
+        : page.isPrivate
+          ? 'PENDING'
+          : 'ACTIVE';
+      setPages((current) => current.map((item) => item.username === page.username
+        ? {
+            ...item,
+            followStatus: nextFollowStatus,
+            isFollowing: nextFollowStatus === 'ACTIVE',
+            followersCount: Math.max(0, item.followersCount + (nextFollowStatus === 'ACTIVE' ? 1 : item.followStatus === 'ACTIVE' ? -1 : 0)),
+          }
+        : item));
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : 'Не удалось обновить подписку', 'error');
+    } finally {
+      setFollowMutationUsernames((current) => {
+        const next = new Set(current);
+        next.delete(page.username);
+        return next;
+      });
+    }
+  }, [followMutationUsernames, onNotify, onTogglePublicPageFollow, ownAccountId]);
+
+  const catalogScroll = useScreenScroll(`locations:scroll:${activeCatalogTab}:${selectedLocationCategory}:${query}`, { loading: isInitialLoading || isLoadingMore, canLoadMore: Boolean(nextCursor), loadMore: () => void loadCatalog(false) });
+  const loadingState = isInitialLoading ? <View style={styles.loadingRow}><LoadingIndicator /></View> : null;
+  const footer = isLoadingMore ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null;
+  const backToLocationCategories = () => {
+    setLocationFilters((current) => ({ ...current, types: [] }));
+    setSelectedLocationCategory(null);
+  };
 
   return (
     <>
       <ScreenTopBar onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} title="Сообщество" />
+      <CatalogBackArea routeKey={!isSearching && activeCatalogTab === 'locations' ? selectedLocationCategory : null} enabled={!isLocationFiltersOpen && !isLocationPickerOpen} onBack={backToLocationCategories}>
+      <MotionSurface identity={`${isInitialLoading}:${items.length ? "results" : "empty"}:${isSearching}`} style={{ flex: 1 }}>
       <FlashList
+        ref={catalogScroll.ref}
+        onLayout={catalogScroll.onLayout}
+        onScroll={catalogScroll.onScroll}
+        onScrollBeginDrag={catalogScroll.onScrollBeginDrag}
+        onContentSizeChange={catalogScroll.onContentSizeChange}
         alwaysBounceVertical
         data={items}
         keyExtractor={(item) => `${item.kind}:${item.value.id}`}
         contentContainerStyle={styles.locationsContent}
         ListHeaderComponent={<>
-          {selectedLocationCategory ? null : <View style={styles.catalogSearchWrap}>
-            <View style={styles.catalogSearchField}>
-              <Search color="#8e99a4" size={19} strokeWidth={1.9} />
-              <TextInput
-                autoCapitalize="none"
-                autoCorrect={false}
+          {selectedLocationCategory ? null : <View style={searchFieldStyles.toolbar}>
+              <SearchField
                 onChangeText={setQuery}
                 placeholder="Поиск людей и сообществ"
-                placeholderTextColor="#8e99a4"
-                style={styles.catalogSearchInput}
                 value={query}
               />
-            </View>
           </View>}
           {!isSearching && !(activeCatalogTab === 'locations' && selectedLocationCategory) ? (
             <View accessibilityRole="tablist" style={styles.eventCatalogTabs}>
@@ -1055,7 +1092,7 @@ export function LocationsScreen({
             selectedLocationCategory ? <>
               <CatalogInnerHeader
                 backLabel="Назад к категориям локаций"
-                onBack={() => { setLocationFilters((current) => ({ ...current, types: [] })); setSelectedLocationCategory(null); }}
+                onBack={backToLocationCategories}
                 title={locationCategoryOptions.find((category) => category.value === selectedLocationCategory)?.label ?? ''}
               />
               <View style={[styles.eventFilterHeader, styles.locationCategoryFilterHeader]}>
@@ -1110,9 +1147,26 @@ export function LocationsScreen({
           }
 
           const page = item.value;
-            const locationLabel = formatCountryCity(page.countryName, page.cityName);
-            return (
-              <Pressable onPress={() => void onOpenPublicPage(page.username)} style={styles.publicPageRow}>
+          const locationLabel = formatCountryCity(page.countryName, page.cityName);
+          const isFollowMutationPending = followMutationUsernames.has(page.username);
+          const followButtonLabel = page.followStatus === 'PENDING'
+            ? 'Заявка отправлена'
+            : page.followStatus === 'ACTIVE'
+              ? 'Отписаться'
+              : 'Подписаться';
+          const followButtonAccessibilityLabel = page.followStatus === 'PENDING'
+            ? `Отменить заявку на подписку на ${page.name}`
+            : page.followStatus === 'ACTIVE'
+              ? `Отписаться от ${page.name}`
+              : `Подписаться на ${page.name}`;
+          return (
+            <View style={styles.publicPageRow}>
+              <Pressable
+                accessibilityLabel={`Открыть сообщество ${page.name}`}
+                accessibilityRole="button"
+                onPress={() => void onOpenPublicPage(page.username)}
+                style={styles.publicPageRowLink}
+              >
                 {page.avatarUrl ? <Image source={{ uri: avatarThumbnail(page.avatarUrl) ?? page.avatarUrl }} style={styles.publicPageAvatar} /> : <View style={styles.publicPageAvatar}><Text style={styles.publicPageAvatarText}>{page.name.slice(0, 1).toUpperCase()}</Text></View>}
                 <View style={styles.publicPageCopy}>
                   <VerifiedName badgeSize={13} isVerified={page.isVerified} name={page.name} numberOfLines={1} style={styles.publicPageName} />
@@ -1120,9 +1174,40 @@ export function LocationsScreen({
                   {locationLabel ? <Text style={styles.publicPageLocation} numberOfLines={1}>{locationLabel}</Text> : null}
                 </View>
               </Pressable>
-            );
+              {page.ownerId !== ownAccountId ? (
+                <Pressable
+                  accessibilityLabel={followButtonAccessibilityLabel}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: isFollowMutationPending, selected: Boolean(page.followStatus) }}
+                  disabled={isFollowMutationPending}
+                  onPress={() => void toggleCatalogFollow(page)}
+                  style={[
+                    styles.publicPageCatalogFollowButton,
+                    page.followStatus && styles.publicPageCatalogFollowButtonSecondary,
+                    isFollowMutationPending && styles.disabledButton,
+                  ]}
+                >
+                  {isFollowMutationPending ? (
+                    <LoadingIndicator tone={page.followStatus ? 'default' : 'inverse'} size="small" />
+                  ) : (
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.publicPageCatalogFollowText,
+                        page.followStatus && styles.publicPageCatalogFollowTextSecondary,
+                      ]}
+                    >
+                      {followButtonLabel}
+                    </Text>
+                  )}
+                </Pressable>
+              ) : null}
+            </View>
+          );
         }}
       />
+      </MotionSurface>
+      </CatalogBackArea>
       <CatalogFiltersModal
         catalogTab={activeCatalogTab}
         category={selectedLocationCategory}
@@ -1206,7 +1291,7 @@ function CatalogFiltersModal({
       title={catalogTab === 'communities' ? 'Фильтры сообществ' : 'Фильтры локаций'}
     >
       <Text style={[styles.connectFilterTitle, styles.eventFilterFirstTitle]}>{catalogTab === 'communities' ? 'Тип сообщества' : 'Тип локации'}</Text>
-      {isLoading ? <ActivityIndicator color="#111" style={{ marginVertical: 18 }} /> : (
+      {isLoading ? <LoadingIndicator style={{ marginVertical: 18 }} /> : (
         <View style={styles.eventFilterChips}>
           {typeOptions.map((option) => {
             const selected = draftTypes.includes(option.value);
@@ -1708,6 +1793,7 @@ export function PublicPageScreen({
   const canManageMedia = hasCommunityPermission('MEDIA_MANAGE');
   const canManageMusic = hasCommunityPermission('MUSIC_MANAGE');
   const canManageEvents = hasCommunityPermission('EVENTS_MANAGE');
+  const canManageSchedule = hasCommunityPermission('SCHEDULE_MANAGE');
   const canManageProducts = hasCommunityPermission('PRODUCTS_MANAGE');
   const canManageTeam = hasCommunityPermission('TEAM_MANAGE');
   const canManagePartners = hasCommunityPermission('PARTNERS_MANAGE');
@@ -1753,10 +1839,11 @@ export function PublicPageScreen({
     ...(canManageMedia ? [{ label: 'Медиа', value: 'photos' as const, icon: Images }] : []),
     ...(canManageMusic || page.audioReleasesCount > 0 ? [{ label: 'Музыка', value: 'music' as const, icon: Disc3 }] : []),
     ...(canManageEvents || page.upcomingEventsCount > 0 ? [{ label: 'События', value: 'events' as const, icon: CalendarDays }] : []),
+    ...(page.type === 'RADIO_STATION' && (canManageSchedule || page.radioScheduleCount > 0) ? [{ label: 'Расписание', value: 'schedule' as const, icon: CalendarClock }] : []),
     ...(canManageTeam || page.teamCount > 0 ? [{ label: 'Команда', value: 'team' as const, icon: UsersRound }] : []),
     ...(canManagePartners || page.partnersCount > 0 ? [{ label: 'Партнеры', value: 'partners' as const, icon: Handshake }] : []),
     ...(canManageProducts || page.productsCount > 0 ? [{ label: 'Товары', value: 'products' as const, icon: ShoppingBag }] : []),
-  ], [canManageEvents, canManageMedia, canManageMusic, canManagePartners, canManageProducts, canManagePublications, canManageTeam, hasPosts, page.audioReleasesCount, page.partnersCount, page.productsCount, page.teamCount, page.upcomingEventsCount]);
+  ], [canManageEvents, canManageMedia, canManageMusic, canManagePartners, canManageProducts, canManagePublications, canManageSchedule, canManageTeam, hasPosts, page.audioReleasesCount, page.partnersCount, page.productsCount, page.radioScheduleCount, page.teamCount, page.type, page.upcomingEventsCount]);
 
   useEffect(() => {
     if (activeContentTab === 'music' && !areAudioReleasesLoaded) void loadAudioReleases(true);
@@ -1872,7 +1959,7 @@ export function PublicPageScreen({
     setEventsError(null);
     try {
       const params = new URLSearchParams({
-        organizerPageId: page.id,
+        relatedPageId: page.id,
         period: 'upcoming',
         pageSize: String(communityContentPageSize),
       });
@@ -1906,18 +1993,19 @@ export function PublicPageScreen({
     if (activeContentTab === 'events' && !areEventsLoaded) void loadCommunityEvents(true);
   }, [activeContentTab, areEventsLoaded, loadCommunityEvents]);
 
+  const detailScroll = useScreenScroll(`detail:${page.username}:${activeContentTab}`);
   const updateEventParticipation = async (event: EventSummary, status: EventParticipationStatus) => {
     const updated = await onToggleEventParticipation(event.id, event.myParticipationStatus === status ? null : status);
     setCommunityEvents((current) => current.map((item) => item.id === updated.id ? updated : item));
     setSelectedEvent((current) => current?.id === updated.id ? updated : current);
   };
 
-  if (selectedEvent) {
-    return <EventDetailScreen authToken={authToken} canManageOverride={canManageEvents} event={selectedEvent} onBack={() => setSelectedEvent(null)} onNotify={onNotify} onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onToggleParticipation={onToggleEventParticipation} onUpdate={(updated) => { setSelectedEvent(updated); setCommunityEvents((current) => current.map((item) => item.id === updated.id ? updated : item)); }} />;
-  }
+
 
   return (
-    <>
+    <View style={{ flex: 1 }}>
+      {selectedEvent ? <EventDetailScreen authToken={authToken} canManageOverride={canManageEvents} event={selectedEvent} onBack={() => setSelectedEvent(null)} onNotify={onNotify} onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onToggleParticipation={onToggleEventParticipation} onUpdate={(updated) => { setSelectedEvent(updated); setCommunityEvents((current) => current.map((item) => item.id === updated.id ? updated : item)); }} /> : null}
+      <View style={{ flex: 1, display: selectedEvent ? "none" : "flex" }}>
       <ScreenTopBar
         canGoBack={canGoBack}
         onBack={onBack}
@@ -1929,7 +2017,13 @@ export function PublicPageScreen({
       <ScrollView
         alwaysBounceVertical
         contentContainerStyle={styles.publicPageContent}
-        onScroll={({ nativeEvent }) => {
+        ref={detailScroll.ref}
+        onLayout={detailScroll.onLayout}
+        onContentSizeChange={detailScroll.onContentSizeChange}
+        onScrollBeginDrag={detailScroll.onScrollBeginDrag}
+        onScroll={(event) => {
+          detailScroll.onScroll(event);
+          const { nativeEvent } = event;
           if (!['feed', 'music', 'events', 'team', 'partners', 'products'].includes(activeContentTab)) return;
           const isNearBottom = nativeEvent.contentOffset.y + nativeEvent.layoutMeasurement.height >= nativeEvent.contentSize.height - 320;
           const hasListGrown = lastContentLoadHeight.current === 0 || nativeEvent.contentSize.height >= lastContentLoadHeight.current + 120;
@@ -1960,6 +2054,7 @@ export function PublicPageScreen({
               artworkUrl={page.trackArtworkUrl}
               autoPlay={false}
               clipDurationSeconds={page.trackClipDurationSeconds}
+              externalUrl={page.trackExternalUrl}
               previewUrl={page.trackPreviewUrl!}
               provider={communityTrackProvider!}
               startSeconds={page.trackStartSeconds}
@@ -1973,7 +2068,7 @@ export function PublicPageScreen({
           {adminMode ? <View style={styles.informationPageBannerOwner}>
             <Text style={styles.informationPageBannerOwnerLabel}>Назначить владельца</Text>
             <EntityUsernameLookup
-              endAdornment={<Pressable accessibilityLabel="Сохранить владельца" accessibilityRole="button" disabled={isOwnerSaving || normalizeUsernameInput(ownerUsername).length < 3} onPress={() => void assignInformationPageOwner()} style={[styles.entityUsernameSaveButton, (isOwnerSaving || normalizeUsernameInput(ownerUsername).length < 3) && styles.disabledButton]}>{isOwnerSaving ? <ActivityIndicator color="#fff" size="small" /> : <Save color="#fff" size={19} strokeWidth={2} />}</Pressable>}
+              endAdornment={<Pressable accessibilityLabel="Сохранить владельца" accessibilityRole="button" disabled={isOwnerSaving || normalizeUsernameInput(ownerUsername).length < 3} onPress={() => void assignInformationPageOwner()} style={[styles.entityUsernameSaveButton, (isOwnerSaving || normalizeUsernameInput(ownerUsername).length < 3) && styles.disabledButton]}>{isOwnerSaving ? <LoadingIndicator tone="inverse" size="small" /> : <Save color="#fff" size={19} strokeWidth={2} />}</Pressable>}
               entityType="account"
               onChange={setOwnerUsername}
               placeholder="username владельца"
@@ -2080,7 +2175,7 @@ export function PublicPageScreen({
               <Text numberOfLines={1} style={styles.publicPageRadioMeta}>{displayedRadioMetadata.artist || 'Прямой эфир'}</Text>
             </View>
             <View pointerEvents="none" style={styles.publicPageRadioPlayButton}>
-              {isRadioLoading ? <ActivityIndicator color="#fff" size="small" /> : isRadioPlaying ? <Pause color="#fff" fill="#fff" size={18} /> : <Play color="#fff" fill="#fff" size={18} />}
+              {isRadioLoading ? <LoadingIndicator tone="inverse" size="small" /> : isRadioPlaying ? <Pause color="#fff" fill="#fff" size={18} /> : <Play color="#fff" fill="#fff" size={18} />}
             </View>
           </Pressable>
         ) : null}
@@ -2120,7 +2215,7 @@ export function PublicPageScreen({
                 onPress={() => void removeInformationPageOwner()}
                 style={[styles.informationPageRemoveOwnerButton, isOwnerSaving && styles.disabledButton]}
               >
-                {isOwnerSaving ? <ActivityIndicator color="#d93025" /> : <Text style={styles.informationPageRemoveOwnerText}>Удалить владельца</Text>}
+                {isOwnerSaving ? <LoadingIndicator tone="danger" /> : <Text style={styles.informationPageRemoveOwnerText}>Удалить владельца</Text>}
               </Pressable>
             </View>
             {adminCommunityActions}
@@ -2147,7 +2242,7 @@ export function PublicPageScreen({
               ]}
             >
               {isFollowSaving ? (
-                <ActivityIndicator color={isFollowButtonSecondary ? '#111' : '#fff'} />
+                <LoadingIndicator tone={isFollowButtonSecondary ? 'default' : 'inverse'} />
               ) : (
                 <Text style={[styles.publicPageFollowText, isFollowButtonSecondary && styles.publicPageFollowTextSecondary]}>
                   {followButtonLabel}
@@ -2204,7 +2299,7 @@ export function PublicPageScreen({
           targetKind="community"
         />
 
-        {visibleContentTabs.length ? <View style={styles.tabs}>
+        {visibleContentTabs.length ? <ContentTabIndicator count={visibleContentTabs.length} index={visibleContentTabs.findIndex(tab => tab.value === activeContentTab)} style={styles.tabs}>
           {visibleContentTabs.map((tab) => {
             const isActive = activeContentTab === tab.value;
             const Icon = tab.icon;
@@ -2226,11 +2321,11 @@ export function PublicPageScreen({
                     </View>
                   ) : null}
                 </View>
-                {isActive ? <View pointerEvents="none" style={styles.activeTabIndicator} /> : null}
+
               </Pressable>
             );
           })}
-        </View> : null}
+        </ContentTabIndicator> : null}
 
         {activeContentTab === 'events' ? (
           <View style={styles.publicPageTeamList}>
@@ -2239,11 +2334,11 @@ export function PublicPageScreen({
               <Text style={styles.sectionSlash}>/ </Text>
               Предстоящие события
             </Text>
-            {areEventsLoading && !communityEvents.length ? <ActivityIndicator color="#111" style={{ marginVertical: 24 }} /> : null}
+            {areEventsLoading && !communityEvents.length ? <LoadingIndicator style={{ marginVertical: 24 }} /> : null}
             {eventsError && !communityEvents.length ? <View style={styles.emptyProfileTab}><Text style={styles.emptyProfileTabTitle}>Не удалось загрузить события</Text><Text style={styles.emptyProfileTabText}>{eventsError}</Text><Pressable accessibilityRole="button" onPress={() => void loadCommunityEvents(true)} style={styles.postComposerTrigger}><Text style={styles.postComposerTriggerText}>Повторить</Text></Pressable></View> : null}
             {!areEventsLoading && !eventsError && !communityEvents.length ? <View style={styles.emptyProfileTab}><CalendarDays color="#111" size={28} strokeWidth={1.8} /><Text style={styles.emptyProfileTabTitle}>Событий пока нет</Text></View> : null}
             {communityEvents.map((event) => <EventCard compactList flushHorizontal key={event.id} event={event} onOpen={() => setSelectedEvent(event)} onOpenPublicPage={onOpenPublicPage} onSetParticipation={(status) => void updateEventParticipation(event, status).catch((error) => onNotify(error instanceof Error ? error.message : 'Не удалось обновить участие', 'error'))} />)}
-            {areEventsLoading && communityEvents.length ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null}
+            {areEventsLoading && communityEvents.length ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null}
           </View>
         ) : null}
 
@@ -2264,8 +2359,12 @@ export function PublicPageScreen({
             }}
           />
         ) : null}
-        {activeContentTab === 'team' && isTeamLoading && !teamMembers.length ? <ActivityIndicator color="#111" style={{ marginVertical: 24 }} /> : null}
-        {activeContentTab === 'team' && isTeamLoading && teamMembers.length ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null}
+
+        {activeContentTab === 'schedule' ? (
+          <RadioScheduleSection authToken={authToken} canManage={canManageSchedule} onNotify={onNotify} username={page.username} />
+        ) : null}
+        {activeContentTab === 'team' && isTeamLoading && !teamMembers.length ? <LoadingIndicator style={{ marginVertical: 24 }} /> : null}
+        {activeContentTab === 'team' && isTeamLoading && teamMembers.length ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null}
 
         {activeContentTab === 'partners' ? (
           <PublicPagePartnersSection
@@ -2284,8 +2383,8 @@ export function PublicPageScreen({
             partners={partners}
           />
         ) : null}
-        {activeContentTab === 'partners' && arePartnersLoading && !partners.length ? <ActivityIndicator color="#111" style={{ marginVertical: 24 }} /> : null}
-        {activeContentTab === 'partners' && arePartnersLoading && partners.length ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null}
+        {activeContentTab === 'partners' && arePartnersLoading && !partners.length ? <LoadingIndicator style={{ marginVertical: 24 }} /> : null}
+        {activeContentTab === 'partners' && arePartnersLoading && partners.length ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null}
 
         {activeContentTab === 'music' ? (
           <CommunityAudioReleasesSection
@@ -2297,8 +2396,8 @@ export function PublicPageScreen({
             releases={audioReleases}
           />
         ) : null}
-        {activeContentTab === 'music' && areAudioReleasesLoading && !audioReleases.length ? <ActivityIndicator color="#111" style={{ marginVertical: 24 }} /> : null}
-        {activeContentTab === 'music' && areAudioReleasesLoading && audioReleases.length ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null}
+        {activeContentTab === 'music' && areAudioReleasesLoading && !audioReleases.length ? <LoadingIndicator style={{ marginVertical: 24 }} /> : null}
+        {activeContentTab === 'music' && areAudioReleasesLoading && audioReleases.length ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null}
 
         {activeContentTab === 'products' ? (
           <PublicPageProductsSection
@@ -2309,7 +2408,7 @@ export function PublicPageScreen({
             pageUsername={page.username}
           />
         ) : null}
-        {activeContentTab === 'products' && areProductsLoading ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null}
+        {activeContentTab === 'products' && areProductsLoading ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null}
 
         {activeContentTab === 'feed' ? <PostFeed authToken={authToken} authorType="community" canCreate={canManagePublications} composerAuthor={{ avatarUrl: page.avatarUrl, isVerified: page.isVerified, name: page.name, username: page.username }} CropModal={AvatarCropModal} focusPostId={focusPostId} maxItems={visibleContentItemCount} onNotify={onNotify} onOpenPost={onOpenPost} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} username={page.username} /> : null}
 
@@ -2342,7 +2441,7 @@ export function PublicPageScreen({
       </AppSheetModal>
       <Modal animationType="slide" onRequestClose={() => setIsInformationFeedbackOpen(false)} visible={isInformationFeedbackOpen}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.editShell}>
-          <View style={styles.topBar}><View style={styles.topBarLeft}><Pressable accessibilityLabel="Назад" onPress={() => setIsInformationFeedbackOpen(false)} style={styles.topBarIconButton}><ChevronLeft color="#111" size={29} /></Pressable><Text style={styles.topBarTitle}>Обратная связь</Text></View></View>
+          <ScreenTopBar onBack={() => setIsInformationFeedbackOpen(false)} title="Обратная связь" />
           <ScrollView contentContainerStyle={[styles.editContent, styles.feedbackFormContent]} keyboardShouldPersistTaps="handled">
             <Text style={styles.feedbackFieldLabel}>Тип обращения</Text>
             <View style={styles.feedbackTypeSelectWrap}>
@@ -2358,7 +2457,7 @@ export function PublicPageScreen({
             </View> : null}
             <TextInput maxLength={2000} multiline onChangeText={setInformationFeedback} placeholder="Ваше сообщение" placeholderTextColor="#8e99a4" style={[styles.editInput, styles.editTextArea, styles.feedbackMessageInput]} textAlignVertical="top" value={informationFeedback} />
             <Text style={styles.feedbackCounter}>{informationFeedback.length}/2000</Text>
-            <Pressable disabled={isInformationFeedbackSending || informationFeedback.trim().length < 20} onPress={async () => { setIsInformationFeedbackSending(true); try { const response = await fetch(`${apiUrl}/public-pages/${encodeURIComponent(page.username)}/information-message`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ type: informationFeedbackType, message: informationFeedback.trim() }) }); if (!response.ok) throw new Error(await readApiError(response, 'Не удалось отправить сообщение')); setInformationFeedback(''); setIsInformationFeedbackType('CLAIM_COMMUNITY'); setIsInformationFeedbackOpen(false); onNotify('Сообщение отправлено администрации'); } catch (error) { onNotify(error instanceof Error ? error.message : 'Не удалось отправить сообщение', 'error'); } finally { setIsInformationFeedbackSending(false); } }} style={[styles.saveProfileButton, (isInformationFeedbackSending || informationFeedback.trim().length < 20) && styles.disabledButton]}>{isInformationFeedbackSending ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveProfileText}>Отправить</Text>}</Pressable>
+            <Pressable disabled={isInformationFeedbackSending || informationFeedback.trim().length < 20} onPress={async () => { setIsInformationFeedbackSending(true); try { const response = await fetch(`${apiUrl}/public-pages/${encodeURIComponent(page.username)}/information-message`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ type: informationFeedbackType, message: informationFeedback.trim() }) }); if (!response.ok) throw new Error(await readApiError(response, 'Не удалось отправить сообщение')); setInformationFeedback(''); setIsInformationFeedbackType('CLAIM_COMMUNITY'); setIsInformationFeedbackOpen(false); onNotify('Сообщение отправлено администрации'); } catch (error) { onNotify(error instanceof Error ? error.message : 'Не удалось отправить сообщение', 'error'); } finally { setIsInformationFeedbackSending(false); } }} style={[styles.saveProfileButton, (isInformationFeedbackSending || informationFeedback.trim().length < 20) && styles.disabledButton]}>{isInformationFeedbackSending ? <LoadingIndicator tone="inverse" /> : <Text style={styles.saveProfileText}>Отправить</Text>}</Pressable>
           </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
@@ -2368,7 +2467,7 @@ export function PublicPageScreen({
             <Pressable accessibilityRole="button" onPress={() => { setIsAudioReleaseModalOpen(false); setEditingAudioRelease(null); }} style={styles.communityAudioEditorCancel}><Text style={styles.communityAudioEditorCancelText}>Отмена</Text></Pressable>
             <View style={styles.communityAudioEditorHeaderSpacer} />
             <Pressable accessibilityRole="button" disabled={isAudioReleaseSaving || !audioReleasePreview || !audioReleaseGenres.length || audioReleaseGenres.length > audioReleaseGenreLimit || !audioReleaseGenres.every(isMusicSubgenreValue)} onPress={() => void saveAudioRelease()} style={[styles.communityAudioEditorSubmit, (isAudioReleaseSaving || !audioReleasePreview || !audioReleaseGenres.length || audioReleaseGenres.length > audioReleaseGenreLimit || !audioReleaseGenres.every(isMusicSubgenreValue)) && styles.disabledButton]}>
-              {isAudioReleaseSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.communityAudioEditorSubmitText}>{editingAudioRelease ? 'Сохранить' : 'Добавить'}</Text>}
+              {isAudioReleaseSaving ? <LoadingIndicator tone="inverse" size="small" /> : <Text style={styles.communityAudioEditorSubmitText}>{editingAudioRelease ? 'Сохранить' : 'Добавить'}</Text>}
             </Pressable>
           </View>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.communityAudioEditorKeyboard}>
@@ -2428,7 +2527,7 @@ export function PublicPageScreen({
                 {audioReleaseParticipants.length ? <View style={styles.communityAudioParticipantChips}>{audioReleaseParticipants.map((participant) => <View key={participant} style={styles.communityAudioParticipantChip}><Text numberOfLines={1} style={[styles.communityAudioParticipantChipText, participant.startsWith('@') && styles.communityAudioParticipantChipUsername]}>{participant}</Text><Pressable accessibilityLabel={`Удалить ${participant}`} onPress={() => setAudioReleaseParticipants((current) => current.filter((item) => item !== participant))}><X color="#6f7b86" size={16} /></Pressable></View>)}</View> : null}
                 <View style={styles.communityAudioParticipantInputRow}><TextInput autoCapitalize="none" autoCorrect={false} editable={audioReleaseParticipants.length < 5} maxLength={80} onChangeText={setAudioReleaseParticipantQuery} onSubmitEditing={() => { const value = audioReleaseParticipantQuery.trim(); if (!value || audioReleaseParticipants.some((item) => item.toLowerCase() === value.toLowerCase())) return; if (value.startsWith('@')) { onNotify('Выберите профиль из списка результатов', 'error'); return; } setAudioReleaseParticipants((current) => [...current, value].slice(0, 5)); setAudioReleaseParticipantQuery(''); setAudioReleaseParticipantSuggestions([]); }} placeholder="@username или имя участника" placeholderTextColor="#98a3ae" style={styles.communityAudioParticipantInput} value={audioReleaseParticipantQuery} /><Pressable accessibilityLabel="Добавить участника текстом" disabled={!audioReleaseParticipantQuery.trim() || audioReleaseParticipants.length >= 5} onPress={() => { const value = audioReleaseParticipantQuery.trim(); if (!value || audioReleaseParticipants.some((item) => item.toLowerCase() === value.toLowerCase())) return; if (value.startsWith('@')) { onNotify('Выберите профиль из списка результатов', 'error'); return; } setAudioReleaseParticipants((current) => [...current, value].slice(0, 5)); setAudioReleaseParticipantQuery(''); setAudioReleaseParticipantSuggestions([]); }} style={[styles.communityAudioParticipantAdd, (!audioReleaseParticipantQuery.trim() || audioReleaseParticipants.length >= 5) && styles.disabledButton]}><Plus color="#111" size={20} /></Pressable></View>
                 {audioReleaseParticipantQuery.trim().replace(/^@/, '').length > 0 && audioReleaseParticipantQuery.trim().replace(/^@/, '').length < 3 ? <Text style={styles.communityAudioParticipantSearchHint}>Поиск начнётся после ввода 3 символов</Text> : null}
-                {isAudioReleaseParticipantSearching ? <View style={styles.communityAudioParticipantSearchStatus}><ActivityIndicator color="#6f7b86" size="small" /><Text style={styles.communityAudioParticipantSearchStatusText}>Ищем профили и сообщества…</Text></View> : null}
+                {isAudioReleaseParticipantSearching ? <View style={styles.communityAudioParticipantSearchStatus}><LoadingIndicator size="small" /><Text style={styles.communityAudioParticipantSearchStatusText}>Ищем профили и сообщества…</Text></View> : null}
                 {audioReleaseParticipantSuggestions.length ? <View style={styles.communityAudioParticipantSuggestions}>{audioReleaseParticipantSuggestions.map((suggestion) => <Pressable accessibilityRole="button" key={`${suggestion.entityType}:${suggestion.id}`} onPress={() => { if (!suggestion.canSelect) { onNotify('Профиль не подписан на сообщество', 'error'); return; } setAudioReleaseParticipants((current) => [...current, `@${suggestion.username}`].slice(0, 5)); setAudioReleaseParticipantQuery(''); setAudioReleaseParticipantSuggestions([]); }} style={styles.entityUsernameSuggestionRow}>{suggestion.avatarUrl ? <Image source={{ uri: suggestion.avatarUrl }} style={styles.entityUsernameSuggestionAvatar} /> : <View style={styles.entityUsernameSuggestionAvatar}><Text style={styles.entityUsernameSuggestionAvatarText}>{getAvatarInitial(suggestion.name)}</Text></View>}<View style={styles.publicPageTeamCopy}><Text numberOfLines={1} style={styles.publicPageTeamName}>{suggestion.name}</Text><Text numberOfLines={1} style={styles.publicPageTeamUsername}>@{suggestion.username} · {suggestion.entityType === 'account' ? 'Профиль' : 'Сообщество'}</Text></View></Pressable>)}</View> : null}
                 {isAudioReleaseParticipantSearchSettled && !audioReleaseParticipantSuggestions.length ? <Text style={styles.communityAudioParticipantSearchHint}>Профили и сообщества не найдены</Text> : null}
               </View>
@@ -2450,7 +2549,8 @@ export function PublicPageScreen({
         selectedValue={audioReleaseDate}
         title="Дата релиза"
       />
-    </>
+      </View>
+    </View>
   );
 }
 
@@ -2544,6 +2644,7 @@ function CommunityAudioReleasesSection({
 export function PublicPageEditScreen({
   authToken,
   canEditUsername,
+  isGlobalAdmin,
   onAddPartnerPage,
   onAddTeamMember,
   onBack,
@@ -2557,6 +2658,7 @@ export function PublicPageEditScreen({
 }: {
   authToken: string;
   canEditUsername: boolean;
+  isGlobalAdmin: boolean;
   onAddPartnerPage: (data: PartnerPageInput) => Promise<void>;
   onAddTeamMember: (data: TeamMemberInput) => Promise<void>;
   onBack: () => void;
@@ -2592,19 +2694,27 @@ export function PublicPageEditScreen({
   const [isPhoneCodePickerOpen, setIsPhoneCodePickerOpen] = useState(false);
   const [phoneCodeSearch, setPhoneCodeSearch] = useState('');
   const [about, setAbout] = useState(page.about);
+  const initialTrackAvailableDuration = page.trackProvider === 'apple' || page.trackProvider === 'yandex'
+    ? page.trackPreviewDurationSeconds ?? 30
+    : page.trackDurationSeconds ?? page.trackPreviewDurationSeconds ?? 30;
   const [trackTitle, setTrackTitle] = useState(page.trackTitle ?? '');
   const [trackArtist, setTrackArtist] = useState(page.trackArtist ?? '');
   const [trackArtworkUrl, setTrackArtworkUrl] = useState(page.trackArtworkUrl ?? '');
   const [trackPreviewUrl, setTrackPreviewUrl] = useState(page.trackPreviewUrl ?? '');
   const [trackExternalUrl, setTrackExternalUrl] = useState(page.trackExternalUrl ?? '');
   const [trackProvider, setTrackProvider] = useState(page.trackProvider ?? '');
-  const [trackStartSeconds, setTrackStartSeconds] = useState(page.trackStartSeconds ?? 0);
+  const [trackStartSeconds, setTrackStartSeconds] = useState(() => clampPrimaryTrackStartSeconds(
+    page.trackStartSeconds ?? 0,
+    page.trackClipDurationSeconds ?? 30,
+    initialTrackAvailableDuration,
+  ));
   const [trackClipDurationSeconds, setTrackClipDurationSeconds] = useState(page.trackClipDurationSeconds ?? 30);
   const [trackDurationSeconds, setTrackDurationSeconds] = useState<number | null>(page.trackDurationSeconds ?? null);
   const [trackPreviewDurationSeconds, setTrackPreviewDurationSeconds] = useState(page.trackPreviewDurationSeconds ?? 30);
   const [bandcampUrl, setBandcampUrl] = useState(page.bandcampUrl ?? ''); const [soundcloudUrl, setSoundcloudUrl] = useState(page.soundcloudUrl ?? '');
   const [instagramUrl, setInstagramUrl] = useState(page.instagramUrl ?? '');
   const [threadsUrl, setThreadsUrl] = useState(page.threadsUrl ?? ''); const [telegramUrl, setTelegramUrl] = useState(page.telegramUrl ?? '');
+  const [eventDiscoveryEnabled, setEventDiscoveryEnabled] = useState(page.eventDiscoveryEnabled ?? false);
   const [youtubeUrl, setYoutubeUrl] = useState(page.youtubeUrl ?? '');
   const [letterboxdUrl, setLetterboxdUrl] = useState(page.letterboxdUrl ?? '');
   const [connectEnabled, setConnectEnabled] = useState(page.isVerified ? page.connectEnabled ?? false : false);
@@ -2632,11 +2742,8 @@ export function PublicPageEditScreen({
   const [isTypePickerOpen, setIsTypePickerOpen] = useState(false);
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [countrySearch, setCountrySearch] = useState('');
-  const [autoSaveStatus, setAutoSaveStatus] = useState<'saved' | 'saving' | 'pending' | 'error'>('saved');
   const [verificationRequestStatus, setVerificationRequestStatus] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | null>(page.isVerified ? 'APPROVED' : null);
   const [isVerificationRequestLoading, setIsVerificationRequestLoading] = useState(false);
-  const didInitializeAutoSave = useRef(false);
-  const autoSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const filteredCountries = useMemo(() => {
     const normalizedSearch = countrySearch.trim().toLowerCase();
 
@@ -2865,67 +2972,57 @@ export function PublicPageEditScreen({
     setConnectImageCrop({ asset: { uri: asset.uri, width: asset.width || 1200, height: asset.height || 1200, mimeType: asset.mimeType || 'image/jpeg' }, index });
   };
 
-  const submit = async () => {
+  const submit = async (): Promise<boolean> => {
     const normalizedUsername = username.replace(/^@/, '').trim().toLowerCase();
 
     if (!/^[a-z0-9_]{3,30}$/.test(normalizedUsername)) {
       onNotify('URL-name: 3-30 символов, латиница, цифры и _', 'error');
-      return;
+      return false;
     }
 
     if (name.trim().length < 2) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
 
     if (!type) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
     if (type === 'RADIO_STATION' && radioStreamUrl.trim() && radioStreamState !== 'valid') {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
     if (type === 'MUSIC_LABEL' && musicLabelName.trim() && musicLabelState !== 'valid') {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
 
     const phoneDigits = normalizePhoneDigits(`${phoneCode}${contactPhone}`);
     if (contactPhone && phoneDigits.length < 7) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
 
     if (connectEnabled && !cityId) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
 
     if (connectEnabled && !connectGoals.length) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
     if (connectEnabled && !connectImageUrl) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
     const social = normalizeCommunitySocialLinks({ bandcamp: bandcampUrl, soundcloud: soundcloudUrl, instagram: instagramUrl, threads: threadsUrl, telegram: telegramUrl, youtube: youtubeUrl, letterboxd: letterboxdUrl });
-    if (social.error) { setAutoSaveStatus('pending'); return; }
-    const website = normalizeCommunityWebsite(websiteUrl); if (website.error) { setAutoSaveStatus('pending'); return; }
-
-    setAutoSaveStatus('saving');
+    if (social.error) { return false; }
+    const website = normalizeCommunityWebsite(websiteUrl); if (website.error) { return false; }
 
     try {
       let savedAvatarUrl = avatarUrl;
       let savedAvatarKey = avatarKey;
-      let avatarChanged = false;
+      let avatarChanged = savedAvatarUrl !== page.avatarUrl || savedAvatarKey !== (page.avatarKey ?? null);
       if (avatarUrl && !/^https?:\/\//i.test(avatarUrl)) {
         const uploaded = await uploadAvatarAsset(avatarUrl, authToken, 'community', page.username);
         savedAvatarUrl = uploaded.avatarUrl;
         savedAvatarKey = uploaded.avatarKey;
-        setAvatarUrl(savedAvatarUrl);
-        setAvatarKey(savedAvatarKey);
+        setAvatarUrl(current => current === avatarUrl ? savedAvatarUrl : current);
+        setAvatarKey(current => current === avatarKey ? savedAvatarKey : current);
         avatarChanged = true;
       }
       const savedConnectPhotos: ConnectPhoto[] = [];
@@ -2937,7 +3034,7 @@ export function PublicPageEditScreen({
           didUploadConnectPhoto = true;
         }
       }
-      if (didUploadConnectPhoto) setConnectPhotos(savedConnectPhotos);
+      if (didUploadConnectPhoto) setConnectPhotos(current => current === connectPhotos ? savedConnectPhotos : current);
       await onSave({
         username: normalizedUsername,
         name: name.trim(),
@@ -2959,12 +3056,19 @@ export function PublicPageEditScreen({
         trackPreviewUrl: trackPreviewUrl.trim() || null,
         trackExternalUrl: trackExternalUrl.trim() || null,
         trackProvider: trackProvider.trim() || null,
-        trackStartSeconds: Math.round(Number(trackStartSeconds) * 100) / 100,
+        trackStartSeconds: clampPrimaryTrackStartSeconds(
+          trackStartSeconds,
+          trackClipDurationSeconds,
+          primaryTrackStartSelectionDuration,
+        ),
         trackClipDurationSeconds: Math.round(Number(trackClipDurationSeconds) * 100) / 100,
         trackDurationSeconds: trackDurationSeconds == null ? null : Math.round(Number(trackDurationSeconds) * 100) / 100,
         trackPreviewDurationSeconds: Math.round(Number(trackPreviewDurationSeconds) * 100) / 100,
         about: about.trim(),
         ...social.links,
+        ...(isGlobalAdmin && page.ownerId === null ? {
+          eventDiscoveryEnabled: Boolean(social.links.telegramUrl || social.links.instagramUrl) && eventDiscoveryEnabled,
+        } : {}),
         ...(avatarChanged ? { avatarUrl: savedAvatarUrl, avatarKey: savedAvatarKey } : {}),
         isPrivate,
         connectEnabled,
@@ -2972,10 +3076,10 @@ export function PublicPageEditScreen({
         connectPhotos: savedConnectPhotos,
         connectAbout,
       }, { silent: true });
-      setAutoSaveStatus('saved');
+      return true;
     } catch (error) {
-      setAutoSaveStatus('error');
       onNotify(error instanceof Error ? error.message : 'Не удалось сохранить сообщество', 'error');
+      throw error;
     }
   };
 
@@ -3010,40 +3114,25 @@ export function PublicPageEditScreen({
     );
   }, [labelledReleasesCount, removeReleaseLabel]);
 
-  useEffect(() => {
-    if (!didInitializeAutoSave.current) {
-      didInitializeAutoSave.current = true;
-      return;
-    }
-
-    setAutoSaveStatus('pending');
-    const timeout = setTimeout(() => {
-      autoSaveQueue.current = autoSaveQueue.current
-        .catch(() => undefined)
-        .then(submit);
-    }, 800);
-    return () => clearTimeout(timeout);
-  }, [
+  const { status: autoSaveStatus } = useEditorAutosave({
+    scopeKey: authToken + ':' + page.id,
+    draftKey: JSON.stringify([
     about, address, avatarKey, avatarUrl, bandcampUrl, cityId, cityName, connectEnabled,
     connectAbout, connectGoals, connectPhotos, contactPhone, countryCode, countryName,
-    instagramUrl, isPrivate, letterboxdUrl, musicLabelGenres, musicLabelName, musicLabelState, name, phoneCode,
-    radioStreamState, radioStreamUrl, soundcloudUrl, telegramUrl,
+    instagramUrl, isPrivate, letterboxdUrl, musicLabelGenres, musicLabelName, name, phoneCode,
+    eventDiscoveryEnabled, isGlobalAdmin, radioStreamUrl, soundcloudUrl, telegramUrl,
     selectedLocationCategories, threadsUrl, trackArtist, trackArtworkUrl, trackClipDurationSeconds,
     trackDurationSeconds, trackExternalUrl, trackPreviewDurationSeconds, trackPreviewUrl, trackProvider,
     trackStartSeconds, trackTitle, type, username, websiteUrl, youtubeUrl,
-  ]);
+    ]),
+    readinessKey: JSON.stringify([radioStreamState, musicLabelState]),
+    save: submit,
+    onInvalid: () => onNotify('Изменения не сохранены. Проверьте заполненные поля и повторите выход.', 'error'),
+  });
 
   return (
     <>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable onPress={onBack} style={styles.topBarIconButton}>
-            <ChevronLeft size={29} color="#090909" strokeWidth={2.1} />
-          </Pressable>
-          <Text style={styles.topBarTitle}>Редактировать</Text>
-        </View>
-        <EditorAutosaveStatus status={autoSaveStatus} />
-      </View>
+      <ScreenTopBar onBack={onBack} title="Редактировать" trailingAction={<><EditorAutosaveStatus status={autoSaveStatus} /></>} />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.editShell}>
         <ScrollView contentContainerStyle={[styles.editContent, styles.publicPageEditContent]} showsVerticalScrollIndicator={false}>
@@ -3106,7 +3195,7 @@ export function PublicPageEditScreen({
                 onPress={confirmRemoveReleaseLabel}
                 style={styles.communityTypeUnlockButton}
               >
-                {isRemovingReleaseLabel ? <ActivityIndicator color="#c62828" size="small" /> : <Text style={styles.communityTypeUnlockButtonText}>Удалить лейбл</Text>}
+                {isRemovingReleaseLabel ? <LoadingIndicator tone="danger" size="small" /> : <Text style={styles.communityTypeUnlockButtonText}>Удалить лейбл</Text>}
               </Pressable>
             </View>
           ) : null}
@@ -3155,7 +3244,7 @@ export function PublicPageEditScreen({
                   style={styles.communityTypeMetadataInput}
                   value={radioStreamUrl}
                 />
-                {radioStreamState === 'checking' ? <ActivityIndicator color="#6f7b86" size="small" /> : null}
+                {radioStreamState === 'checking' ? <LoadingIndicator size="small" /> : null}
                 {radioStreamState === 'valid' ? <Check accessibilityLabel="Аудиопоток работает" color="#2fa84f" size={20} strokeWidth={2.4} /> : null}
                 {radioStreamState === 'invalid' ? <X accessibilityLabel="Аудиопоток недоступен" color="#c62828" size={19} strokeWidth={2.4} /> : null}
               </View>
@@ -3261,11 +3350,46 @@ export function PublicPageEditScreen({
           <Text style={styles.editSectionTitle}>Ссылки</Text>
           <SocialLinkInput kind="bandcamp" onChangeText={setBandcampUrl} placeholder="Bandcamp" value={bandcampUrl} />
           <SocialLinkInput kind="soundcloud" onChangeText={setSoundcloudUrl} placeholder="SoundCloud" value={soundcloudUrl} />
-          <SocialLinkInput kind="instagram" onChangeText={setInstagramUrl} placeholder="Instagram" value={instagramUrl} />
+          <SocialLinkInput
+            kind="instagram"
+            onChangeText={(value) => {
+              setInstagramUrl(value);
+              if (!value.trim() && !telegramUrl.trim()) setEventDiscoveryEnabled(false);
+            }}
+            placeholder="Instagram"
+            value={instagramUrl}
+          />
           <SocialLinkInput kind="threads" onChangeText={setThreadsUrl} placeholder="Threads" value={threadsUrl} />
-          <SocialLinkInput kind="telegram" onChangeText={setTelegramUrl} placeholder="Telegram" value={telegramUrl} />
+          <SocialLinkInput
+            kind="telegram"
+            onChangeText={(value) => {
+              setTelegramUrl(value);
+              if (!value.trim() && !instagramUrl.trim()) setEventDiscoveryEnabled(false);
+            }}
+            placeholder="Telegram"
+            value={telegramUrl}
+          />
           <SocialLinkInput kind="youtube" onChangeText={setYoutubeUrl} placeholder="YouTube" value={youtubeUrl} />
           <SocialLinkInput kind="letterboxd" onChangeText={setLetterboxdUrl} placeholder="Letterboxd" value={letterboxdUrl} />
+          {isGlobalAdmin && page.ownerId === null && (telegramUrl.trim() || instagramUrl.trim()) ? (
+            <View style={styles.connectOptInBlock}>
+              <View style={styles.connectOptInCopy}>
+                <Text style={styles.settingsLabel}>Проверять соцсети на мероприятия</Text>
+                <Text style={styles.settingsHint}>
+                  {telegramUrl.trim() && instagramUrl.trim()
+                    ? 'Раз в сутки VOLNA анализирует публикации указанных Telegram-канала и Instagram и ищет анонсы мероприятий.'
+                    : telegramUrl.trim()
+                      ? 'Раз в сутки VOLNA анализирует публикации указанного Telegram-канала и ищет в них анонсы мероприятий.'
+                      : 'Раз в сутки VOLNA анализирует публикации указанного Instagram и ищет анонсы мероприятий.'}
+                </Text>
+              </View>
+              <VolnaSwitch
+                accessibilityLabel="Проверять соцсети на мероприятия"
+                onValueChange={setEventDiscoveryEnabled}
+                value={eventDiscoveryEnabled}
+              />
+            </View>
+          ) : null}
 
           {!page.isVerified && page.ownerId ? <>
             <Text style={styles.editSectionTitle}>Подтверждённый профиль</Text>
@@ -3286,7 +3410,7 @@ export function PublicPageEditScreen({
                 ]}
               >
                 {isVerificationRequestLoading
-                  ? <ActivityIndicator color="#fff" size="small" />
+                  ? <LoadingIndicator tone="inverse" size="small" />
                   : <Text style={styles.profileVerificationRequestButtonText}>
                     {verificationRequestStatus === 'PENDING' ? 'Заявка на рассмотрении' : 'Подать заявку'}
                   </Text>}
@@ -3430,109 +3554,6 @@ export function PublicPageEditScreen({
   );
 }
 
-function EntityUsernameLookup({
-  allowFreeText = false,
-  endAdornment,
-  entityType,
-  isMuted = false,
-  maxLength,
-  onChange,
-  placeholder,
-  searchEndpoint,
-  value,
-}: {
-  allowFreeText?: boolean;
-  endAdornment?: ReactNode;
-  entityType: 'account' | 'community';
-  isMuted?: boolean;
-  maxLength?: number;
-  onChange: (value: string) => void;
-  placeholder: string;
-  searchEndpoint?: string;
-  value: string;
-}) {
-  const [suggestions, setSuggestions] = useState<Array<{ id: string; name: string; username: string; avatarUrl: string | null }>>([]);
-  const [isSelectionCommitted, setIsSelectionCommitted] = useState(false);
-
-  useEffect(() => {
-    const query = allowFreeText
-      ? value.trim().replace(/^@/, '')
-      : normalizeUsernameInput(value);
-    if (query.length < 3 || isSelectionCommitted) {
-      setSuggestions([]);
-      return;
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      const endpoint = searchEndpoint || `/${entityType === 'account' ? 'profiles' : 'public-pages'}`;
-      void fetch(`${apiUrl}${endpoint}?q=${encodeURIComponent(query)}&pageSize=6`, { signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok) throw new Error('lookup failed');
-          const payload = await response.json() as CursorPage<PublicAccount | PublicPage> | Array<PublicAccount | PublicPage>;
-          const items = Array.isArray(payload) ? payload : payload.items;
-          setSuggestions(items.map((item) => ({ id: item.id, name: item.name, username: item.username, avatarUrl: item.avatarUrl })));
-        })
-        .catch((error: unknown) => {
-          if (!(error instanceof Error) || error.name !== 'AbortError') setSuggestions([]);
-        });
-    }, remoteSearchDebounceMs);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [allowFreeText, entityType, isSelectionCommitted, searchEndpoint, value]);
-
-  return (
-    <View>
-      <View style={[styles.entityUsernameField, isMuted && styles.entityUsernameFieldMuted]}>
-        {!allowFreeText ? <Text style={styles.entityUsernamePrefix}>@</Text> : null}
-        <TextInput
-          autoCapitalize={allowFreeText ? 'words' : 'none'}
-          autoCorrect={false}
-          maxLength={maxLength}
-          onChangeText={(nextValue) => {
-            setIsSelectionCommitted(false);
-            onChange(allowFreeText ? nextValue : normalizeUsernameInput(nextValue));
-          }}
-          placeholder={placeholder}
-          placeholderTextColor="#98a3ae"
-          style={styles.entityUsernameInput}
-          value={value}
-        />
-        {endAdornment}
-      </View>
-      {suggestions.length ? (
-        <View style={styles.entityUsernameSuggestions}>
-          {suggestions.map((suggestion) => (
-            <Pressable
-              key={suggestion.id}
-              onPress={() => {
-                setIsSelectionCommitted(true);
-                setSuggestions([]);
-                onChange(allowFreeText ? `@${suggestion.username}` : suggestion.username);
-              }}
-              style={styles.entityUsernameSuggestionRow}
-            >
-              {suggestion.avatarUrl ? (
-                <Image resizeMode="cover" source={{ uri: suggestion.avatarUrl }} style={styles.entityUsernameSuggestionAvatar} />
-              ) : (
-                <View style={styles.entityUsernameSuggestionAvatar}>
-                  <Text style={styles.entityUsernameSuggestionAvatarText}>{getAvatarInitial(suggestion.name)}</Text>
-                </View>
-              )}
-              <View style={styles.publicPageTeamCopy}>
-                <Text numberOfLines={1} style={styles.publicPageTeamName}>{suggestion.name}</Text>
-                <Text numberOfLines={1} style={styles.publicPageTeamUsername}>@{suggestion.username}</Text>
-              </View>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
-    </View>
-  );
-}
 
 function CommunityAdministrationSection({
   authToken,
@@ -3551,6 +3572,7 @@ function CommunityAdministrationSection({
 }) {
   const [administrators, setAdministrators] = useState(initialAdministrators);
   const [username, setUsername] = useState('');
+  const [selectedUsername, setSelectedUsername] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [selectedPermissions, setSelectedPermissions] = useState<PublicPagePermission[]>([]);
   const isEditing = administrators.some((item) => item.account.username === username.replace(/^@/, '').trim().toLowerCase());
@@ -3559,6 +3581,7 @@ function CommunityAdministrationSection({
 
   const reset = () => {
     setUsername('');
+    setSelectedUsername(null);
     setSelectedPermissions([]);
   };
 
@@ -3570,7 +3593,7 @@ function CommunityAdministrationSection({
 
   const add = async () => {
     const normalized = username.replace(/^@/, '').trim().toLowerCase();
-    if (!normalized) return onNotify('Укажите username подписчика', 'error');
+    if (!selectedUsername || normalized !== selectedUsername) return onNotify('Выберите подписчика из списка', 'error');
     if (!selectedPermissions.length) return onNotify('Выберите хотя бы одно право доступа', 'error');
     setIsSaving(true);
     try {
@@ -3586,7 +3609,8 @@ function CommunityAdministrationSection({
 
   return <View style={[styles.publicPageTeamEditor, styles.communityAdministrationCard]}>
     <Text style={[styles.settingsHint, styles.communityAdministrationDescription]}>Добавьте подписчика и отметьте только те разделы, к которым ему нужен доступ. Владелец, @url, удаление сообщества и журнал действий не делегируются.</Text>
-    <EntityUsernameLookup entityType="account" isMuted onChange={setUsername} placeholder="username подписчика" searchEndpoint={`/public-pages/${pageUsername}/followers`} value={username} />
+    <EntityUsernameLookup entityType="account" isMuted disabled={isSaving} onChange={value => { setUsername(value); setSelectedUsername(null); setSelectedPermissions([]); }} onSelect={account => { setSelectedUsername(account.username); setSelectedPermissions(administrators.find(item => item.account.id === account.id)?.permissions.filter(permission => grantablePermissions.includes(permission)) ?? []); }} placeholder="username подписчика" searchEndpoint={`/public-pages/${pageUsername}/followers`} value={username} />
+    {selectedUsername === username && selectedUsername ? <>
     <View style={styles.communityPermissionGroups}>
       {publicPagePermissionGroups.map((group) => {
         const visiblePermissions = group.permissions.filter((permission) => grantablePermissions.includes(permission.value));
@@ -3616,9 +3640,10 @@ function CommunityAdministrationSection({
     </View>
     <View style={styles.communityPermissionFormActions}>
       {username || selectedPermissions.length ? <Pressable accessibilityRole="button" onPress={reset} style={styles.communityPermissionResetButton}><Text style={styles.communityPermissionResetText}>Сбросить</Text></Pressable> : null}
-      <Pressable disabled={isSaving} onPress={() => void add()} style={[styles.publicPageTeamAddButton, styles.communityPermissionSaveButton, isSaving && styles.disabledButton]}>{isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.publicPageTeamAddText}>{isEditing ? 'Сохранить права' : 'Добавить'}</Text>}</Pressable>
+      <Pressable disabled={isSaving} onPress={() => void add()} style={[styles.publicPageTeamAddButton, styles.communityPermissionSaveButton, isSaving && styles.disabledButton]}>{isSaving ? <LoadingIndicator tone="inverse" /> : <Text style={styles.publicPageTeamAddText}>{isEditing ? 'Сохранить права' : 'Добавить'}</Text>}</Pressable>
     </View>
-    {administrators.map((item) => <View key={item.id} style={styles.publicPageTeamRow}>{item.account.avatarUrl ? <Image source={{ uri: item.account.avatarUrl }} style={styles.publicPageTeamAvatar} /> : <View style={styles.publicPageTeamAvatar}><Text style={styles.publicPageTeamAvatarText}>{getAvatarInitial(item.account.name)}</Text></View>}<View style={styles.publicPageTeamCopy}><Text style={styles.publicPageTeamName}>{item.account.name}</Text><Text style={styles.publicPageTeamUsername}>@{item.account.username}</Text><Text style={styles.communityAccessRoleLabel}>{item.permissions.length} {russianPlural(item.permissions.length, 'право', 'права', 'прав')}</Text></View><View style={styles.communityAdministratorActions}><Pressable accessibilityLabel="Настроить права" onPress={() => { setUsername(item.account.username); setSelectedPermissions(item.permissions.filter((permission) => grantablePermissions.includes(permission))); }} style={styles.publicPageTeamRemove}><Pencil color="#6f7b86" size={18} /></Pressable><Pressable accessibilityLabel="Убрать доступ" onPress={async () => { const response = await fetch(`${apiUrl}/public-pages/${pageUsername}/administrators/${item.account.username}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } }); if (response.ok) { setAdministrators((current) => current.filter((admin) => admin.id !== item.id)); if (username === item.account.username) reset(); await onChanged?.(); } else onNotify(await readApiError(response, 'Не удалось убрать доступ'), 'error'); }} style={styles.publicPageTeamRemove}><X color="#6f7b86" size={20} /></Pressable></View></View>)}
+    </> : null}
+    {administrators.map((item) => <View key={item.id} style={styles.publicPageTeamRow}>{item.account.avatarUrl ? <Image source={{ uri: item.account.avatarUrl }} style={styles.publicPageTeamAvatar} /> : <View style={styles.publicPageTeamAvatar}><Text style={styles.publicPageTeamAvatarText}>{getAvatarInitial(item.account.name)}</Text></View>}<View style={styles.publicPageTeamCopy}><Text style={styles.publicPageTeamName}>{item.account.name}</Text><Text style={styles.publicPageTeamUsername}>@{item.account.username}</Text><Text style={styles.communityAccessRoleLabel}>{item.permissions.length} {russianPlural(item.permissions.length, 'право', 'права', 'прав')}</Text></View><View style={styles.communityAdministratorActions}><Pressable accessibilityLabel="Настроить права" onPress={() => { setUsername(item.account.username); setSelectedUsername(item.account.username); setSelectedPermissions(item.permissions.filter((permission) => grantablePermissions.includes(permission))); }} style={styles.publicPageTeamRemove}><Pencil color="#6f7b86" size={18} /></Pressable><Pressable accessibilityLabel="Убрать доступ" onPress={async () => { const response = await fetch(`${apiUrl}/public-pages/${pageUsername}/administrators/${item.account.username}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } }); if (response.ok) { setAdministrators((current) => current.filter((admin) => admin.id !== item.id)); if (username === item.account.username) reset(); await onChanged?.(); } else onNotify(await readApiError(response, 'Не удалось убрать доступ'), 'error'); }} style={styles.publicPageTeamRemove}><X color="#6f7b86" size={20} /></Pressable></View></View>)}
   </View>;
 }
 
@@ -3772,7 +3797,7 @@ function PublicPageProductsSection({
           <TextInput maxLength={600} multiline onChangeText={setDescription} placeholder="Описание" placeholderTextColor="#8e99a4" style={[styles.publicPageTeamInput, styles.publicPageProductDescriptionInput]} textAlignVertical="top" value={description} />
           <TextInput autoCapitalize="none" autoCorrect={false} keyboardType="url" maxLength={2_000} onChangeText={setOrderUrl} placeholder="Ссылка для заказа (необязательно)" placeholderTextColor="#8e99a4" style={styles.publicPageTeamInput} value={orderUrl} />
           <Pressable disabled={isSaving} onPress={() => void submit()} style={[styles.publicPageTeamAddButton, isSaving && styles.disabledButton]}>
-            {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.publicPageTeamAddText}>Добавить</Text>}
+            {isSaving ? <LoadingIndicator tone="inverse" /> : <Text style={styles.publicPageTeamAddText}>Добавить</Text>}
           </Pressable>
         </View>
       ) : null}
@@ -3863,7 +3888,7 @@ function PublicPagePartnersSection({
             value={value}
           />
           <Pressable disabled={isSaving} onPress={submit} style={[styles.publicPageTeamAddButton, isSaving && styles.disabledButton]}>
-            {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.publicPageTeamAddText}>Добавить</Text>}
+            {isSaving ? <LoadingIndicator tone="inverse" /> : <Text style={styles.publicPageTeamAddText}>Добавить</Text>}
           </Pressable>
         </View>
       ) : null}
@@ -3969,7 +3994,7 @@ function PublicPageTeamSection({
           </View>
           <Pressable disabled={isSaving} onPress={submit} style={[styles.publicPageTeamAddButton, isSaving && styles.disabledButton]}>
             {isSaving ? (
-              <ActivityIndicator color="#fff" />
+              <LoadingIndicator tone="inverse" />
             ) : (
               <Text style={styles.publicPageTeamAddText}>Добавить</Text>
             )}
@@ -4032,7 +4057,7 @@ function PublicPageTeamSection({
   );
 }
 
-function ConnectAccountGridCard({
+export function ConnectAccountGridCard({
   account,
   onPress,
   showCommittedLike = false,
@@ -4046,7 +4071,7 @@ function ConnectAccountGridCard({
   const connectImageUrl = account.connectPhotos[0]?.imageUrl ?? account.avatarUrl;
   const compactImageUrl = connectPhotoThumbnail(connectImageUrl) ?? connectImageUrl;
   return (
-    <Pressable accessibilityLabel={`Посмотреть фотографии ${account.name}`} onPress={onPress} style={styles.connectGridCard}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Посмотреть фотографии ${account.name}`} onPress={onPress} style={styles.connectGridCard}>
       <View style={styles.connectGridAvatar}>
         <View style={styles.connectGridPhoto}>
           {compactImageUrl ? (
@@ -4074,7 +4099,7 @@ function ConnectAccountGridCard({
         </View>
         {showCommittedLike ? (
           <View pointerEvents="none" style={styles.connectGridCommittedLike}>
-            <Heart color="#fff" fill="#ff3b5c" size={21} strokeWidth={2} />
+            <ConnectLikeIcon liked size={21} />
           </View>
         ) : null}
       </View>
@@ -4082,7 +4107,7 @@ function ConnectAccountGridCard({
   );
 }
 
-function ConnectCommunityGridCard({
+export function ConnectCommunityGridCard({
   page,
   onPress,
 }: {
@@ -4094,7 +4119,7 @@ function ConnectCommunityGridCard({
   const connectImageUrl = page.connectPhotos?.[0]?.imageUrl ?? page.connectImageUrl ?? page.avatarUrl;
   const compactImageUrl = connectPhotoThumbnail(connectImageUrl) ?? connectImageUrl;
   return (
-    <Pressable accessibilityLabel={`Открыть сообщество ${page.name}`} onPress={onPress} style={styles.connectGridCard}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Открыть сообщество ${page.name}`} onPress={onPress} style={styles.connectGridCard}>
       <View style={styles.connectGridAvatar}>
         <View style={styles.connectGridPhoto}>
           {compactImageUrl ? (
@@ -4134,8 +4159,10 @@ function formatConnectLocationLabel(cityLabel: string, distanceKm?: number | nul
 
 export function CommunityScreen({
   connectEnabled,
+  ownAccountId,
   onCheckProfileReport,
   onNotify,
+  onOpenChat,
   onOpenEditProfile,
   onOpenMenu,
   onOpenMessages,
@@ -4146,8 +4173,10 @@ export function CommunityScreen({
   ownUsername,
 }: {
   connectEnabled: boolean;
+  ownAccountId: string;
   onCheckProfileReport: (username: string) => Promise<boolean>;
   onNotify: (message: string, type?: ToastMessage['type']) => void;
+  onOpenChat: (username: string) => Promise<void>;
   onOpenEditProfile: () => void;
   onOpenMenu: () => void;
   onOpenMessages: () => void;
@@ -4187,7 +4216,6 @@ export function CommunityScreen({
   const [isMatchesLoading, setIsMatchesLoading] = useState(false);
   const [isMatchesLoadingMore, setIsMatchesLoadingMore] = useState(false);
   const committingConnectLikesRef = useRef(new Set<string>());
-  const lastConnectLocationSyncRef = useRef(0);
   const activeFilterCount = areConnectPreferencesLoaded
     ? activeConnectFilterCount({
       ageRange,
@@ -4315,24 +4343,8 @@ export function CommunityScreen({
   ]);
 
   const syncConnectLocation = useCallback(async () => {
-    if (Date.now() - lastConnectLocationSyncRef.current < 5 * 60 * 1_000) return;
-    try {
-      const permission = await Location.getForegroundPermissionsAsync();
-      if (!permission.granted) return;
-      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const response = await fetch(`${apiUrl}/profiles/connect-location`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        }),
-      });
-      if (response.ok) lastConnectLocationSyncRef.current = Date.now();
-    } catch {
-      // Ranking safely falls back to the profile city when location is unavailable.
-    }
-  }, []);
+    await connectLocationSync.refresh(ownAccountId);
+  }, [ownAccountId]);
 
   const loadMatches = useCallback(async (reset = true) => {
     if (!connectEnabled || (!reset && !matchesNextCursor)) return;
@@ -4537,9 +4549,10 @@ export function CommunityScreen({
     );
   }
 
+  const backFromMatches = () => setIsMatchesOpen(false);
   const matchesGrid = (
-    <>
-      <CatalogInnerHeader backLabel="Назад в Коннект" onBack={() => setIsMatchesOpen(false)} title="Совпадения" />
+    <CatalogBackArea routeKey="connect:matches" enabled={!selectedConnectAccount} onBack={backFromMatches}>
+      <CatalogInnerHeader backLabel="Назад в Коннект" onBack={backFromMatches} title="Совпадения" />
       <FlashList
         data={matches}
         numColumns={2}
@@ -4549,12 +4562,12 @@ export function CommunityScreen({
         onEndReachedThreshold={0.4}
         renderItem={({ item }) => <ConnectAccountGridCard account={item} onPress={() => setSelectedConnectAccount(item)} showCommittedLike />}
         ListEmptyComponent={isMatchesLoading
-          ? <View style={styles.loadingRow}><ActivityIndicator color="#111" /></View>
+          ? <View style={styles.loadingRow}><LoadingIndicator /></View>
           : <View style={styles.emptyProfileTab}><Text style={styles.emptyProfileTabTitle}>Здесь пока ничего нет</Text></View>}
-        ListFooterComponent={isMatchesLoadingMore ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null}
+        ListFooterComponent={isMatchesLoadingMore ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null}
         showsVerticalScrollIndicator={false}
       />
-    </>
+    </CatalogBackArea>
   );
 
   return (
@@ -4580,7 +4593,7 @@ export function CommunityScreen({
                   <ChevronRight color="#6f7b86" size={18} strokeWidth={1.8} />
                 </Pressable>
               </View>
-              {isMatchesLoading && !matches.length ? <ActivityIndicator color="#6f7b86" style={styles.connectMatchesLoader} /> : matches.length ? (
+              {isMatchesLoading && !matches.length ? <LoadingIndicator style={styles.connectMatchesLoader} /> : matches.length ? (
                   <ScrollView horizontal contentContainerStyle={styles.connectMatchesList} showsHorizontalScrollIndicator={false}>
                     {matches.map((account) => {
                       const imageUrl = account.connectPhotos[0]?.imageUrl ?? account.avatarUrl;
@@ -4623,7 +4636,7 @@ export function CommunityScreen({
                 style={[styles.connectFilterButton, styles.connectFilterActionButton]}
               >
                 {isOwnProfileLoading
-                  ? <ActivityIndicator color="#111" size="small" />
+                  ? <LoadingIndicator size="small" />
                   : <UserRound color="#111" size={19} strokeWidth={1.9} />}
                 <Text style={styles.connectFilterButtonText}>Мой профиль</Text>
               </Pressable>
@@ -4633,7 +4646,7 @@ export function CommunityScreen({
         ListEmptyComponent={
           isInitialLoading ? (
             <View style={styles.loadingRow}>
-              <ActivityIndicator color="#111" />
+              <LoadingIndicator />
             </View>
           ) : loadError ? (
             <View style={styles.emptyProfileTab}><Text style={styles.emptyProfileTabTitle}>{loadError}</Text><Pressable onPress={() => void loadAccounts(true)} style={styles.notificationsRetryButton}><Text style={styles.notificationsRetryText}>Повторить</Text></Pressable></View>
@@ -4645,7 +4658,7 @@ export function CommunityScreen({
           }
           return <ConnectAccountGridCard account={item.value} onPress={() => setSelectedConnectAccount(item.value)} showCommittedLike={committedConnectUsernames.has(item.value.username)} />;
         }}
-        ListFooterComponent={isLoadingMore ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null}
+        ListFooterComponent={isLoadingMore ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null}
       />}
       <ConnectFiltersModal
         ageRange={ageRange}
@@ -4663,8 +4676,10 @@ export function CommunityScreen({
         adjacentAccounts={adjacentConnectAccounts}
         isLiked={Boolean(selectedConnectAccount && likedConnectUsernames.has(selectedConnectAccount.username))}
         isLikeCommitted={Boolean(selectedConnectAccount && committedConnectUsernames.has(selectedConnectAccount.username))}
+        isMatched={Boolean(selectedConnectAccount && matches.some((match) => match.id === selectedConnectAccount.id))}
         isOwnProfile={selectedConnectAccount?.username === ownUsername}
         onClose={closeConnectProfile}
+        onOpenEditProfile={onOpenEditProfile}
         onToggleLike={() => {
           if (!selectedConnectAccount || selectedConnectAccount.username === ownUsername) return;
           if (committedConnectUsernames.has(selectedConnectAccount.username) || committingConnectLikesRef.current.has(selectedConnectAccount.username)) return;
@@ -4685,6 +4700,7 @@ export function CommunityScreen({
           setSelectedConnectAccount(navigationAccounts[nextIndex]);
         }}
         onOpenProfile={onOpenProfile}
+        onOpenChat={onOpenChat}
         onCloseReport={() => setReportingConnectAccount(null)}
         onNotify={onNotify}
         onReport={() => {
@@ -4717,18 +4733,21 @@ export function CommunityScreen({
   );
 }
 
-function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, isLiked, isLikeCommitted, isOwnProfile, isReportStatusLoading, onClose, onCloseReport, onNavigateAccount, onNotify, onOpenProfile, onReport, onSubmitReport, onToggleLike, reportAccount }: {
+function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, isLiked, isLikeCommitted, isMatched, isOwnProfile, isReportStatusLoading, onClose, onCloseReport, onNavigateAccount, onNotify, onOpenChat, onOpenEditProfile, onOpenProfile, onReport, onSubmitReport, onToggleLike, reportAccount }: {
   account: PublicAccount | null;
   adjacentAccounts: PublicAccount[];
   hasAlreadyReported: boolean;
   isLiked: boolean;
   isLikeCommitted: boolean;
+  isMatched: boolean;
   isOwnProfile: boolean;
   isReportStatusLoading: boolean;
   onClose: () => void;
   onCloseReport: () => void;
   onNavigateAccount: (direction: -1 | 1) => void;
   onNotify: (message: string, type?: ToastMessage['type']) => void;
+  onOpenChat: (username: string) => Promise<void>;
+  onOpenEditProfile: () => void;
   onOpenProfile: (username: string) => Promise<void>;
   onReport: () => void;
   onSubmitReport: (username: string, reason: SafetyReportReason, details?: string) => Promise<void>;
@@ -4739,7 +4758,6 @@ function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, is
   const { height, width } = useWindowDimensions();
   const [activeIndex, setActiveIndex] = useState(0);
   const [profileDetails, setProfileDetails] = useState<Profile | null>(null);
-  const [areGenresExpanded, setAreGenresExpanded] = useState(false);
   const [photoAspectRatio, setPhotoAspectRatio] = useState(9 / 16);
   const [profileInfoHeight, setProfileInfoHeight] = useState(0);
   const photoChromeOpacity = useRef(new Animated.Value(1)).current;
@@ -4769,7 +4787,6 @@ function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, is
 
   useEffect(() => {
     setActiveIndex(0);
-    setAreGenresExpanded(false);
     committedPhotoScale.current = 1;
     livePhotoScale.current = 1;
     photoScale.setValue(1);
@@ -4857,14 +4874,6 @@ function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, is
     account.connectDistanceKm,
   );
   const goals = (displayedProfile.connectGoals ?? account.connectGoals ?? []).map((goal) => connectGoalLabels[goal]);
-  const interests = (displayedProfile.connectInterests ?? account.connectInterests ?? [])
-    .map((interest) => connectInterestLabels[interest] ?? interest)
-    .slice(0, 5);
-  const musicSubgenres = groupMusicGenreChips(displayedProfile.musicGenres ?? [])
-    .flatMap((genre) => genre.subgenres.map((subgenre) => ({
-      key: `${genre.key}:${subgenre}`,
-      label: subgenre,
-    })));
   const hasSocialLinks = Boolean(currentProfileDetails && (
     currentProfileDetails.bandcampUrl
     || currentProfileDetails.soundcloudUrl
@@ -4917,6 +4926,13 @@ function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, is
     const username = account.username;
     onClose();
     void onOpenProfile(username);
+  };
+  const openChat = () => {
+    const username = account.username;
+    onClose();
+    void onOpenChat(username).catch((error) => {
+      onNotify(error instanceof Error ? error.message : 'Не удалось открыть чат', 'error');
+    });
   };
   const toggleLikeWithPulse = () => {
     likeScale.stopAnimation();
@@ -5245,16 +5261,20 @@ function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, is
             ) : null}
           </Animated.View>
           <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFillObject, { opacity: photoChromeOpacity, zIndex: 4 }]}>
-            <Pressable accessibilityLabel="Закрыть просмотр" onPress={onClose} style={[styles.connectProfileClose, { top: safeAreaInsets.top + 18 }]}>
+            <Pressable accessibilityLabel="Закрыть просмотр" accessibilityRole="button" onPress={onClose} style={[styles.connectProfileClose, { top: safeAreaInsets.top + 18 }]}>
               <X color="#aab4be" size={25} strokeWidth={2} />
             </Pressable>
-            {!isOwnProfile ? (
-              <Pressable accessibilityLabel="Пожаловаться на профиль" onPress={onReport} style={[styles.connectProfileReport, { top: safeAreaInsets.top + 70 }]}>
+            {isOwnProfile ? (
+              <Pressable accessibilityLabel="Редактировать профиль" accessibilityRole="button" onPress={() => { onClose(); onOpenEditProfile(); }} style={[styles.connectProfileSecondaryAction, { top: safeAreaInsets.top + 70 }]}>
+                <Pencil color="#aab4be" size={23} strokeWidth={2} />
+              </Pressable>
+            ) : (
+              <Pressable accessibilityLabel="Пожаловаться на профиль" accessibilityRole="button" onPress={onReport} style={[styles.connectProfileSecondaryAction, { top: safeAreaInsets.top + 70 }]}>
                 <View style={styles.connectProfileReportIcon}>
                   <TriangleAlert color="#aab4be" size={23} strokeWidth={2} />
                 </View>
               </Pressable>
-            ) : null}
+            )}
           </Animated.View>
           {photos.length > 1 ? (
             <Animated.View pointerEvents="none" style={[styles.connectProfilePagination, { opacity: photoChromeOpacity, top: safeAreaInsets.top + 20 }]}>
@@ -5276,10 +5296,14 @@ function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, is
                   <VerifiedName badgeInverted isVerified={displayedProfile.isVerified} name={`${displayedProfile.name}${account.age ? `, ${account.age}` : ''}`} style={styles.connectProfileName} badgeSize={18} />
                   <Text style={styles.connectProfileUsername}>@{account.username}</Text>
                 </Pressable>
-                {!isOwnProfile ? (
+                {!isOwnProfile && isMatched ? (
+                  <Pressable accessibilityLabel={`Открыть чат с ${account.name}`} accessibilityRole="button" onPress={openChat} style={styles.connectProfileLikeButton}>
+                    <MessageSquare color="#fff" size={32} strokeWidth={1.9} />
+                  </Pressable>
+                ) : !isOwnProfile ? (
                   <Pressable accessibilityLabel={isLikeCommitted ? 'Лайк отправлен' : isLiked ? 'Убрать лайк' : 'Поставить лайк'} accessibilityRole="button" accessibilityState={{ disabled: isLikeCommitted, selected: isLiked }} disabled={isLikeCommitted} onPress={toggleLikeWithPulse} style={[styles.connectProfileLikeButton, isLiked && styles.connectProfileLikeButtonActive]}>
                     <Animated.View style={{ transform: [{ scale: likeScale }] }}>
-                      <Heart color={isLiked ? '#ff3b5c' : '#fff'} fill={isLiked ? '#ff3b5c' : 'transparent'} size={34} strokeWidth={2} />
+                      <ConnectLikeIcon liked={isLiked} size={34} />
                     </Animated.View>
                   </Pressable>
                 ) : null}
@@ -5298,30 +5322,10 @@ function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, is
               {displayedProfile.connectAbout ? <Text numberOfLines={3} style={styles.connectProfileAbout}>{displayedProfile.connectAbout}</Text> : null}
             </View>
             <View style={[styles.connectProfileInfoSolid, { paddingBottom: 16 + safeAreaInsets.bottom }]}>
-            {interests.length ? (
-              <View style={styles.connectProfileInterests}>
-                {interests.map((interest) => (
-                  <View key={interest} style={styles.connectProfileInterestChip}>
-                    <Text numberOfLines={1} style={styles.connectProfileInterestText}>{interest}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-            {musicSubgenres.length ? (
-              <>
-                <Pressable accessibilityRole="button" onPress={() => setAreGenresExpanded((value) => !value)} style={styles.connectProfileGenresToggle}>
-                  <Text style={styles.connectProfileGenresToggleText}>Любимая музыка · {musicSubgenres.length}</Text>
-                  <ChevronDown color="#fff" size={17} style={areGenresExpanded ? styles.connectProfileGenresChevronExpanded : undefined} />
-                </Pressable>
-                {areGenresExpanded ? <View style={styles.connectProfileGenres}>
-                  {musicSubgenres.map((genre) => (
-                    <View key={genre.key} style={styles.connectProfileGenreChip}>
-                      <Text numberOfLines={1} style={styles.connectProfileGenreText}>{genre.label}</Text>
-                    </View>
-                  ))}
-                </View> : null}
-              </>
-            ) : null}
+            <ConnectProfileInterests
+              interests={displayedProfile.connectInterests ?? account.connectInterests ?? []}
+              musicGenres={displayedProfile.musicGenres ?? account.musicGenres ?? []}
+            />
             {displayedProfile.trackTitle && displayedProfile.trackPreviewUrl ? (
               <View style={styles.connectProfileTrack}>
                 <PrimaryTrackInlinePreview
@@ -5329,6 +5333,7 @@ function ConnectProfileModal({ account, adjacentAccounts, hasAlreadyReported, is
                   artworkUrl={displayedProfile.trackArtworkUrl}
                   autoPlay
                   clipDurationSeconds={displayedProfile.trackClipDurationSeconds}
+                  externalUrl={displayedProfile.trackExternalUrl}
                   previewUrl={displayedProfile.trackPreviewUrl!}
                   provider={displayedProfile.trackProvider}
                   startSeconds={displayedProfile.trackStartSeconds}
@@ -5416,7 +5421,7 @@ function ConnectReportModal({
           style={[styles.connectReportSubmit, !canSubmit && styles.connectReportSubmitDisabled]}
         >
           {isSubmitting
-            ? <ActivityIndicator color="#fff" />
+            ? <LoadingIndicator tone="inverse" />
             : <Text style={styles.connectReportSubmitText}>Отправить жалобу</Text>}
         </Pressable>
       )}
@@ -5429,7 +5434,7 @@ function ConnectReportModal({
     >
       {isStatusLoading ? (
         <View style={styles.connectReportStatus}>
-          <ActivityIndicator color="#111" />
+          <LoadingIndicator />
         </View>
       ) : hasAlreadyReported ? (
         <View style={styles.connectReportStatus}>
@@ -5474,7 +5479,7 @@ function ConnectReportModal({
   );
 }
 
-function ConnectAgeRangeSlider({ maximumAge, onChange, value }: {
+export function ConnectAgeRangeSlider({ maximumAge, onChange, value }: {
   maximumAge: number;
   onChange: (value: [number, number]) => void;
   value: [number, number];
@@ -5490,9 +5495,9 @@ function ConnectAgeRangeSlider({ maximumAge, onChange, value }: {
     setDraftValue(value);
   }, [value]);
   const ageSpan = maximumAge - connectMinimumAge;
-  const thumbSize = 28;
-  const usableWidth = Math.max(1, trackWidth - thumbSize);
-  const ageToPosition = (age: number) => thumbSize / 2 + ((age - connectMinimumAge) / ageSpan) * usableWidth;
+  const trackInset = 14;
+  const usableWidth = Math.max(1, trackWidth - trackInset * 2);
+  const ageToPosition = (age: number) => trackInset + ((age - connectMinimumAge) / ageSpan) * usableWidth;
   const ageDeltaFromGesture = (dx: number) => Math.round((dx / usableWidth) * ageSpan);
   const setRange = useCallback((next: [number, number]) => {
     valueRef.current = next;
@@ -5507,8 +5512,8 @@ function ConnectAgeRangeSlider({ maximumAge, onChange, value }: {
     setRange([valueRef.current[0], nextMaximum]);
   };
   const updateNearestThumb = useCallback((locationX: number) => {
-    const relativeX = Math.max(thumbSize / 2, Math.min(trackWidth - thumbSize / 2, locationX));
-    const age = connectMinimumAge + Math.round(((relativeX - thumbSize / 2) / usableWidth) * ageSpan);
+    const relativeX = Math.max(trackInset, Math.min(trackWidth - trackInset, locationX));
+    const age = connectMinimumAge + Math.round(((relativeX - trackInset) / usableWidth) * ageSpan);
     const current = valueRef.current;
     const next: [number, number] = Math.abs(age - current[0]) <= Math.abs(age - current[1])
       ? [Math.max(connectMinimumAge, Math.min(age, current[1] - 1)), current[1]]
@@ -5519,9 +5524,9 @@ function ConnectAgeRangeSlider({ maximumAge, onChange, value }: {
   const updateWebThumb = useCallback((thumb: 'minimum' | 'maximum', element: HTMLElement, clientX: number) => {
     const track = element.parentElement?.getBoundingClientRect();
     if (!track) return;
-    const measuredUsableWidth = Math.max(1, track.width - thumbSize);
-    const relativeX = Math.max(thumbSize / 2, Math.min(track.width - thumbSize / 2, clientX - track.left));
-    const age = connectMinimumAge + Math.round(((relativeX - thumbSize / 2) / measuredUsableWidth) * ageSpan);
+    const measuredUsableWidth = Math.max(1, track.width - trackInset * 2);
+    const relativeX = Math.max(trackInset, Math.min(track.width - trackInset, clientX - track.left));
+    const age = connectMinimumAge + Math.round(((relativeX - trackInset) / measuredUsableWidth) * ageSpan);
     const current = valueRef.current;
     setRange(thumb === 'minimum'
       ? [Math.max(connectMinimumAge, Math.min(age, current[1] - 1)), current[1]]
@@ -5608,9 +5613,8 @@ function ConnectAgeRangeSlider({ maximumAge, onChange, value }: {
   }), [maximumAge, usableWidth]);
   const minimumPosition = ageToPosition(draftValue[0]);
   const maximumPosition = ageToPosition(draftValue[1]);
-  const selectionOverflow = 9;
-  const selectionLeft = Math.max(0, minimumPosition - selectionOverflow);
-  const selectionRight = Math.min(trackWidth, maximumPosition + selectionOverflow);
+  const selectionLeft = Math.max(0, minimumPosition - 9);
+  const selectionRight = Math.min(trackWidth, maximumPosition + 9);
 
   return (
     <View style={styles.connectAgeRange}>
@@ -5636,9 +5640,9 @@ function ConnectAgeRangeSlider({ maximumAge, onChange, value }: {
             accessibilityValue={{ min: connectMinimumAge, max: draftValue[1] - 1, now: draftValue[0] }}
              {...(Platform.OS === 'web' ? {} : minimumResponder.panHandlers)}
              pointerEvents={Platform.OS === 'web' ? 'none' : 'auto'}
-             style={[styles.connectAgeRangeThumb, { left: minimumPosition - thumbSize / 2 }]}
+             style={[styles.connectAgeRangeThumb, { left: minimumPosition - 22 }]}
           >
-            <View style={styles.connectAgeRangeThumbDot} />
+            <View style={styles.connectAgeRangeThumbKnob} />
           </View>
           <View
             accessibilityLabel={`Максимальный возраст ${draftValue[1]}`}
@@ -5646,9 +5650,9 @@ function ConnectAgeRangeSlider({ maximumAge, onChange, value }: {
             accessibilityValue={{ min: draftValue[0] + 1, max: maximumAge, now: draftValue[1] }}
              {...(Platform.OS === 'web' ? {} : maximumResponder.panHandlers)}
              pointerEvents={Platform.OS === 'web' ? 'none' : 'auto'}
-             style={[styles.connectAgeRangeThumb, { left: maximumPosition - thumbSize / 2 }]}
+             style={[styles.connectAgeRangeThumb, { left: maximumPosition - 22 }]}
           >
-            <View style={styles.connectAgeRangeThumbDot} />
+            <View style={styles.connectAgeRangeThumbKnob} />
           </View>
           {Platform.OS === 'web' ? webThumb('minimum', minimumPosition) : null}
           {Platform.OS === 'web' ? webThumb('maximum', maximumPosition) : null}
@@ -5755,17 +5759,7 @@ function ConnectFiltersModal({ ageRange, gender, goals, includeCommunities, inte
       </View>
       <View style={styles.connectFilterTaxonomySections}>
         <View style={styles.connectFilterSection}>
-          <MusicGenreSelector
-            filterCard
-            maxSelected={18}
-            onChange={(value) => setDraft((current) => ({ ...current, musicGenres: value }))}
-            selected={draft.musicGenres}
-            subgenresOnly
-            title="Музыкальные жанры"
-          />
-        </View>
-        <View style={styles.connectFilterSection}>
-          <ConnectInterestSelector filterCard onChange={(value) => setDraft((current) => ({ ...current, interests: value }))} selected={draft.interests} />
+          <ConnectInterestSelector filterCard musicGenres={draft.musicGenres} onChangeMusicGenres={(value) => setDraft((current) => ({ ...current, musicGenres: value }))} onChange={(value) => setDraft((current) => ({ ...current, interests: value }))} selected={draft.interests} />
         </View>
       </View>
       <Pressable onPress={closeAndApply} style={styles.connectFilterApply}>

@@ -1,17 +1,25 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { isMusicLibraryProvider } from '@volna/music-taxonomy/library-policy';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Airplay, Check, ChevronDown, Disc3, ListMusic, ListPlus, ListTodo, Pause, Play, Plus, Repeat1, Repeat2, Share, Shuffle, SkipBack, SkipForward, UsersRound, X } from 'lucide-react-native';
 import { createContext, createElement, memo, type ReactNode, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, InteractionManager, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, Alert, Animated, AppState, Easing, InteractionManager, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, G, LinearGradient, Path, Rect, Stop, SvgUri } from 'react-native-svg';
 import { apiFetch, apiUrl, readApiError } from '../api/client';
-import { musicArtworkThumbnail, profilePreviewPlayers } from '../domain';
+import { checkMusicAvailability, isKnownMusicUnavailable as isRemoteMusicUnavailable, resetMusicAvailability, useMusicAvailability } from '../music/musicAvailability';
+import { deviceDownloadQueue, downloadedPlaybackTrack, findDeviceDownload, loadDeviceDownloads, restrictDeviceDownloadQueue, useDeviceDownloads } from '../music/deviceDownloads';
+import { playWebMediaFromGesture } from './webMediaStart';
+import { MusicDownloadButton } from './MusicDownloadButton';
+import { musicUnavailableLabel } from '@volna/messaging-client/music-availability';
+import { musicArtworkThumbnail, musicSubgenreDisplayName, profilePreviewPlayers } from '../domain';
 import { AppSheetModal } from './AppSheetModal';
 import { AppAnimatedImage, AppImage as Image } from './AppImage';
 import { emitMusicLibraryChanged } from './musicLibraryEvents';
+import { createListenLaterReviewReporter } from './listenLaterReview';
 import { subscribePlaybackVisibilityChanged } from './playbackActivityEvents';
 import { ReleaseShareModal } from './ReleaseShareModal';
 import { YouTubeAudioEngine } from './YouTubeAudioEngine';
@@ -20,8 +28,11 @@ import type { MusicReleaseParticipant, ProfileMusicTrack } from '../types';
 import { normalizeExternalHttpsUrl } from '../security/externalUrls.mjs';
 import { openExternalHttpsUrl } from '../security/openExternalUrl';
 import {
-  createShuffleQueueState,
-  ensureShuffleQueueState,
+  playbackStartPosition,
+  shouldReloadPlaybackSource,
+  prepareShuffleQueueState,
+  shuffledQueueNeighbors,
+  resolveShuffledQueueTrack,
   normalizedExternalTrackUrl,
   normalizedSavableTrackUrl,
   normalizeMusicTrackTitle,
@@ -42,10 +53,16 @@ export const MINI_PLAYER_ENTER_EASING = Easing.out(Easing.cubic);
 export const MINI_PLAYER_EXIT_EASING = Easing.in(Easing.cubic);
 
 export type GlobalTrackQueueItem = {
+  queueSource?: 'device-downloads';
+  downloadKey?: string;
+  listenLaterItemId?: string;
+  listenLaterTrackId?: string;
+  reviewed?: boolean;
   id: string;
   title: string;
   artist: string | null;
   artworkUrl?: string | null;
+  releaseDate?: string | null;
   previewUrl: string;
   externalUrl?: string | null;
   provider?: 'soundcloud' | 'bandcamp' | 'youtube' | 'volna' | 'apple' | 'yandex';
@@ -70,6 +87,10 @@ export type GlobalTrack = GlobalTrackQueueItem & {
   queueIndex?: number;
   queueWindowResolver?: (target: GlobalTrackQueueItem) => GlobalTrackQueueItem[];
 };
+
+function isKnownMusicUnavailable(track: GlobalTrackQueueItem) {
+  return !findDeviceDownload(track) && isRemoteMusicUnavailable(track);
+}
 
 function activeQueueIndex(track: GlobalTrack | null | undefined) {
   const queue = track?.queue;
@@ -114,13 +135,16 @@ function adjacentCollectionIndexesForTrack(track: GlobalTrack | null | undefined
   const currentKey = trackCollectionKey(queue[currentIndex]);
   let previous = currentIndex - 1;
   while (previous >= 0 && trackCollectionKey(queue[previous]) === currentKey) previous -= 1;
+  while (previous >= 0 && isKnownMusicUnavailable(queue[previous])) previous -= 1;
   if (previous >= 0) {
     const previousKey = trackCollectionKey(queue[previous]);
     while (previous > 0 && trackCollectionKey(queue[previous - 1]) === previousKey) previous -= 1;
+    while (previous < currentIndex && isKnownMusicUnavailable(queue[previous])) previous += 1;
   }
 
   let next = currentIndex + 1;
   while (next < queue.length && trackCollectionKey(queue[next]) === currentKey) next += 1;
+  while (next < queue.length && isKnownMusicUnavailable(queue[next])) next += 1;
   return { previous, next: next < queue.length ? next : -1 };
 }
 
@@ -147,7 +171,7 @@ function followingCollectionIndexesForTrack(
 }
 export type TrackComposerRequest = { nonce: number; track: GlobalTrackQueueItem };
 
-type GlobalAudioContextValue = {
+export type GlobalAudioContextValue = {
   activeTrack: GlobalTrack | null;
   isExpanded: boolean;
   setExpanded: (expanded: boolean) => void;
@@ -194,10 +218,10 @@ type GlobalAudioContextValue = {
 };
 
 type GlobalAudioProgressContextValue = Pick<GlobalAudioContextValue, 'progress' | 'positionSeconds' | 'durationSeconds'>;
-type GlobalAudioControlsContextValue = Omit<GlobalAudioContextValue, keyof GlobalAudioProgressContextValue>;
+export type GlobalAudioControlsContextValue = Omit<GlobalAudioContextValue, keyof GlobalAudioProgressContextValue>;
 
-const GlobalAudioControlsContext = createContext<GlobalAudioControlsContextValue | null>(null);
-const GlobalAudioProgressContext = createContext<GlobalAudioProgressContextValue | null>(null);
+export const GlobalAudioControlsContext = createContext<GlobalAudioControlsContextValue | null>(null);
+export const GlobalAudioProgressContext = createContext<GlobalAudioProgressContextValue | null>(null);
 
 type PersistedAudioSession = {
   version: 1;
@@ -213,7 +237,8 @@ function serializableTrack(track: GlobalTrack): PersistedAudioSession['track'] {
   const { queueWindowResolver: _resolver, ...value } = track;
   return {
     ...value,
-    queue: value.queue?.slice(0, 200).map((item) => ({ ...item })),
+    ...(value.downloadKey ? { previewUrl: '', artworkUrl: null } : {}),
+    queue: value.queue?.slice(0, 200).map((item) => ({ ...item, ...(item.downloadKey ? { previewUrl: '', artworkUrl: null } : {}) })),
   };
 }
 
@@ -240,7 +265,7 @@ function expandedPlayerArtwork(value: string | null | undefined, provider: Globa
   return provider === 'soundcloud' ? largeSoundcloudArtwork(value) ?? value : value;
 }
 
-type SavableTrackProvider = 'apple' | 'yandex' | 'soundcloud' | 'bandcamp' | 'youtube';
+type SavableTrackProvider = 'soundcloud' | 'bandcamp' | 'youtube';
 type SavableTrackDescriptor = { key: string; provider: SavableTrackProvider; externalUrl: string };
 type PlayerMusicPlaylist = {
   id: string;
@@ -252,7 +277,7 @@ type PlayerMusicPlaylist = {
 type PlayerProfileTrack = { id: string; provider: SavableTrackProvider; externalUrl: string };
 
 function savableTrackDescriptor(track: GlobalTrackQueueItem | null | undefined): SavableTrackDescriptor | null {
-  if (!track || (track.provider !== 'apple' && track.provider !== 'yandex' && track.provider !== 'soundcloud' && track.provider !== 'bandcamp' && track.provider !== 'youtube')) return null;
+  if (!track || !isMusicLibraryProvider(track.provider) || track.provider === 'volna') return null;
   const externalUrl = track.sourceTrackUrl?.trim() || track.externalUrl?.trim();
   if (!externalUrl) return null;
   return { key: `${track.provider}:${normalizedSavableTrackUrl(track.provider, externalUrl)}`, provider: track.provider, externalUrl };
@@ -283,12 +308,13 @@ function soundcloudEngineUrl(track: GlobalTrackQueueItem | null | undefined) {
 
 function soundcloudDirectStreamUrl(track: GlobalTrackQueueItem | null | undefined) {
   if (track?.provider !== 'soundcloud') return null;
+  if (track.downloadKey) return findDeviceDownload(track)?.uri ?? null;
   const sourceUrl = track.sourceTrackUrl?.trim() || track.externalUrl?.trim() || track.previewUrl?.trim();
   return sourceUrl ? `${apiUrl}/music/soundcloud/stream?url=${encodeURIComponent(sourceUrl)}` : null;
 }
 
 function isSoundcloudPlaylistTrack(track: GlobalTrackQueueItem | null | undefined) {
-  if (track?.provider !== 'soundcloud') return false;
+  if (track?.provider !== 'soundcloud' || track.downloadKey) return false;
   // Expanded playlist items keep the `/sets/…` URL as their collectionId,
   // while sourceTrackUrl/externalUrl point at the concrete playable sound.
   // Only the playable source identifies whether this is still a placeholder.
@@ -347,6 +373,7 @@ function listenLaterItemFromTrack(track: GlobalTrack) {
       collectionTitle: item.collectionTitle ?? track.collectionTitle ?? null,
       collectionId: item.collectionId ?? collectionId,
       genres: item.genres ?? track.genres ?? [],
+      releaseDate: item.releaseDate !== undefined ? item.releaseDate : track.releaseDate,
       releaseId: item.releaseId ?? releaseId,
       labelName: item.labelName ?? track.labelName ?? null,
       labelUsername: item.labelUsername ?? track.labelUsername ?? null,
@@ -441,6 +468,15 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
   const preloadPlayer = useAudioPlayer(null);
   const status = useAudioPlayerStatus(player);
   const [activeTrack, setActiveTrack] = useState<GlobalTrack | null>(null);
+  const deviceDownloads = useDeviceDownloads();
+  useEffect(() => {
+    // Metadata repair must not restart the engine, change the queue or seek.
+    setActiveTrack((current) => {
+      if (deviceDownloads.clearing || !current?.downloadKey || !findDeviceDownload(current)) return current;
+      const repaired = downloadedPlaybackTrack(current);
+      return JSON.stringify(repaired) === JSON.stringify(current) ? current : repaired;
+    });
+  }, [deviceDownloads.items, deviceDownloads.clearing]);
   const [isExpanded, setExpanded] = useState(false);
   const [isReleaseShareVisible, setIsReleaseShareVisible] = useState(false);
   const [isSessionRestored, setIsSessionRestored] = useState(false);
@@ -453,6 +489,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
   const [isRepeatEnabled, setIsRepeatEnabled] = useState(false);
   const shuffleEnabledRef = useRef(false);
   const shuffleQueueRef = useRef<ShuffleQueueState | null>(null);
+  const shuffleNavigationRef = useRef<object | null>(null);
   const repeatEnabledRef = useRef(false);
   const savedStatusRequestRef = useRef(0);
   const savedStatusCacheRef = useRef(new Map<string, boolean>());
@@ -489,7 +526,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
   const [soundcloudFrameSeedUrl, setSoundcloudFrameSeedUrl] = useState<string | null>(null);
   const mediaDurationRef = useRef(0);
   const mediaPositionRef = useRef(0);
-  const playRef = useRef<(track: GlobalTrack, fromSeconds?: number) => Promise<void>>(async () => undefined);
+  const playRef = useRef<(track: GlobalTrack, fromSeconds?: number, shuffleTransition?: ShuffleQueueState) => Promise<void>>(async () => undefined);
   const playNextRef = useRef<() => Promise<void>>(async () => undefined);
   const progressResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playbackRequestRef = useRef(0);
@@ -497,6 +534,44 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
   const lastPlayedCollectionTrackRef = useRef(new Map<string, { queue?: GlobalTrackQueueItem[]; track: GlobalTrackQueueItem }>());
   const advancedFinishedTrackRef = useRef<string | null>(null);
   const publishPlaybackActivityRef = useRef<() => void>(() => undefined);
+  const reviewReporterRef = useRef<ReturnType<typeof createListenLaterReviewReporter> | null>(null);
+  const reviewNotifyRef = useRef(onNotify);
+  const reviewScopeRef = useRef(storageScope);
+  reviewNotifyRef.current = onNotify;
+  reviewScopeRef.current = storageScope;
+  useEffect(() => {
+    const reporter = createListenLaterReviewReporter({
+      persist: async (itemId, trackId) => {
+        if (reviewScopeRef.current !== storageScope) return false;
+        const response = await apiFetch(`${apiUrl}/my-music/listen-later/${encodeURIComponent(itemId)}/reviewed`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trackId }),
+        });
+        if (!response.ok) throw new Error('Не удалось сохранить отметку прослушивания');
+        const result = await response.json() as { reviewed?: boolean };
+        return result.reviewed === true;
+      },
+      confirmed: (itemId, trackId) => {
+        if (reviewScopeRef.current !== storageScope) return;
+        const mark = (item: GlobalTrackQueueItem) => item.listenLaterItemId === itemId && item.listenLaterTrackId === trackId
+          ? { ...item, reviewed: true } : item;
+        // Update review metadata, not the order/membership of an ongoing queue.
+        const current = activeTrackRef.current;
+        if (current) {
+          const updated = { ...mark(current), queue: current.queue?.map(mark), queueIndex: current.queueIndex, queueWindowResolver: current.queueWindowResolver };
+          activeTrackRef.current = updated;
+          setActiveTrack(updated);
+        }
+        emitMusicLibraryChanged({ type: 'listen-later-reviewed', itemId, trackId });
+      },
+      failed: () => { if (reviewScopeRef.current === storageScope) reviewNotifyRef.current('Не удалось сохранить отметку прослушивания. Проверьте соединение.', 'error'); },
+    });
+    reviewReporterRef.current = reporter;
+    return () => { reporter.dispose(); if (reviewReporterRef.current === reporter) reviewReporterRef.current = null; };
+  }, [storageScope]);
+  const markListenLaterReviewed = useCallback((track: GlobalTrackQueueItem | null | undefined) => {
+    void reviewReporterRef.current?.mark(track);
+  }, []);
   // State restoration used to populate only `activeTrack`, while playback
   // activity publishing reads `activeTrackRef`. As a result, a restored track
   // could play normally in the mini-player but was published as "not playing"
@@ -551,7 +626,10 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
   const canSaveToMyMusic = Boolean(saveProvider && saveTrackUrl);
   const canSaveRadio = Boolean(activeTrack?.isLiveStream && activeTrack.radioPageUsername);
   const sessionStorageKey = useMemo(() => `volna:audio-session:${storageScope}`, [storageScope]);
+  useEffect(() => () => resetMusicAvailability(), [storageScope]);
+  useMusicAvailability(activeTrack ?? {}, Boolean(activeTrack && !activeTrack.isLiveStream && !activeTrack.downloadKey));
   const resolveTrackAvailability = useCallback(async (track: GlobalTrackQueueItem) => {
+    if (findDeviceDownload(track)) return { available: true, labelName: track.labelName ?? null, labelUsername: track.labelUsername ?? null, releaseTitle: track.collectionTitle ?? null };
     if (track.isLiveStream) return { available: true, labelName: null, labelUsername: null, releaseTitle: null };
     const uploadedTrackId = track.provider === 'volna'
       ? track.id.match(/^uploaded:(.+)$/)?.[1]
@@ -626,6 +704,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         collectionTitle: metadata.title || target.collectionTitle || target.title,
         collectionId: playlistUrl,
         genres: target.genres,
+        releaseDate: target.releaseDate,
         releaseId: target.releaseId,
         labelName: target.labelName,
         labelUsername: target.labelUsername,
@@ -664,7 +743,13 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
           await AsyncStorage.removeItem(sessionStorageKey);
           return;
         }
+        await loadDeviceDownloads();
+        if (cancelled) return;
+        session.track = downloadedPlaybackTrack(session.track);
+        session.track.queue = session.track.queue?.filter((item) => !item.downloadKey || findDeviceDownload(item)).map(downloadedPlaybackTrack);
+        if (session.track.queueSource === 'device-downloads') session.track = restrictDeviceDownloadQueue({ ...session.track, queue: deviceDownloadQueue() });
         const availability = await resolveTrackAvailability(session.track);
+        if (cancelled) return;
         if (!availability.available) {
           await AsyncStorage.removeItem(sessionStorageKey);
           return;
@@ -698,6 +783,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
             // Keep the last known stream URL when the public page is temporarily unavailable.
           }
         }
+        if (cancelled) return;
         sessionTrackRef.current = track;
         activeTrackRef.current = null;
         // React state survives in AsyncStorage, but none of the actual playback
@@ -747,7 +833,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       if (!response.ok) throw new Error(await readApiError(response, 'Не удалось проверить треки'));
       const result = await response.json() as { statuses?: Array<{ provider?: string; externalUrl?: string; added?: boolean }> };
       result.statuses?.forEach((status) => {
-        if ((status.provider !== 'apple' && status.provider !== 'yandex' && status.provider !== 'soundcloud' && status.provider !== 'bandcamp' && status.provider !== 'youtube') || !status.externalUrl) return;
+        if (!isMusicLibraryProvider(status.provider) || status.provider === 'volna' || !status.externalUrl) return;
         const key = `${status.provider}:${normalizedSavableTrackUrl(status.provider, status.externalUrl)}`;
         if ((savedStatusMutationVersionRef.current.get(key) ?? 0) !== requestedVersions.get(key)) return;
         savedStatusCacheRef.current.set(key, Boolean(status.added));
@@ -844,17 +930,14 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     }).catch(() => undefined);
   }, [storageScope]);
 
-  useEffect(() => {
-    if (!isShuffleEnabled || !activeTrack?.queue?.length) {
-      if (!isShuffleEnabled) shuffleQueueRef.current = null;
-      return;
-    }
-    shuffleQueueRef.current = ensureShuffleQueueState(
-      shuffleQueueRef.current,
-      activeTrack.queue.map((item) => item.id),
-      activeTrack.id,
-    );
-  }, [activeTrack?.id, activeTrack?.queue, isShuffleEnabled]);
+  const shuffledQueueState = useMemo(() => isShuffleEnabled && activeTrack?.queue?.length
+    ? prepareShuffleQueueState(shuffleQueueRef.current,
+        activeTrack.queue.filter((item) => item.id === activeTrack.id || !isKnownMusicUnavailable(item)).map((item) => item.id),
+        activeTrack.id, isRepeatEnabled)
+    : null, [activeTrack?.id, activeTrack?.queue, isRepeatEnabled, isShuffleEnabled]);
+  // Commit the exact plan used by covers before a gesture can consume it.
+  useLayoutEffect(() => { shuffleQueueRef.current = shuffledQueueState; }, [shuffledQueueState]);
+  const shuffledNeighbors = shuffledQueueNeighbors(shuffledQueueState);
 
   const playExpoAudio = useCallback(async () => {
     if (Platform.OS === 'web') {
@@ -979,9 +1062,25 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       primeConcreteTrack(track);
       return;
     }
-    const queue = activeTrackRef.current?.queue ?? [track];
+    const current = activeTrackRef.current;
+    const queue = current?.queue ?? [track];
+    const plan = shuffleQueueRef.current;
     void resolveSoundcloudQueueTarget(track, queue, direction)
-      .then((resolved) => primeConcreteTrack(resolved.track))
+      .then((resolved) => {
+        // Resolve a chosen lazy playlist ahead of time so its concrete child's
+        // artwork, rather than a generic playlist cover, is already visible.
+        if (current && plan && direction === 'next' && shuffleEnabledRef.current
+          && !shuffleNavigationRef.current && shuffleQueueRef.current === plan
+          && activeTrackRef.current?.id === current.id && shuffledQueueNeighbors(plan).next === track.id) {
+          shuffleQueueRef.current = prepareShuffleQueueState(resolveShuffledQueueTrack(plan, track.id, resolved.track.id),
+            resolved.queue.map((item) => item.id), current.id, repeatEnabledRef.current);
+          const updated = { ...activeTrackRef.current, queue: resolved.queue,
+            queueIndex: resolved.queue.findIndex((item) => item.id === current.id) };
+          activeTrackRef.current = updated;
+          setActiveTrack(updated);
+        }
+        primeConcreteTrack(resolved.track);
+      })
       .catch(() => undefined);
   }, [primeConcreteTrack, resolveSoundcloudQueueTarget]);
   const primeTrack = useCallback((track: GlobalTrackQueueItem) => {
@@ -1026,6 +1125,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     if (transitioningTrackRef.current === activeTrackRef.current?.id) return;
     if (status?.didJustFinish) {
       const track = activeTrackRef.current;
+      markListenLaterReviewed(track);
       if (track && repeatEnabledRef.current) {
         if (advancedFinishedTrackRef.current !== track.id) {
           advancedFinishedTrackRef.current = track.id;
@@ -1050,6 +1150,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     if (!track?.clipDurationSeconds || track.provider === 'soundcloud' || !status?.playing) return;
     const end = (track.startSeconds ?? 0) + track.clipDurationSeconds;
     if (Number(status.currentTime ?? 0) < end - 0.08) return;
+    markListenLaterReviewed(track);
     if (repeatEnabledRef.current) {
       if (advancedFinishedTrackRef.current !== track.id) {
         advancedFinishedTrackRef.current = track.id;
@@ -1068,7 +1169,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       player.pause();
       void player.seekTo(track.startSeconds ?? 0);
     }
-  }, [player, status?.currentTime, status?.didJustFinish, status?.playing]);
+  }, [markListenLaterReviewed, player, status?.currentTime, status?.didJustFinish, status?.playing]);
 
   useEffect(() => {
     if (Platform.OS === 'web' || !isSoundcloudLoading || !playbackIntent || activeTrack?.provider === 'youtube') return;
@@ -1080,6 +1181,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     if (track?.provider !== 'youtube' || !youtubeState.playing || !track.clipDurationSeconds) return;
     const end = (track.startSeconds ?? 0) + track.clipDurationSeconds;
     if (youtubeState.position < end - 0.08 || advancedFinishedTrackRef.current === track.id) return;
+    markListenLaterReviewed(track);
     advancedFinishedTrackRef.current = track.id;
     if (repeatEnabledRef.current) {
       const videoId = youtubeVideoId(track);
@@ -1094,7 +1196,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       setYoutubeState((state) => ({ ...state, playing: false, position: track.startSeconds ?? 0 }));
       youtubeEngineRef.current?.seek(track.startSeconds ?? 0, false);
     }
-  }, [youtubeState.playing, youtubeState.position]);
+  }, [markListenLaterReviewed, youtubeState.playing, youtubeState.position]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || !hasSoundcloudFrame) return;
@@ -1161,7 +1263,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
             soundcloudStartTimerRef.current = null;
           }
           const updatedCollectionId = updated.collectionId?.trim();
-          if (updatedCollectionId) {
+          if (updatedCollectionId && updated.queueSource !== 'device-downloads') {
             lastPlayedCollectionTrackRef.current.set(updatedCollectionId, { queue: updated.queue, track: updated });
           }
           activeTrackRef.current = updated;
@@ -1177,6 +1279,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         if (!isCurrent()) return;
         setSoundcloudState((state) => ({ ...state, playing: false, position: state.duration }));
         const track = activeTrackRef.current;
+        markListenLaterReviewed(track);
         if (track && ((track.queue && ((track.queueIndex ?? 0) < track.queue.length - 1 || shuffleEnabledRef.current || repeatEnabledRef.current)) || repeatEnabledRef.current)) {
           if (advancedFinishedTrackRef.current !== track.id) {
             advancedFinishedTrackRef.current = track.id;
@@ -1218,9 +1321,18 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       disposed = true;
       soundcloudWidgetRef.current = null;
     };
-  }, [armSoundcloudDiagnostic, clearSoundcloudDiagnosticTimer, hasSoundcloudFrame, showSoundcloudDiagnostic, startSoundcloudTrack]);
+  }, [armSoundcloudDiagnostic, clearSoundcloudDiagnosticTimer, hasSoundcloudFrame, markListenLaterReviewed, showSoundcloudDiagnostic, startSoundcloudTrack]);
 
-  const play = useCallback(async (track: GlobalTrack, fromSeconds?: number) => {
+  const play = useCallback(async (track: GlobalTrack, fromSeconds?: number, shuffleTransition?: ShuffleQueueState) => {
+    track = restrictDeviceDownloadQueue(downloadedPlaybackTrack(track));
+    if (isKnownMusicUnavailable(track)) {
+      onNotify('Трек недоступен у источника', 'error');
+      return;
+    }
+    if (track.queue?.length) {
+      const queue = track.queue.filter((item) => !isKnownMusicUnavailable(item));
+      track = { ...track, queue: queue.length > 1 || track.queueSource === 'device-downloads' ? queue : undefined, queueIndex: queue.findIndex((item) => item.id === track.id) };
+    }
     if (isSoundcloudPlaylistTrack(track)) {
       const resolved = await resolveSoundcloudQueueTarget(track, track.queue ?? [track], 'next');
       return playRef.current({
@@ -1228,7 +1340,8 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         queue: resolved.queue.length > 1 ? resolved.queue : undefined,
         queueIndex: resolved.queueIndex >= 0 ? resolved.queueIndex : undefined,
         queueWindowResolver: track.queueWindowResolver,
-      }, fromSeconds ?? resolved.track.startSeconds ?? 0);
+      }, fromSeconds ?? resolved.track.startSeconds ?? 0, shuffleTransition
+        ? resolveShuffledQueueTrack(shuffleTransition, track.id, resolved.track.id) : undefined);
     }
     if (track.provider === 'youtube') {
       const normalizedMetadata = normalizeYouTubeTrackMetadata(track.title, track.artist);
@@ -1239,7 +1352,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       const normalizedTitle = normalizeMusicTrackTitle(track.provider, track.title);
       if (normalizedTitle !== track.title) track = { ...track, title: normalizedTitle };
     }
-    if (track.provider === 'bandcamp' && !track.previewUrl.includes('/music/bandcamp/stream')) {
+    if (track.provider === 'bandcamp' && !track.downloadKey && !track.previewUrl.includes('/music/bandcamp/stream')) {
       const bandcampTrackId = track.previewUrl.match(/(?:\/mp3-128\/|\/track=)(\d+)/)?.[1]
         ?? track.id.match(/(?:bandcamp:|track:.*\/mp3-128\/)(\d+)/)?.[1];
       const releaseUrl = track.collectionId || track.externalUrl;
@@ -1258,12 +1371,15 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     // expires the tap's transient media permission across this network wait,
     // which made saved Bandcamp releases stop at 0:00 with no visible error.
     const availabilityPromise = resolveTrackAvailability(track);
+    const sourceAvailabilityPromise = track.isLiveStream || track.downloadKey ? Promise.resolve(null) : checkMusicAvailability(track);
     profilePreviewPlayers.forEach((pausePreview) => pausePreview());
     const previousTrack = activeTrackRef.current;
     const changed = previousTrack?.id !== track.id || previousTrack?.previewUrl !== track.previewUrl;
     const restoredMediaNeedsLoad = restoredMediaNeedsLoadRef.current;
     advancedFinishedTrackRef.current = null;
     if (changed) {
+      mediaPositionRef.current = 0;
+      markListenLaterReviewed(previousTrack);
       transitioningTrackRef.current = track.id;
       if (progressResetTimerRef.current) clearTimeout(progressResetTimerRef.current);
       progressResetTimerRef.current = null;
@@ -1271,13 +1387,32 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     }
     const restoredPosition = restoredPositionRef.current?.trackId === track.id ? restoredPositionRef.current.fromSeconds : null;
     restoredPositionRef.current = null;
-    const requestedSeekTarget = track.isLiveStream ? null : fromSeconds ?? (changed ? restoredPosition ?? track.startSeconds ?? 0 : null);
-    const seekTarget = requestedSeekTarget !== null && Number.isFinite(requestedSeekTarget) ? Math.max(0, requestedSeekTarget) : null;
+    const seekTarget = playbackStartPosition(changed, fromSeconds, restoredPosition, track.startSeconds, track.isLiveStream);
     const savedDescriptor = savableTrackDescriptor(track);
     setIsSavedToMyMusic(savedDescriptor ? savedStatusCacheRef.current.get(savedDescriptor.key) ?? false : false);
     setIsSavedRadio(Boolean(track.isLiveStream && track.isRadioFavorite));
+    const samePlaybackContext = previousTrack?.id === track.id
+      && previousTrack.queueSource === track.queueSource
+      && previousTrack.listenLaterItemId === track.listenLaterItemId;
+    shuffleQueueRef.current = shuffleEnabledRef.current && track.queue?.length
+      ? prepareShuffleQueueState(shuffleTransition ?? (samePlaybackContext ? shuffleQueueRef.current : null),
+          track.queue.map((item) => item.id), track.id, repeatEnabledRef.current)
+      : null;
     activeTrackRef.current = track;
     setActiveTrack(track);
+    void sourceAvailabilityPromise.then((availability) => {
+      const label = musicUnavailableLabel(availability, track.provider);
+      if (!label || playbackRequestId !== playbackRequestRef.current || activeTrackRef.current?.id !== track.id) return;
+      playbackRequestRef.current += 1;
+      soundcloudWebAudioRef.current?.pause(); uploadedWebAudioRef.current?.pause();
+      youtubeEngineRef.current?.pause(); player.pause();
+      setPlaybackIntent(false); setIsSoundcloudLoading(false);
+      onNotify(label, 'error');
+      if (shuffleEnabledRef.current) { void playNextRef.current(); return; }
+      const queue = track.queue;
+      const nextIndex = queue?.findIndex((item, index) => index > activeQueueIndex(track) && !isKnownMusicUnavailable(item)) ?? -1;
+      if (queue && nextIndex >= 0) void playRef.current({ ...queue[nextIndex], queue, queueIndex: nextIndex, queueWindowResolver: track.queueWindowResolver }, 0);
+    });
     void availabilityPromise.then(async (availability) => {
       if (playbackRequestId !== playbackRequestRef.current || activeTrackRef.current?.id !== track.id) return;
       if (!availability.available) {
@@ -1328,7 +1463,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         .catch(() => undefined);
     }
     const playedCollectionId = track.collectionId?.trim();
-    if (playedCollectionId) {
+    if (playedCollectionId && track.queueSource !== 'device-downloads') {
       lastPlayedCollectionTrackRef.current.set(playedCollectionId, { queue: track.queue, track });
     }
     setPlaybackIntent(true);
@@ -1392,6 +1527,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         };
         audio.onended = () => {
           if (activeTrackRef.current?.id !== track.id) return;
+          markListenLaterReviewed(activeTrackRef.current);
           setSoundcloudWebState((state) => ({ ...state, position: state.duration }));
           if (repeatEnabledRef.current) {
             audio.currentTime = track.startSeconds ?? 0;
@@ -1412,10 +1548,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
           setIsSoundcloudLoading(false);
           Alert.alert('Плеер', 'Не удалось получить аудиопоток. Попробуйте ещё раз.');
         };
-        const shouldLoadSource = restoredMediaNeedsLoad
-          || !currentSource
-          || currentSource !== directStreamUrl
-          || Boolean(audio.error);
+        const shouldLoadSource = shouldReloadPlaybackSource(changed, restoredMediaNeedsLoad, currentSource, directStreamUrl, Boolean(audio.error));
         if (shouldLoadSource) {
           audio.pause();
           audio.src = directStreamUrl;
@@ -1515,6 +1648,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         };
         audio.onended = () => {
           if (activeTrackRef.current?.id !== track.id) return;
+          markListenLaterReviewed(activeTrackRef.current);
           setUploadedWebState((state) => ({ ...state, position: state.duration }));
           if (repeatEnabledRef.current) {
             audio.currentTime = track.startSeconds ?? 0;
@@ -1575,7 +1709,10 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     const persistentWebMedia = Platform.OS === 'web'
       ? (player as unknown as { media?: HTMLAudioElement }).media
       : undefined;
-    if (changed || restoredMediaNeedsLoad) {
+    const shouldLoadExpoSource = persistentWebMedia
+      ? shouldReloadPlaybackSource(changed, restoredMediaNeedsLoad, persistentWebMedia.getAttribute('src') || '', track.previewUrl, Boolean(persistentWebMedia.error))
+      : changed || restoredMediaNeedsLoad;
+    if (shouldLoadExpoSource) {
       if (persistentWebMedia) {
         // expo-audio recreates its HTMLAudioElement inside replace(). iOS
         // authorizes the existing element, not every future replacement, so a
@@ -1590,9 +1727,10 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       restoredMediaNeedsLoadRef.current = false;
     }
     try {
-      if (!changed && seekTarget !== null) await player.seekTo(seekTarget);
+      if (!persistentWebMedia && !changed && seekTarget !== null) await player.seekTo(seekTarget);
       try {
-        await playExpoAudio();
+        if (persistentWebMedia) await playWebMediaFromGesture(persistentWebMedia, seekTarget, () => playbackRequestId === playbackRequestRef.current && activeTrackRef.current?.id === track.id);
+        else await playExpoAudio();
       } catch (error) {
         const name = error && typeof error === 'object' && 'name' in error ? String((error as { name?: unknown }).name ?? '') : '';
         if (Platform.OS !== 'web' || name !== 'AbortError' || playbackRequestId !== playbackRequestRef.current || activeTrackRef.current?.id !== track.id) throw error;
@@ -1600,12 +1738,12 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         if (!media) throw error;
         await waitForWebMediaReady(media);
         if (playbackRequestId !== playbackRequestRef.current || activeTrackRef.current?.id !== track.id) return;
-        await media.play();
+        await playWebMediaFromGesture(media, seekTarget, () => playbackRequestId === playbackRequestRef.current && activeTrackRef.current?.id === track.id);
       }
       if (playbackRequestId !== playbackRequestRef.current || activeTrackRef.current?.id !== track.id) return;
       transitioningTrackRef.current = null;
       if (Platform.OS === 'web') setIsSoundcloudLoading(false);
-      if (changed && seekTarget !== null && !track.isLiveStream) await player.seekTo(seekTarget);
+      if (!persistentWebMedia && changed && seekTarget !== null && !track.isLiveStream) await player.seekTo(seekTarget);
       if (progressResetTimerRef.current) clearTimeout(progressResetTimerRef.current);
       progressResetTimerRef.current = setTimeout(() => {
         setProgressResetTrackId((trackId) => trackId === track.id ? null : trackId);
@@ -1616,19 +1754,22 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       transitioningTrackRef.current = null;
       setPlaybackIntent(false);
       setIsSoundcloudLoading(false);
-      if (!isExpectedPlaybackRejection(error)) Alert.alert('Плеер', 'Не удалось запустить воспроизведение');
+      const name = error && typeof error === 'object' && 'name' in error ? String(error.name) : '';
+      if (name !== 'AbortError') onNotify(name === 'NotAllowedError'
+        ? 'Браузер не разрешил запуск аудио. Нажмите воспроизведение ещё раз.'
+        : 'Не удалось запустить аудиофайл. Попробуйте ещё раз.', 'error');
     }
-  }, [armSoundcloudDiagnostic, loadSavedStatuses, playExpoAudio, player, resolveSoundcloudQueueTarget, resolveTrackAvailability, sessionStorageKey, startSoundcloudTrack]);
+  }, [armSoundcloudDiagnostic, loadSavedStatuses, markListenLaterReviewed, onNotify, playExpoAudio, player, resolveSoundcloudQueueTarget, resolveTrackAvailability, sessionStorageKey, startSoundcloudTrack]);
   playRef.current = play;
 
   useEffect(() => {
     const queue = activeTrack?.queue;
     const currentIndex = activeTrack?.queueIndex ?? -1;
     if (!queue?.length || currentIndex < 0) return;
-    const previousIndex = currentIndex - 1 >= 0
+    const previousIndex = isShuffleEnabled ? queue.findIndex((item) => item.id === shuffledNeighbors.previous) : currentIndex - 1 >= 0
       ? currentIndex - 1
       : isRepeatEnabled ? queue.length - 1 : -1;
-    const nextIndex = currentIndex + 1 < queue.length
+    const nextIndex = isShuffleEnabled ? queue.findIndex((item) => item.id === shuffledNeighbors.next) : currentIndex + 1 < queue.length
       ? currentIndex + 1
       : isRepeatEnabled ? 0 : -1;
     const previousTrack = previousIndex >= 0 ? queue[previousIndex] : null;
@@ -1637,12 +1778,14 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     // source held by the single web preloader when both neighbours differ.
     if (previousTrack && previousTrack.id !== activeTrack?.id) primeQueueNeighbor(previousTrack, 'previous');
     if (nextTrack && nextTrack.id !== activeTrack?.id) primeQueueNeighbor(nextTrack, 'next');
-  }, [activeTrack, isRepeatEnabled, primeQueueNeighbor]);
+  }, [activeTrack, isRepeatEnabled, isShuffleEnabled, primeQueueNeighbor, shuffledNeighbors.next, shuffledNeighbors.previous]);
 
   useEffect(() => {
     const queue = activeTrack?.queue;
     if (!queue?.length) return;
-    const artworkUrls = followingCollectionIndexesForTrack(activeTrack, 2)
+    const artworkUrls = (isShuffleEnabled
+      ? [queue.findIndex((item) => item.id === shuffledNeighbors.next), queue.findIndex((item) => item.id === shuffledNeighbors.previous)]
+      : followingCollectionIndexesForTrack(activeTrack, 2))
       .map((index) => {
         const item = queue[index];
         return item ? expandedPlayerArtwork(item.artworkUrl, item.provider) : null;
@@ -1651,7 +1794,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     for (const artworkUrl of new Set(artworkUrls)) {
       void Image.prefetch(artworkUrl).catch(() => undefined);
     }
-  }, [activeTrack?.id, activeTrack?.queue, activeTrack?.queueIndex]);
+  }, [activeTrack?.id, activeTrack?.queue, activeTrack?.queueIndex, isShuffleEnabled, shuffledNeighbors.next, shuffledNeighbors.previous]);
 
   const pause = useCallback(() => {
     playbackRequestRef.current += 1;
@@ -1712,6 +1855,17 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     setExpanded(false);
     setActiveTrack(null);
   }, [clearSoundcloudDiagnosticTimer, player]);
+
+  useEffect(() => {
+    const current = activeTrackRef.current;
+    if (!deviceDownloads.ready || !current) return;
+    if (current.downloadKey && (deviceDownloads.clearing || !findDeviceDownload(current))) { close(); return; }
+    if (current.queueSource !== 'device-downloads' || deviceDownloads.clearing) return;
+    const next = restrictDeviceDownloadQueue(current);
+    if (next.queue?.length !== current.queue?.length || next.queueIndex !== current.queueIndex) {
+      activeTrackRef.current = next; setActiveTrack(next);
+    }
+  }, [close, deviceDownloads.ready, deviceDownloads.items, deviceDownloads.clearing]);
 
   persistSessionRef.current = async () => {
     try {
@@ -1797,15 +1951,8 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     await player.seekTo(target);
   }, [player, soundcloudWebState.duration, uploadedWebState.duration, youtubeState.duration, youtubeState.playing]);
 
-  const shuffledQueueState = isShuffleEnabled && activeTrack?.queue?.length
-    ? ensureShuffleQueueState(shuffleQueueRef.current, activeTrack.queue.map((item) => item.id), activeTrack.id)
-    : null;
-  const hasShuffledPrevious = Boolean(shuffledQueueState && shuffledQueueState.position > 0);
-  const hasShuffledNext = Boolean(shuffledQueueState && (
-    shuffledQueueState.position < shuffledQueueState.history.length - 1
-    || shuffledQueueState.remaining.length > 0
-    || (isRepeatEnabled && activeTrack?.queue && activeTrack.queue.length > 1)
-  ));
+  const hasShuffledPrevious = Boolean(shuffledNeighbors.previous);
+  const hasShuffledNext = Boolean(shuffledNeighbors.next);
   const currentActiveQueueIndex = activeQueueIndex(activeTrack);
   const hasPreviousTrack = isShuffleEnabled
     ? hasShuffledPrevious
@@ -1819,8 +1966,11 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       : Boolean(activeTrack?.queue && (currentActiveQueueIndex >= 0 && (currentActiveQueueIndex < activeTrack.queue.length - 1 || isRepeatEnabled))) || Boolean(activeTrack && isRepeatEnabled);
 
   const adjacentCollectionIndexes = useMemo(
-    () => adjacentCollectionIndexesForTrack(activeTrack),
-    [activeTrack?.id, activeTrack?.previewUrl, activeTrack?.queue, activeTrack?.queueIndex],
+    () => isShuffleEnabled ? {
+      previous: activeTrack?.queue?.findIndex((item) => item.id === shuffledNeighbors.previous) ?? -1,
+      next: activeTrack?.queue?.findIndex((item) => item.id === shuffledNeighbors.next) ?? -1,
+    } : adjacentCollectionIndexesForTrack(activeTrack),
+    [activeTrack?.id, activeTrack?.previewUrl, activeTrack?.queue, activeTrack?.queueIndex, isShuffleEnabled, shuffledNeighbors.next, shuffledNeighbors.previous],
   );
   const hasPreviousCollection = adjacentCollectionIndexes.previous >= 0;
   const hasNextCollection = adjacentCollectionIndexes.next >= 0;
@@ -1829,11 +1979,46 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
   const previousCollectionArtworkUrl = previousCollectionTrack?.artworkUrl ?? null;
   const nextCollectionArtworkUrl = nextCollectionTrack?.artworkUrl ?? null;
 
+  const playShuffled = useCallback(async (direction: 'next' | 'previous') => {
+    const track = activeTrackRef.current;
+    if (!track?.queue?.length || shuffleNavigationRef.current) return;
+    const queue = track.queue.filter((item) => item.id === track.id || !isKnownMusicUnavailable(item));
+    const ids = queue.map((item) => item.id);
+    const plan = prepareShuffleQueueState(shuffleQueueRef.current, ids, track.id, repeatEnabledRef.current);
+    const result = direction === 'next'
+      ? takeNextShuffledTrack(plan, ids, track.id, repeatEnabledRef.current)
+      : takePreviousShuffledTrack(plan, ids, track.id);
+    const target = queue.find((item) => item.id === result.id);
+    if (!target) return;
+    const pending = {};
+    shuffleNavigationRef.current = pending;
+    const request = playbackRequestRef.current;
+    const originalPlan = shuffleQueueRef.current;
+    try {
+      // Shuffle owns this queue snapshot. Sliding a catalog window or restoring
+      // another release's last item would discard the actual playback history.
+      const resolved = await resolveSoundcloudQueueTarget(target, queue, direction);
+      if (playbackRequestRef.current !== request || !shuffleEnabledRef.current
+        || shuffleQueueRef.current !== originalPlan || activeTrackRef.current?.id !== track.id) return;
+      const playing = play({ ...resolved.track, queue: resolved.queue, queueIndex: resolved.queueIndex,
+        queueWindowResolver: track.queueWindowResolver }, resolved.track.startSeconds ?? 0,
+        resolveShuffledQueueTrack(result.state, target.id, resolved.track.id));
+      // play commits synchronously; subsequent gestures can now navigate the new track.
+      shuffleNavigationRef.current = null;
+      await playing;
+    } catch {
+      onNotify('Не удалось переключить трек. Попробуйте ещё раз.', 'error');
+    } finally {
+      if (shuffleNavigationRef.current === pending) shuffleNavigationRef.current = null;
+    }
+  }, [onNotify, play, resolveSoundcloudQueueTarget]);
+
   const playPrevious = useCallback(async () => {
+    if (shuffleEnabledRef.current) return playShuffled('previous');
     const track = activeTrackRef.current;
     if (!track) return;
-    const queue = track.queue;
-    const currentIndex = activeQueueIndex(track);
+    const queue = track.queue?.filter((item) => item.id === track.id || !isKnownMusicUnavailable(item));
+    const currentIndex = activeQueueIndex({ ...track, queue, queueIndex: undefined });
     // A screen-owned queue is authoritative. The SoundCloud widget can retain
     // stale playlist length/index data after widget.load(), so consulting its
     // internal queue here may repeat the current track instead of moving to the
@@ -1849,18 +2034,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       if (repeatEnabledRef.current) await play(track, track.startSeconds ?? 0);
       return;
     }
-    let index: number;
-    if (shuffleEnabledRef.current && queue.length > 1) {
-      const result = takePreviousShuffledTrack(
-        shuffleQueueRef.current ?? createShuffleQueueState(queue.map((item) => item.id), track.id),
-        queue.map((item) => item.id),
-        track.id,
-      );
-      shuffleQueueRef.current = result.state;
-      index = result.id ? queue.findIndex((item) => item.id === result.id) : -1;
-    } else {
-      index = currentIndex > 0 ? currentIndex - 1 : repeatEnabledRef.current ? queue.length - 1 : -1;
-    }
+    const index = currentIndex > 0 ? currentIndex - 1 : repeatEnabledRef.current ? queue.length - 1 : -1;
     const previous = queue?.[index];
     if (previous) {
       const currentCollectionId = track.collectionId?.trim()
@@ -1869,7 +2043,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         || (previous.provider === 'soundcloud' && previous.externalUrl?.includes('/sets/') ? previous.externalUrl.trim() : '');
       // Restore the last played item only when crossing back into another
       // collection. Inside the same playlist, the adjacent queue item must win.
-      const remembered = previousCollectionId && previousCollectionId !== currentCollectionId
+      const remembered = track.queueSource !== 'device-downloads' && previousCollectionId && previousCollectionId !== currentCollectionId
         ? lastPlayedCollectionTrackRef.current.get(previousCollectionId)
         : undefined;
       const rememberedQueue = remembered?.queue;
@@ -1892,13 +2066,14 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         queueWindowResolver: track.queueWindowResolver,
       }, resolvedTarget.track.startSeconds ?? 0);
     }
-  }, [play, resolveSoundcloudQueueTarget, soundcloudState.trackIndex]);
+  }, [play, playShuffled, resolveSoundcloudQueueTarget, soundcloudState.trackIndex]);
 
   const playNext = useCallback(async () => {
+    if (shuffleEnabledRef.current) return playShuffled('next');
     const track = activeTrackRef.current;
     if (!track) return;
-    const queue = track.queue;
-    const currentIndex = activeQueueIndex(track);
+    const queue = track.queue?.filter((item) => item.id === track.id || !isKnownMusicUnavailable(item));
+    const currentIndex = activeQueueIndex({ ...track, queue, queueIndex: undefined });
     if (track.provider === 'soundcloud' && !shuffleEnabledRef.current && !queue?.length) {
       if (soundcloudState.trackIndex < soundcloudState.trackCount - 1) {
         soundcloudWidgetRef.current?.next?.();
@@ -1910,19 +2085,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
       if (repeatEnabledRef.current) await play(track, track.startSeconds ?? 0);
       return;
     }
-    let index: number;
-    if (shuffleEnabledRef.current && queue.length > 1) {
-      const result = takeNextShuffledTrack(
-        shuffleQueueRef.current ?? createShuffleQueueState(queue.map((item) => item.id), track.id),
-        queue.map((item) => item.id),
-        track.id,
-        repeatEnabledRef.current,
-      );
-      shuffleQueueRef.current = result.state;
-      index = result.id ? queue.findIndex((item) => item.id === result.id) : -1;
-    } else {
-      index = currentIndex < queue.length - 1 ? currentIndex + 1 : repeatEnabledRef.current ? 0 : -1;
-    }
+    const index = currentIndex < queue.length - 1 ? currentIndex + 1 : repeatEnabledRef.current ? 0 : -1;
     const next = queue?.[index];
     if (next) {
       const staysInsideCollection = trackCollectionKey(next) === trackCollectionKey(track);
@@ -1935,10 +2098,11 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         queueWindowResolver: track.queueWindowResolver,
       }, resolvedTarget.track.startSeconds ?? 0);
     }
-  }, [play, resolveSoundcloudQueueTarget, soundcloudState.trackCount, soundcloudState.trackIndex]);
+  }, [play, playShuffled, resolveSoundcloudQueueTarget, soundcloudState.trackCount, soundcloudState.trackIndex]);
   playNextRef.current = playNext;
 
   const playPreviousCollection = useCallback(async () => {
+    if (shuffleEnabledRef.current) return playShuffled('previous');
     const track = activeTrackRef.current;
     const queue = track?.queue;
     const index = adjacentCollectionIndexes.previous;
@@ -1953,9 +2117,10 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         queueWindowResolver: track?.queueWindowResolver,
       }, resolvedTarget.track.startSeconds ?? 0);
     }
-  }, [adjacentCollectionIndexes.previous, play, resolveSoundcloudQueueTarget]);
+  }, [adjacentCollectionIndexes.previous, play, playShuffled, resolveSoundcloudQueueTarget]);
 
   const playNextCollection = useCallback(async () => {
+    if (shuffleEnabledRef.current) return playShuffled('next');
     const track = activeTrackRef.current;
     const queue = track?.queue;
     const index = adjacentCollectionIndexes.next;
@@ -1970,16 +2135,27 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         queueWindowResolver: track?.queueWindowResolver,
       }, resolvedTarget.track.startSeconds ?? 0);
     }
-  }, [adjacentCollectionIndexes.next, play, resolveSoundcloudQueueTarget]);
+  }, [adjacentCollectionIndexes.next, play, playShuffled, resolveSoundcloudQueueTarget]);
 
   const setActiveQueue = useCallback((queue: GlobalTrackQueueItem[], queueWindowResolver?: GlobalTrack['queueWindowResolver']) => {
     const track = activeTrackRef.current;
     if (!track) return;
+    if (track.queueSource === 'device-downloads') {
+      if (queue.some((item) => item.queueSource !== 'device-downloads' || !item.downloadKey)) return;
+      queue = queue.filter((item) => findDeviceDownload(item));
+      queueWindowResolver = undefined;
+    } else if (shuffleEnabledRef.current && track.queue?.length && queueWindowResolver && track.queueWindowResolver) {
+      // Mounted catalog screens recenter their bounded window on every track.
+      // Keep the shuffle snapshot (and actual previous tracks) until a new
+      // explicit launch; retain the current resolver for sequential mode.
+      queue = track.queue;
+    }
+    queue = queue.filter((item) => item.id === track.id || !isKnownMusicUnavailable(item));
     const queueIndex = queue.findIndex((item) => item.id === track.id);
     if (queueIndex < 0) return;
     const currentIds = track.queue?.map((item) => item.id).join('\n') ?? '';
     const nextIds = queue.map((item) => item.id).join('\n');
-    const nextResolver = queueWindowResolver ?? track.queueWindowResolver;
+    const nextResolver = track.queueSource === 'device-downloads' ? undefined : queueWindowResolver ?? track.queueWindowResolver;
     if (currentIds === nextIds && track.queueIndex === queueIndex && track.queueWindowResolver === nextResolver) return;
     const updated = { ...track, queue, queueIndex, queueWindowResolver: nextResolver };
     activeTrackRef.current = updated;
@@ -2204,7 +2380,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
     shuffleEnabledRef.current = nextValue;
     const track = activeTrackRef.current;
     shuffleQueueRef.current = nextValue && track?.queue?.length
-      ? createShuffleQueueState(track.queue.map((item) => item.id), track.id)
+      ? prepareShuffleQueueState(null, track.queue.filter((item) => item.id === track.id || !isKnownMusicUnavailable(item)).map((item) => item.id), track.id, repeatEnabledRef.current)
       : null;
     setIsShuffleEnabled(nextValue);
   }, []);
@@ -2283,6 +2459,7 @@ export function GlobalAudioProvider({ children, onAddTrackToPost, onNotify, stor
         ref={youtubeEngineRef}
         onEnded={() => {
           if (activeTrackRef.current?.provider !== 'youtube') return;
+          markListenLaterReviewed(activeTrackRef.current);
           if (repeatEnabledRef.current) {
             const current = activeTrackRef.current;
             const videoId = youtubeVideoId(current);
@@ -2449,7 +2626,7 @@ function useOverflowMarquee(contentKey: string) {
   };
 }
 
-export function MarqueeTrackTitle({ compact = false, connect = false, emphasisPrefix = '', emphasisSuffix = '', emphasizeTitle = false, header = false, plainSuffix = '', profile = false, title }: { compact?: boolean; connect?: boolean; emphasisPrefix?: string; emphasisSuffix?: string; emphasizeTitle?: boolean; header?: boolean; plainSuffix?: string; profile?: boolean; title: string }) {
+export function MarqueeTrackTitle({ accessibilityLabel, compact = false, connect = false, emphasisPrefix = '', emphasisSuffix = '', emphasizeTitle = false, header = false, metadata = false, plainSuffix = '', profile = false, title }: { accessibilityLabel?: string; compact?: boolean; connect?: boolean; emphasisPrefix?: string; emphasisSuffix?: string; emphasizeTitle?: boolean; header?: boolean; metadata?: boolean; plainSuffix?: string; profile?: boolean; title: string }) {
   const contentKey = `${emphasisPrefix}${title}${plainSuffix}${emphasisSuffix}`;
   const { fadeEdges, gradientId, hasOverflow, leftFadeOpacity, onContainerLayout, onContentLayout, rightFadeOpacity, shouldScroll, translateX } = useOverflowMarquee(contentKey);
   const fadeColor = compact || profile ? '#fff' : '#f3f5f7';
@@ -2468,26 +2645,28 @@ export function MarqueeTrackTitle({ compact = false, connect = false, emphasisPr
       } as any)
     : null;
   const content = <>{emphasisPrefix ? <Text style={localStyles.marqueeEmphasisPrefix}>{emphasisPrefix}</Text> : null}{emphasizeTitle ? <Text style={localStyles.marqueeEmphasisSuffix}>{title}</Text> : title}{plainSuffix}{emphasisSuffix ? <Text style={localStyles.marqueeEmphasisSuffix}>{emphasisSuffix}</Text> : null}</>;
+  const textStyle = metadata ? localStyles.expandedMetadataText : connect ? localStyles.connectMarqueeTitle : profile ? localStyles.profileMarqueeTitle : header ? localStyles.expandedHeaderCollection : compact ? localStyles.title : localStyles.expandedTitle;
 
-  return <View onLayout={onContainerLayout} style={[localStyles.marqueeTitleViewport, compact || profile ? localStyles.miniMarqueeTitleViewport : null, connect ? localStyles.connectMarqueeTitleViewport : null, header ? localStyles.headerMarqueeTitleViewport : null, transparentWebMask]}>
+  return <View onLayout={onContainerLayout} style={[localStyles.marqueeTitleViewport, compact || profile ? localStyles.miniMarqueeTitleViewport : null, connect ? localStyles.connectMarqueeTitleViewport : null, header ? localStyles.headerMarqueeTitleViewport : null, metadata ? localStyles.expandedMetadataViewport : null, transparentWebMask]}>
     <Text
       accessible={false}
       importantForAccessibility="no-hide-descendants"
       onLayout={onContentLayout}
       style={[
-        connect ? localStyles.connectMarqueeTitle : profile ? localStyles.profileMarqueeTitle : header ? localStyles.expandedHeaderCollection : compact ? localStyles.title : localStyles.expandedTitle,
+        textStyle,
         localStyles.marqueeMeasureText,
         Platform.OS === 'web' ? localStyles.marqueeTitleTextWeb : null,
       ]}
     >{content}</Text>
     <Animated.Text
+      accessibilityLabel={accessibilityLabel}
       numberOfLines={Platform.OS === 'web' ? undefined : 1}
       style={[
-        connect ? localStyles.connectMarqueeTitle : profile ? localStyles.profileMarqueeTitle : header ? localStyles.expandedHeaderCollection : compact ? localStyles.title : localStyles.expandedTitle,
+        textStyle,
         localStyles.marqueeTitleText,
         Platform.OS === 'web' ? localStyles.marqueeTitleTextWeb : null,
         header && !shouldScroll ? localStyles.headerMarqueeTitleCentered : null,
-        { transform: [{ translateX }] },
+        shouldScroll ? { transform: [{ translateX }] } : null,
       ]}
     >{content}</Animated.Text>
     {hasOverflow && !connect && !(Platform.OS === 'web' && compact) ? <Animated.View pointerEvents="none" style={[localStyles.marqueeFadeLeft, compact || header || profile ? localStyles.miniMarqueeFade : null, { opacity: leftFadeOpacity }]}><Svg height="100%" width="100%"><Defs><LinearGradient id={`${gradientId}-left`} x1="0" y1="0" x2="1" y2="0"><Stop offset="0" stopColor={fadeColor} stopOpacity="1" /><Stop offset="1" stopColor={fadeColor} stopOpacity="0" /></LinearGradient></Defs><Rect width="100%" height="100%" fill={`url(#${gradientId}-left)`} /></Svg></Animated.View> : null}
@@ -2510,21 +2689,37 @@ function SoundcloudLogo() {
   return <SvgUri accessibilityLabel="SoundCloud" height={15} uri={uri} width={110} />;
 }
 
-export function GlobalMiniPlayer({ bottomNavigationHeight = 0, hasBottomNavigation = true, onOpenProfile, onOpenPublicPage }: {
+export function GlobalMiniPlayer({ bottomNavigationHeight = 0, hasBottomNavigation = true, placement = 'overlay', modalPresentation = false, onOpenProfile, onOpenPublicPage }: {
+  /** A player hosted by a native/Web Modal must expand in that same modal stack. */
+  modalPresentation?: boolean;
   bottomNavigationHeight?: number;
   hasBottomNavigation?: boolean;
+  placement?: 'overlay' | 'inline';
   onOpenProfile?: (username: string) => Promise<void> | void;
   onOpenPublicPage?: (username: string) => Promise<void> | void;
 }) {
   const audio = useGlobalAudioControls();
-  const { progress } = useGlobalAudioProgress();
+  const { durationSeconds, progress } = useGlobalAudioProgress();
   const insets = useSafeAreaInsets();
   const { activeTrack, close, isPlaying, pause, play } = audio;
+  const { label: unavailableLabel } = useMusicAvailability(activeTrack ?? {}, false);
   const { isExpanded: expanded, setExpanded } = audio;
   const closeExpanded = useCallback(() => setExpanded(false), []);
   const [renderedTrack, setRenderedTrack] = useState<GlobalTrack | null>(activeTrack);
   const visibility = useRef(new Animated.Value(activeTrack ? 1 : 0)).current;
   const wasVisible = useRef(Boolean(activeTrack));
+  const fillProgress = useRef(new Animated.Value(progress)).current;
+  const progressWidth = useRef(1);
+  const scrubStartX = useRef(0);
+  const webPointerId = useRef<number | null>(null);
+  const webPointerCaptureTarget = useRef<Element | null>(null);
+  const webPointerStart = useRef<{ x: number; y: number } | null>(null);
+  const webScrubbing = useRef(false);
+  const webScrubProgress = useRef<number | null>(null);
+  const webSuppressPress = useRef(false);
+  const settleTarget = useRef<number | null>(null);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [scrubProgress, setScrubProgress] = useState<number | null>(null);
 
   useEffect(() => {
     if (activeTrack) {
@@ -2547,6 +2742,189 @@ export function GlobalMiniPlayer({ bottomNavigationHeight = 0, hasBottomNavigati
   }, [activeTrack, visibility]);
 
   const track = activeTrack ?? renderedTrack;
+  const canSeek = Boolean(activeTrack && track && !track.isLiveStream && durationSeconds > 0 && !audio.isAudioLoading);
+  const displayedProgress = scrubProgress ?? progress;
+  const clearSettle = useCallback(() => {
+    settleTarget.current = null;
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = null;
+  }, []);
+  useEffect(() => {
+    const target = settleTarget.current;
+    if (target === null || Math.abs(progress - target) > 0.015) return;
+    clearSettle();
+    setScrubProgress(null);
+  }, [clearSettle, progress]);
+  useEffect(() => {
+    if (activeTrack) return;
+    clearSettle();
+    setScrubProgress(null);
+  }, [activeTrack, clearSettle]);
+  useEffect(() => () => clearSettle(), [clearSettle]);
+  useEffect(() => {
+    fillProgress.stopAnimation();
+    if (scrubProgress !== null) {
+      fillProgress.setValue(displayedProgress);
+      return;
+    }
+    Animated.timing(fillProgress, {
+      duration: isPlaying ? 280 : 120,
+      toValue: displayedProgress,
+      useNativeDriver: false,
+    }).start();
+  }, [displayedProgress, fillProgress, isPlaying, scrubProgress]);
+  const updateScrub = useCallback((localX: number, commit = false) => {
+    if (!canSeek || !Number.isFinite(localX) || progressWidth.current <= 0) return;
+    const next = Math.min(1, Math.max(0, localX / progressWidth.current));
+    setScrubProgress(next);
+    if (!commit) return;
+    settleTarget.current = next;
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(() => {
+      settleTarget.current = null;
+      settleTimer.current = null;
+      setScrubProgress(null);
+    }, 900);
+    void audio.seek(next).catch(() => {
+      clearSettle();
+      setScrubProgress(null);
+    });
+  }, [audio.seek, canSeek, clearSettle]);
+  const adjustBySeconds = useCallback((seconds: number) => {
+    if (!canSeek || durationSeconds <= 0) return;
+    updateScrub((displayedProgress + seconds / durationSeconds) * progressWidth.current, true);
+  }, [canSeek, displayedProgress, durationSeconds, updateScrub]);
+  const scrubResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_event, gesture) => canSeek && Math.abs(gesture.dx) > 3 && Math.abs(gesture.dx) >= Math.abs(gesture.dy),
+    onPanResponderGrant: (event, gesture) => {
+      clearSettle();
+      scrubStartX.current = Number(event.nativeEvent.locationX) - gesture.dx;
+      updateScrub(scrubStartX.current + gesture.dx);
+    },
+    onPanResponderMove: (_event, gesture) => updateScrub(scrubStartX.current + gesture.dx),
+    onPanResponderRelease: (_event, gesture) => updateScrub(scrubStartX.current + gesture.dx, true),
+    onPanResponderReject: () => { clearSettle(); setScrubProgress(null); },
+    onPanResponderTerminate: () => { clearSettle(); setScrubProgress(null); },
+    onPanResponderTerminationRequest: () => false,
+  }), [canSeek, clearSettle, updateScrub]);
+  const updateWebScrub = useCallback((element: HTMLElement, clientX: number, commit = false) => {
+    const rect = element.getBoundingClientRect();
+    if (!Number.isFinite(clientX) || rect.width <= 0) return;
+    const next = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    webScrubProgress.current = next;
+    updateScrub(next * progressWidth.current, commit);
+  }, [updateScrub]);
+  const webScrubHandlers = useMemo(() => ({
+    onLostPointerCapture: (event: any) => {
+      const pointerId = Number(event.nativeEvent?.pointerId ?? event.pointerId);
+      if (webPointerId.current !== pointerId) return;
+      const finalProgress = webScrubProgress.current;
+      const shouldCommit = webScrubbing.current && finalProgress !== null;
+      webPointerId.current = null;
+      webPointerCaptureTarget.current = null;
+      webPointerStart.current = null;
+      webScrubbing.current = false;
+      webScrubProgress.current = null;
+      if (shouldCommit) updateScrub(finalProgress * progressWidth.current, true);
+      else setScrubProgress(null);
+    },
+    onPointerCancel: (event: any) => {
+      const pointerId = Number(event.nativeEvent?.pointerId ?? event.pointerId);
+      if (webPointerId.current !== pointerId) return;
+      webPointerId.current = null;
+      webPointerCaptureTarget.current = null;
+      webPointerStart.current = null;
+      webScrubbing.current = false;
+      webScrubProgress.current = null;
+      webSuppressPress.current = false;
+      clearSettle();
+      setScrubProgress(null);
+    },
+    onPointerDown: (event: any) => {
+      if (!canSeek || webPointerId.current !== null) return;
+      const nativeEvent = event.nativeEvent ?? event;
+      const pointerId = Number(nativeEvent.pointerId);
+      const x = Number(nativeEvent.clientX ?? nativeEvent.pageX);
+      const y = Number(nativeEvent.clientY ?? nativeEvent.pageY);
+      if (!Number.isFinite(pointerId) || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      webPointerId.current = pointerId;
+      webPointerStart.current = { x, y };
+      webScrubbing.current = false;
+      webSuppressPress.current = false;
+      const eventTarget = event.target as Element | null;
+      const captureTarget = eventTarget && typeof eventTarget.setPointerCapture === 'function'
+        ? eventTarget
+        : event.currentTarget as Element;
+      try {
+        captureTarget.setPointerCapture(pointerId);
+        webPointerCaptureTarget.current = captureTarget;
+      } catch {
+        webPointerCaptureTarget.current = null;
+      }
+    },
+    onPointerMove: (event: any) => {
+      const nativeEvent = event.nativeEvent ?? event;
+      const pointerId = Number(nativeEvent.pointerId);
+      const x = Number(nativeEvent.clientX ?? nativeEvent.pageX);
+      const y = Number(nativeEvent.clientY ?? nativeEvent.pageY);
+      if (webPointerId.current !== pointerId || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      const start = webPointerStart.current;
+      if (!webScrubbing.current) {
+        if (!start) return;
+        const deltaX = x - start.x;
+        const deltaY = y - start.y;
+        if (Math.abs(deltaX) <= 3 || Math.abs(deltaX) < Math.abs(deltaY)) return;
+        webScrubbing.current = true;
+        webSuppressPress.current = true;
+        clearSettle();
+        if (!webPointerCaptureTarget.current) {
+          try {
+            (event.currentTarget as Element).setPointerCapture(pointerId);
+            webPointerCaptureTarget.current = event.currentTarget as Element;
+          } catch {
+            webPointerCaptureTarget.current = null;
+          }
+        }
+      }
+      event.preventDefault();
+      updateWebScrub(event.currentTarget as HTMLElement, x);
+    },
+    onPointerLeave: () => {
+      if (webScrubbing.current) return;
+      const pointerId = webPointerId.current;
+      if (pointerId !== null && webPointerCaptureTarget.current?.hasPointerCapture(pointerId)) return;
+      webPointerId.current = null;
+      webPointerCaptureTarget.current = null;
+      webPointerStart.current = null;
+      webSuppressPress.current = false;
+    },
+    onPointerUp: (event: any) => {
+      const nativeEvent = event.nativeEvent ?? event;
+      const pointerId = Number(nativeEvent.pointerId);
+      const x = Number(nativeEvent.clientX ?? nativeEvent.pageX);
+      if (webPointerId.current !== pointerId) return;
+      if (webScrubbing.current) {
+        event.preventDefault();
+        updateWebScrub(event.currentTarget as HTMLElement, x, true);
+      }
+      const captureTarget = webPointerCaptureTarget.current;
+      webPointerId.current = null;
+      webPointerCaptureTarget.current = null;
+      webPointerStart.current = null;
+      webScrubbing.current = false;
+      webScrubProgress.current = null;
+      if (captureTarget?.hasPointerCapture(pointerId)) captureTarget.releasePointerCapture(pointerId);
+    },
+    onClickCapture: (event: any) => {
+      if (!webSuppressPress.current) return;
+      webSuppressPress.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    onContextMenu: (event: any) => event.preventDefault(),
+    onDragStart: (event: any) => event.preventDefault(),
+  }), [canSeek, clearSettle, updateWebScrub]);
   if (!track) return null;
   const miniPlayerOffset = hasBottomNavigation ? 80 : 10;
   const measuredNavigationOffset = hasBottomNavigation && bottomNavigationHeight > 0 ? bottomNavigationHeight + 8 : null;
@@ -2562,20 +2940,41 @@ export function GlobalMiniPlayer({ bottomNavigationHeight = 0, hasBottomNavigati
     transform: [{ translateY: visibility.interpolate({ inputRange: [0, 1], outputRange: [68, 0] }) }],
   };
   return <>
-  <Animated.View pointerEvents={activeTrack ? 'auto' : 'none'} style={[localStyles.shell, { bottom: miniPlayerBottom } as unknown as ViewStyle, animatedStyle]}>
-    <Pressable accessibilityLabel="Открыть плеер" accessibilityRole="button" onPress={() => setExpanded(true)}>{track.artworkUrl ? <Image source={{ uri: musicArtworkThumbnail(track.artworkUrl, track.provider) ?? track.artworkUrl }} style={localStyles.artwork} /> : <View style={localStyles.artworkFallback}><Text style={localStyles.artworkFallbackText}>♪</Text></View>}</Pressable>
-    <Pressable accessibilityLabel="Открыть плеер" accessibilityRole="button" onPress={() => setExpanded(true)} style={localStyles.copy}><MarqueeTrackTitle compact title={track.title} />{track.artist ? <Text numberOfLines={1} style={localStyles.artist}>{track.artist}</Text> : null}</Pressable>
-    {audio.canSaveRadio ? <PlayerAnimatedButton accessibilityLabel={audio.isSavedRadio ? 'Удалить радиостанцию из избранного' : 'Добавить радиостанцию в избранное'} disabled={audio.isSavingRadio} onPress={() => void audio.toggleFavoriteRadio()} style={[localStyles.control, localStyles.miniSaveControl]}>{audio.isSavingRadio ? <ActivityIndicator color="#111" size="small" /> : <AnimatedStateIcon active={audio.isSavedRadio} activeIcon={<Check color="#111" size={20} strokeWidth={2.2} />} inactiveIcon={<Plus color="#111" size={20} strokeWidth={2.1} />} size={20} />}</PlayerAnimatedButton> : audio.canSaveToMyMusic ? <PlayerAnimatedButton accessibilityLabel={audio.isSavedToMyMusic ? 'Удалить трек из моей музыки' : 'Добавить трек в мою музыку'} disabled={audio.isSavingToMyMusic} onPress={() => void audio.toggleMyMusic()} style={[localStyles.control, localStyles.miniSaveControl]}><AnimatedStateIcon active={audio.isSavedToMyMusic} activeIcon={<Check color="#111" size={20} strokeWidth={2.2} />} inactiveIcon={<Plus color="#111" size={20} strokeWidth={2.1} />} size={20} /></PlayerAnimatedButton> : null}
-    <PlayerAnimatedButton accessibilityLabel={audio.isAudioLoading ? 'Аудио загружается' : isPlaying ? 'Пауза' : 'Продолжить воспроизведение'} disabled={audio.isAudioLoading} onPress={() => isPlaying ? pause() : void play(track)} style={localStyles.control}>{audio.isAudioLoading ? <ActivityIndicator color="#111" size="small" /> : <AnimatedStateIcon active={isPlaying} activeIcon={<Pause color="#111" size={19} fill="#111" />} inactiveIcon={<Play color="#111" size={19} fill="#111" />} size={19} />}</PlayerAnimatedButton>
-    <PlayerAnimatedButton accessibilityLabel="Следующий трек" disabled={!audio.hasNextTrack} onPress={() => void audio.playNext()} style={[localStyles.control, !audio.hasNextTrack && localStyles.miniControlDisabled]}><SkipForward color="#111" fill="#111" size={20} /></PlayerAnimatedButton>
-    <Pressable accessibilityLabel="Закрыть плеер" accessibilityRole="button" hitSlop={8} onPress={close} style={localStyles.control}><X color="#53606c" size={20} /></Pressable>
-    <View pointerEvents="none" style={localStyles.progressTrack}><View style={[localStyles.progressFill, { width: `${progress * 100}%` }]} /></View>
+  <Animated.View
+    {...(Platform.OS === 'web' ? webScrubHandlers : scrubResponder.panHandlers)}
+    onLayout={(event) => { progressWidth.current = Math.max(1, event.nativeEvent.layout.width); }}
+    pointerEvents={activeTrack ? 'auto' : 'none'}
+    style={[localStyles.shell, placement === 'inline' ? localStyles.inlineShell : { bottom: miniPlayerBottom } as unknown as ViewStyle, placement === 'inline' ? { opacity: visibility } : animatedStyle]}
+  >
+    <Animated.View pointerEvents="none" style={[localStyles.miniProgressFill, { width: fillProgress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) }]} />
+    <View style={localStyles.miniPlayerContent}>
+      <Pressable accessibilityLabel="Открыть плеер" accessibilityRole="button" onPress={() => setExpanded(true)}>{track.artworkUrl ? <Image source={{ uri: musicArtworkThumbnail(track.artworkUrl, track.provider) ?? track.artworkUrl }} style={localStyles.artwork} /> : <View style={localStyles.artworkFallback}><Text style={localStyles.artworkFallbackText}>♪</Text></View>}</Pressable>
+      <Pressable
+        accessibilityActions={[{ name: 'increment', label: 'Перемотать вперёд' }, { name: 'decrement', label: 'Перемотать назад' }]}
+        accessibilityHint="Смахните горизонтально для перемотки"
+        accessibilityLabel={durationSeconds > 0 ? `Открыть плеер, ${formatPlayerTime(displayedProgress * durationSeconds)} из ${formatPlayerTime(durationSeconds)}` : 'Открыть плеер'}
+        accessibilityRole="button"
+        onAccessibilityAction={(event) => adjustBySeconds(event.nativeEvent.actionName === 'increment' ? 5 : -5)}
+        {...(Platform.OS === 'web' ? { onKeyDown: (event: any) => {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+          event.preventDefault();
+          adjustBySeconds(event.key === 'ArrowRight' ? 5 : -5);
+        } } : {})}
+        onPress={() => setExpanded(true)}
+        style={localStyles.copy}
+      ><MarqueeTrackTitle compact title={track.title} />{unavailableLabel || track.artist ? <Text numberOfLines={1} style={localStyles.artist}>{unavailableLabel ? `ⓘ ${unavailableLabel}` : track.artist}</Text> : null}</Pressable>
+      {audio.canSaveRadio ? <PlayerAnimatedButton accessibilityLabel={audio.isSavedRadio ? 'Удалить радиостанцию из избранного' : 'Добавить радиостанцию в избранное'} disabled={audio.isSavingRadio} onPress={() => void audio.toggleFavoriteRadio()} style={[localStyles.control, localStyles.miniSaveControl]}>{audio.isSavingRadio ? <LoadingIndicator size="small" /> : <AnimatedStateIcon active={audio.isSavedRadio} activeIcon={<Check color="#111" size={20} strokeWidth={2.2} />} inactiveIcon={<Plus color="#111" size={20} strokeWidth={2.1} />} size={20} />}</PlayerAnimatedButton> : audio.canSaveToMyMusic ? <PlayerAnimatedButton accessibilityLabel={audio.isSavedToMyMusic ? 'Удалить трек из моей музыки' : 'Добавить трек в мою музыку'} disabled={audio.isSavingToMyMusic} onPress={() => void audio.toggleMyMusic()} style={[localStyles.control, localStyles.miniSaveControl]}><AnimatedStateIcon active={audio.isSavedToMyMusic} activeIcon={<Check color="#111" size={20} strokeWidth={2.2} />} inactiveIcon={<Plus color="#111" size={20} strokeWidth={2.1} />} size={20} /></PlayerAnimatedButton> : null}
+      <PlayerAnimatedButton accessibilityLabel={audio.isAudioLoading ? 'Аудио загружается' : isPlaying ? 'Пауза' : 'Продолжить воспроизведение'} disabled={audio.isAudioLoading} onPress={() => isPlaying ? pause() : void play(track)} style={localStyles.control}>{audio.isAudioLoading ? <LoadingIndicator size="small" /> : <AnimatedStateIcon active={isPlaying} activeIcon={<Pause color="#111" size={19} fill="#111" />} inactiveIcon={<Play color="#111" size={19} fill="#111" />} size={19} />}</PlayerAnimatedButton>
+      <PlayerAnimatedButton accessibilityLabel="Следующий трек" disabled={!audio.hasNextTrack} onPress={() => void audio.playNext()} style={[localStyles.control, !audio.hasNextTrack && localStyles.miniControlDisabled]}><SkipForward color="#111" fill="#111" size={20} /></PlayerAnimatedButton>
+      <Pressable accessibilityLabel="Закрыть плеер" accessibilityRole="button" hitSlop={8} onPress={close} style={localStyles.control}><X color="#53606c" size={20} /></Pressable>
+    </View>
   </Animated.View>
-  <ExpandedPlayer audio={audio} isVisible={expanded} onClose={closeExpanded} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} track={track} />
+  <ExpandedPlayer audio={audio} isVisible={expanded} modalPresentation={modalPresentation} onClose={closeExpanded} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} track={track} />
   </>;
 }
 
-const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose, onOpenProfile, onOpenPublicPage, track: committedTrack }: {
+const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, modalPresentation, onClose, onOpenProfile, onOpenPublicPage, track: committedTrack }: {
+  modalPresentation?: boolean;
   audio: GlobalAudioControlsContextValue;
   isVisible: boolean;
   onClose: () => void;
@@ -2586,18 +2985,8 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
   const viewport = useWindowDimensions();
   const [optimisticTrack, setOptimisticTrack] = useState<GlobalTrack | null>(null);
   const track = optimisticTrack ?? committedTrack;
-  const explicitReleaseParticipants = (track.participants ?? [])
-    .map((participant, index) => participant.entityType === 'text'
-      ? { entityType: 'text' as const, key: `text-${index}-${participant.name}`, label: participant.name.trim(), username: null }
-      : { entityType: participant.entityType, key: `${participant.entityType}-${participant.id}`, label: `@${participant.username.trim()}`, username: participant.username.trim() })
-    .filter((participant) => Boolean(participant.label));
-  const fallbackParticipantName = track.artist?.trim() || 'Неизвестный';
-  const releaseParticipants = explicitReleaseParticipants.length
-    ? explicitReleaseParticipants
-    : track.isLiveStream
-      ? []
-      : [{ entityType: 'text' as const, key: `fallback-artist-${fallbackParticipantName}`, label: fallbackParticipantName, username: null }];
-  const hasReleaseLabel = Boolean(track.labelName?.trim());
+  const { label: unavailableLabel } = useMusicAvailability(track, false);
+  const { releaseParticipants } = expandedReleasePresentation(track);
   const releaseTrackPosition = activeReleaseTrackPosition(track);
   const openLinkedEntity = (entityType: 'account' | 'community', username: string) => {
     const open = entityType === 'account' ? onOpenProfile : onOpenPublicPage;
@@ -2656,7 +3045,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
     setListenLaterItems(Array.isArray(listenLater.items) ? listenLater.items : []);
   }, []);
   useEffect(() => {
-    if (!isVisible || track.isLiveStream) return;
+    if (!isVisible || track.isLiveStream || !isMusicLibraryProvider(track.provider)) return;
     // Opening the full player is a latency-sensitive transition. The playlist
     // membership reads are not needed for its first frame, so keep their JSON
     // parsing and React state updates out of the entrance animation.
@@ -2664,7 +3053,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
       void loadLibraryMembership().catch(() => undefined);
     });
     return () => task.cancel();
-  }, [isVisible, loadLibraryMembership, track.id, track.isLiveStream]);
+  }, [isVisible, loadLibraryMembership, track.id, track.isLiveStream, track.provider]);
   const playlistTrackKey = useMemo(() => {
     if (track.provider === 'volna') {
       const uploadId = uploadedTrackIdFromPlayerId(track.id);
@@ -2821,8 +3210,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
     setWebSurfaceColor(PLAYER_WEB_SURFACE_COLOR);
     return () => setWebSurfaceColor(APP_WEB_SURFACE_COLOR);
   }, [isVisible]);
-  const isCatalogFragment = track.provider === 'apple' || track.provider === 'yandex';
-  const previewLabel = isCatalogFragment
+  const previewLabel = (track.provider === 'apple' || track.provider === 'yandex')
     ? `Фрагмент · ${Math.max(1, Math.round(track.clipDurationSeconds ?? 30))} сек.`
     : null;
   const dismissPlayer = useCallback((currentOffset = 0, velocityY = 0) => {
@@ -2881,7 +3269,12 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
   // taller than its slot and push the artwork underneath the header. Reserve
   // the real lower-player stack first, then fit the square into what remains.
   const verticalCardPadding = Platform.OS === 'ios' ? 180 : 160;
-  const identityHeightBudget = track.releaseId ? 72 : previewLabel ? 62 : 56;
+  const identityHeightBudget = Math.max(56,
+    44
+    + (track.releaseId || releaseParticipants.length ? 25 : 0)
+    + (track.isLiveStream ? 0 : 23)
+    + (previewLabel ? 19 : 0)
+    + (unavailableLabel ? 20 : 0));
   const libraryActionsHeightBudget = track.isLiveStream ? 0 : 34;
   const bottomControlsHeightBudget = 95;
   const mainSectionGapBudget = (track.isLiveStream ? 2 : 3) * 14;
@@ -2921,6 +3314,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
       ? nextIndexInPreviousQueue - previousIndex
       : 0;
     const shouldAnimateCollectionChange = isVisible
+      && !audio.isShuffleEnabled
       && !isArtworkSettling.current
       && previousCollectionKey !== nextCollectionKey
       && Math.abs(queueDelta) === 1;
@@ -2946,7 +3340,7 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
         setOptimisticTrack(null);
       });
     });
-  }, [artworkStep, artworkTranslateX, committedTrack, isVisible, optimisticTrack?.id]);
+  }, [artworkStep, artworkTranslateX, audio.isShuffleEnabled, committedTrack, isVisible, optimisticTrack?.id]);
   artworkNavigationRef.current = {
     hasNext: audio.hasNextCollection,
     hasPrevious: audio.hasPreviousCollection,
@@ -3059,19 +3453,23 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
   const currentArtworkTrack = displayedCurrentIndex >= 0
     ? track.queue?.[displayedCurrentIndex] ?? track
     : track;
-  const previousArtworkTrack = displayedAdjacentCollectionIndexes.previous >= 0
+  const previousArtworkTrack = audio.isShuffleEnabled
+    ? (track.id === committedTrack.id ? audio.previousCollectionTrack : null)
+    : displayedAdjacentCollectionIndexes.previous >= 0
     ? track.queue?.[displayedAdjacentCollectionIndexes.previous] ?? null
     : null;
-  const nextArtworkTrack = displayedAdjacentCollectionIndexes.next >= 0
+  const nextArtworkTrack = audio.isShuffleEnabled
+    ? (track.id === committedTrack.id ? audio.nextCollectionTrack : null)
+    : displayedAdjacentCollectionIndexes.next >= 0
     ? track.queue?.[displayedAdjacentCollectionIndexes.next] ?? null
     : null;
-  const previousArtworkUrl = displayedAdjacentCollectionIndexes.previous >= 0
+  const previousArtworkUrl = previousArtworkTrack
     ? expandedPlayerArtwork(
         previousArtworkTrack?.artworkUrl,
         previousArtworkTrack?.provider ?? track.provider,
       )
     : null;
-  const nextArtworkUrl = displayedAdjacentCollectionIndexes.next >= 0
+  const nextArtworkUrl = nextArtworkTrack
     ? expandedPlayerArtwork(
         nextArtworkTrack?.artworkUrl,
         nextArtworkTrack?.provider ?? track.provider,
@@ -3108,104 +3506,54 @@ const ExpandedPlayer = memo(function ExpandedPlayer({ audio, isVisible, onClose,
         <View style={localStyles.expandedMainSection}>
           <View {...trackSwipeResponder.panHandlers} style={localStyles.expandedTopSection}>
             <View style={[localStyles.expandedArtworkCarousel, { height: artworkSize, width: artworkSize }]}>
-              {previousArtworkUrl && previousArtworkTrack ? <AppAnimatedImage {...({ pointerEvents: 'none' } as any)} key={artworkCarouselKey(previousArtworkTrack)} source={{ uri: previousArtworkUrl }} style={[localStyles.expandedSideArtwork, { height: artworkSize, width: artworkSize, opacity: previousArtworkOpacity, transform: [{ translateX: Animated.add(artworkTranslateX, -artworkStep) }, { scale: previousArtworkScale }] }]} /> : null}
+              {previousArtworkUrl && previousArtworkTrack ? <AppAnimatedImage {...({ pointerEvents: 'none' } as any)} accessibilityLabel={`Предыдущий трек: ${previousArtworkTrack.title}`} key={audio.isShuffleEnabled ? `previous:${previousArtworkTrack.id}` : artworkCarouselKey(previousArtworkTrack)} source={{ uri: previousArtworkUrl }} style={[localStyles.expandedSideArtwork, { height: artworkSize, width: artworkSize, opacity: previousArtworkOpacity, transform: [{ translateX: Animated.add(artworkTranslateX, -artworkStep) }, { scale: previousArtworkScale }] }]} /> : null}
               {currentArtworkUrl ? <AppAnimatedImage {...({ pointerEvents: 'none' } as any)} key={artworkCarouselKey(currentArtworkTrack)} source={{ uri: currentArtworkUrl }} style={[localStyles.expandedArtwork, { height: artworkSize, width: artworkSize, opacity: currentArtworkOpacity, transform: [{ translateX: artworkTranslateX }, { scale: currentArtworkScale }] }]} /> : <Animated.View key={artworkCarouselKey(currentArtworkTrack)} pointerEvents="none" style={[localStyles.expandedArtwork, localStyles.expandedArtworkFallback, { height: artworkSize, width: artworkSize, opacity: currentArtworkOpacity, transform: [{ translateX: artworkTranslateX }, { scale: currentArtworkScale }] }]}><Text style={localStyles.expandedArtworkFallbackText}>♪</Text></Animated.View>}
-              {nextArtworkUrl && nextArtworkTrack ? <AppAnimatedImage {...({ pointerEvents: 'none' } as any)} key={artworkCarouselKey(nextArtworkTrack)} source={{ uri: nextArtworkUrl }} style={[localStyles.expandedSideArtwork, { height: artworkSize, width: artworkSize, opacity: nextArtworkOpacity, transform: [{ translateX: Animated.add(artworkTranslateX, artworkStep) }, { scale: nextArtworkScale }] }]} /> : null}
+              {nextArtworkUrl && nextArtworkTrack ? <AppAnimatedImage {...({ pointerEvents: 'none' } as any)} accessibilityLabel={`Следующий трек: ${nextArtworkTrack.title}`} key={audio.isShuffleEnabled ? `next:${nextArtworkTrack.id}` : artworkCarouselKey(nextArtworkTrack)} source={{ uri: nextArtworkUrl }} style={[localStyles.expandedSideArtwork, { height: artworkSize, width: artworkSize, opacity: nextArtworkOpacity, transform: [{ translateX: Animated.add(artworkTranslateX, artworkStep) }, { scale: nextArtworkScale }] }]} /> : null}
             </View>
           </View>
           <View {...trackSwipeResponder.panHandlers} style={localStyles.expandedIdentitySection}>
             <View style={localStyles.expandedIdentityRow}>
-            <View style={localStyles.expandedIdentityCopy}>
-              <MarqueeTrackTitle title={track.title} />
-              {track.artist ? track.isLiveStream && track.radioPageUsername?.trim() ? (
-                <View style={localStyles.expandedRadioMetaRow}>
-                  <Text numberOfLines={1} style={localStyles.expandedRadioArtist}>{track.artist}</Text>
-                  <Pressable
-                    accessibilityLabel={`Открыть радиостанцию @${track.radioPageUsername.trim()}`}
-                    accessibilityRole="link"
-                    hitSlop={6}
-                    onPress={() => {
-                      openLinkedEntity('community', track.radioPageUsername!.trim());
-                    }}
-                    style={localStyles.expandedRadioUsernameHitbox}
-                  >
-                    <Text numberOfLines={1} style={localStyles.expandedRadioUsername}>@{track.radioPageUsername.trim()}</Text>
-                  </Pressable>
-                </View>
-              ) : <Text numberOfLines={1} style={localStyles.expandedArtist}>{track.artist}</Text> : null}
-              {track.releaseId || releaseParticipants.length ? (
-                <View style={localStyles.expandedLabelRow}>
-                  {track.releaseId ? <>
-                    <Disc3 color="#6f7b86" size={14} strokeWidth={1.9} style={localStyles.expandedLabelIcon} />
-                    {track.labelUsername && hasReleaseLabel ? (
-                      <Pressable
-                        accessibilityLabel={`Открыть лейбл ${track.labelName!.trim()}`}
-                        accessibilityRole="link"
-                        hitSlop={6}
-                        onPress={() => {
-                          openLinkedEntity('community', track.labelUsername!);
-                        }}
-                        style={localStyles.expandedLabelLinkHitbox}
-                      >
-                        <Text numberOfLines={1} style={localStyles.expandedLabelLink}>{track.labelName!.trim()}</Text>
-                      </Pressable>
-                    ) : <Text numberOfLines={1} style={localStyles.expandedLabelFallback}>{track.labelName?.trim() || 'отсутствует или неизвестен'}</Text>}
-                  </> : null}
-                  {releaseParticipants.length ? <>
-                    {track.releaseId && hasReleaseLabel ? <Text accessibilityElementsHidden importantForAccessibility="no" style={localStyles.expandedMetadataSeparator}>·</Text> : null}
-                    <View style={[localStyles.expandedParticipantsGroup, track.releaseId && !hasReleaseLabel && localStyles.expandedParticipantsGroupWithoutLabel]}>
-                      <UsersRound color="#6f7b86" size={14} strokeWidth={1.9} style={localStyles.expandedParticipantsIcon} />
-                      <Text numberOfLines={1} style={localStyles.expandedParticipantsText}>
-                        {releaseParticipants.map((participant, index) => (
-                          <Text
-                            accessibilityRole={participant.username ? 'link' : undefined}
-                            key={participant.key}
-                            onPress={participant.username && (participant.entityType === 'account' ? onOpenProfile : onOpenPublicPage) ? () => {
-                              openLinkedEntity(participant.entityType, participant.username!);
-                            } : undefined}
-                            style={participant.username ? localStyles.expandedParticipantLink : localStyles.expandedParticipantFallback}
-                          >
-                            {index ? ', ' : ''}{participant.label}
-                          </Text>
-                        ))}
-                      </Text>
-                    </View>
-                  </> : null}
-                </View>
-              ) : null}
-              {previewLabel ? <Text style={localStyles.expandedPreviewLabel}>{previewLabel}</Text> : null}
+              <View style={localStyles.expandedIdentityCopy}>
+                <MarqueeTrackTitle title={track.title} />
+                {unavailableLabel ? <Text style={localStyles.artist}>ⓘ {unavailableLabel}</Text> : null}
+                {track.artist ? track.isLiveStream && track.radioPageUsername?.trim() ? (
+                  <View style={localStyles.expandedRadioMetaRow}>
+                    <Text numberOfLines={1} style={localStyles.expandedRadioArtist}>{track.artist}</Text>
+                    <Pressable
+                      accessibilityLabel={`Открыть радиостанцию @${track.radioPageUsername.trim()}`}
+                      accessibilityRole="link"
+                      hitSlop={6}
+                      onPress={() => {
+                        openLinkedEntity('community', track.radioPageUsername!.trim());
+                      }}
+                      style={localStyles.expandedRadioUsernameHitbox}
+                    >
+                      <Text numberOfLines={1} style={localStyles.expandedRadioUsername}>@{track.radioPageUsername.trim()}</Text>
+                    </Pressable>
+                  </View>
+                ) : <Text numberOfLines={1} style={localStyles.expandedArtist}>{track.artist}</Text> : null}
+              </View>
+              <MusicDownloadButton track={track} notify={audio.notify} />
+              {audio.canSaveRadio ? <PlayerAnimatedButton accessibilityLabel={audio.isSavedRadio ? 'Удалить радиостанцию из избранного' : 'Добавить радиостанцию в избранное'} disabled={audio.isSavingRadio} onPress={() => void audio.toggleFavoriteRadio()} style={localStyles.addToMusicButton}>{audio.isSavingRadio ? <LoadingIndicator size="small" /> : <AnimatedStateIcon active={audio.isSavedRadio} activeIcon={<Check color="#111" size={25} strokeWidth={2.2} />} inactiveIcon={<Plus color="#111" size={25} strokeWidth={2.1} />} size={25} />}</PlayerAnimatedButton> : audio.canSaveToMyMusic ? <PlayerAnimatedButton accessibilityLabel={audio.isSavedToMyMusic ? 'Удалить трек из моей музыки' : 'Добавить трек в мою музыку'} disabled={audio.isSavingToMyMusic} onPress={() => void audio.toggleMyMusic()} style={localStyles.addToMusicButton}><AnimatedStateIcon active={audio.isSavedToMyMusic} activeIcon={<Check color="#111" size={25} strokeWidth={2.2} />} inactiveIcon={<Plus color="#111" size={25} strokeWidth={2.1} />} size={25} /></PlayerAnimatedButton> : null}
             </View>
-            {audio.canSaveRadio ? <PlayerAnimatedButton accessibilityLabel={audio.isSavedRadio ? 'Удалить радиостанцию из избранного' : 'Добавить радиостанцию в избранное'} disabled={audio.isSavingRadio} onPress={() => void audio.toggleFavoriteRadio()} style={localStyles.addToMusicButton}>{audio.isSavingRadio ? <ActivityIndicator color="#111" size="small" /> : <AnimatedStateIcon active={audio.isSavedRadio} activeIcon={<Check color="#111" size={25} strokeWidth={2.2} />} inactiveIcon={<Plus color="#111" size={25} strokeWidth={2.1} />} size={25} />}</PlayerAnimatedButton> : audio.canSaveToMyMusic ? <PlayerAnimatedButton accessibilityLabel={audio.isSavedToMyMusic ? 'Удалить трек из моей музыки' : 'Добавить трек в мою музыку'} disabled={audio.isSavingToMyMusic} onPress={() => void audio.toggleMyMusic()} style={localStyles.addToMusicButton}><AnimatedStateIcon active={audio.isSavedToMyMusic} activeIcon={<Check color="#111" size={25} strokeWidth={2.2} />} inactiveIcon={<Plus color="#111" size={25} strokeWidth={2.1} />} size={25} /></PlayerAnimatedButton> : null}
-            </View>
+            <ExpandedReleaseMetadata track={track} onOpenProfile={onOpenProfile ? username => openLinkedEntity('account', username) : undefined} onOpenPublicPage={onOpenPublicPage ? username => openLinkedEntity('community', username) : undefined} />
+            {previewLabel ? <Text style={localStyles.expandedPreviewLabel}>{previewLabel}</Text> : null}
             {track.provider === 'soundcloud' && audio.soundcloudDiagnostic ? <Pressable accessibilityRole="button" onPress={() => void Clipboard.setStringAsync(audio.soundcloudDiagnostic!)} style={localStyles.soundcloudDiagnostic}><Text selectable style={localStyles.soundcloudDiagnosticTitle}>SoundCloud не начал воспроизведение</Text><Text selectable style={localStyles.soundcloudDiagnosticText}>{audio.soundcloudDiagnostic}</Text><Text style={localStyles.soundcloudDiagnosticAction}>Нажмите, чтобы скопировать диагностику</Text></Pressable> : null}
           </View>
-          {!track.isLiveStream ? <View style={localStyles.expandedLibraryActions}>
-            {isCatalogFragment ? (
-              <Pressable
-                accessibilityLabel={audio.isSavedToMyMusic ? 'Удалить сохранённый фрагмент' : 'Сохранить фрагмент'}
-                accessibilityRole="button"
-                disabled={!audio.canSaveToMyMusic || audio.isSavingToMyMusic}
-                onPress={() => void audio.toggleMyMusic()}
-                style={[localStyles.expandedLibraryButton, (!audio.canSaveToMyMusic || audio.isSavingToMyMusic) && localStyles.expandedLibraryButtonDisabled]}
-              >
-                <Text style={localStyles.expandedLibraryButtonText}>Сохранить фрагмент</Text>
-                {audio.isSavingToMyMusic ? <ActivityIndicator color="#53606c" size="small" /> : audio.isSavedToMyMusic ? <Check color="#53606c" size={17} strokeWidth={2.1} /> : <Plus color="#53606c" size={17} strokeWidth={1.9} />}
-              </Pressable>
-            ) : <>
-              <Pressable accessibilityLabel={isTrackInPlaylist ? 'Удалить трек из плейлиста' : 'Добавить в плейлист'} accessibilityRole="button" disabled={Boolean(savingPlaylistId)} onPress={() => isTrackInPlaylist ? void removeTrackFromPlaylists() : void openPlaylistPicker()} style={[localStyles.expandedLibraryButton, savingPlaylistId && localStyles.expandedLibraryButtonDisabled]}><Text style={localStyles.expandedLibraryButtonText}>В плейлист</Text>{savingPlaylistId === '__remove__' ? <ActivityIndicator color="#53606c" size="small" /> : isTrackInPlaylist ? <Check color="#53606c" size={17} strokeWidth={2.1} /> : <ListPlus color="#53606c" size={17} strokeWidth={1.9} />}</Pressable>
-              <Pressable accessibilityLabel={isTrackInListenLater ? 'Удалить релиз из отложенных' : 'Добавить релиз в отложенные'} accessibilityRole="button" disabled={isSavingListenLater} onPress={() => void toggleListenLater()} style={[localStyles.expandedLibraryButton, isSavingListenLater && localStyles.expandedLibraryButtonDisabled]}><Text style={localStyles.expandedLibraryButtonText}>Слушать позже</Text>{isSavingListenLater ? <ActivityIndicator color="#53606c" size="small" /> : isTrackInListenLater ? <Check color="#53606c" size={17} strokeWidth={2.1} /> : <ListTodo color="#53606c" size={17} strokeWidth={1.9} />}</Pressable>
-            </>}
+          {!track.isLiveStream && isMusicLibraryProvider(track.provider) ? <View style={localStyles.expandedLibraryActions}>
+              <Pressable accessibilityLabel={isTrackInPlaylist ? 'Удалить трек из плейлиста' : 'Добавить в плейлист'} accessibilityRole="button" disabled={Boolean(savingPlaylistId)} onPress={() => isTrackInPlaylist ? void removeTrackFromPlaylists() : void openPlaylistPicker()} style={[localStyles.expandedLibraryButton, savingPlaylistId && localStyles.expandedLibraryButtonDisabled]}><Text style={localStyles.expandedLibraryButtonText}>В плейлист</Text>{savingPlaylistId === '__remove__' ? <LoadingIndicator size="small" /> : isTrackInPlaylist ? <Check color="#53606c" size={17} strokeWidth={2.1} /> : <ListPlus color="#53606c" size={17} strokeWidth={1.9} />}</Pressable>
+              <Pressable accessibilityLabel={isTrackInListenLater ? 'Удалить релиз из отложенных' : 'Добавить релиз в отложенные'} accessibilityRole="button" disabled={isSavingListenLater} onPress={() => void toggleListenLater()} style={[localStyles.expandedLibraryButton, isSavingListenLater && localStyles.expandedLibraryButtonDisabled]}><Text style={localStyles.expandedLibraryButtonText}>Слушать позже</Text>{isSavingListenLater ? <LoadingIndicator size="small" /> : isTrackInListenLater ? <Check color="#53606c" size={17} strokeWidth={2.1} /> : <ListTodo color="#53606c" size={17} strokeWidth={1.9} />}</Pressable>
           </View> : null}
           <ExpandedBottomControls audio={audio} track={track} />
         </View>
         <ExpandedProviderLink track={track} />
         <AppSheetModal contentContainerStyle={localStyles.playlistPickerContent} isVisible={isPlaylistPickerVisible} onClose={() => !savingPlaylistId && setIsPlaylistPickerVisible(false)} scroll={playlists.length > 5} title="Добавить в плейлист">
-          {isLoadingPlaylists ? <View style={localStyles.playlistPickerLoading}><ActivityIndicator color="#111" /></View> : playlists.length ? playlists.map((playlist) => <Pressable accessibilityLabel={`Добавить в плейлист ${playlist.name}`} accessibilityRole="button" disabled={Boolean(savingPlaylistId)} key={playlist.id} onPress={() => void addTrackToPlaylist(playlist)} style={localStyles.playlistPickerRow}>{playlist.artworkThumbnailUrl || playlist.artworkUrl ? <Image source={{ uri: playlist.artworkThumbnailUrl ?? playlist.artworkUrl! }} style={localStyles.playlistPickerArtwork} /> : <View style={localStyles.playlistPickerArtworkFallback}><ListPlus color="#53606c" size={19} /></View>}<View style={localStyles.playlistPickerCopy}><Text numberOfLines={1} style={localStyles.playlistPickerTitle}>{playlist.name}</Text><Text style={localStyles.playlistPickerMeta}>{playlist.tracks.length} тр.</Text></View>{savingPlaylistId === playlist.id ? <ActivityIndicator color="#111" size="small" /> : <Plus color="#53606c" size={21} />}</Pressable>) : <Text style={localStyles.playlistPickerEmpty}>У вас пока нет плейлистов. Создать их можно в разделе «Мои треки».</Text>}
+          {isLoadingPlaylists ? <View style={localStyles.playlistPickerLoading}><LoadingIndicator /></View> : playlists.length ? playlists.map((playlist) => <Pressable accessibilityLabel={`Добавить в плейлист ${playlist.name}`} accessibilityRole="button" disabled={Boolean(savingPlaylistId)} key={playlist.id} onPress={() => void addTrackToPlaylist(playlist)} style={localStyles.playlistPickerRow}>{playlist.artworkThumbnailUrl || playlist.artworkUrl ? <Image source={{ uri: playlist.artworkThumbnailUrl ?? playlist.artworkUrl! }} style={localStyles.playlistPickerArtwork} /> : <View style={localStyles.playlistPickerArtworkFallback}><ListPlus color="#53606c" size={19} /></View>}<View style={localStyles.playlistPickerCopy}><Text numberOfLines={1} style={localStyles.playlistPickerTitle}>{playlist.name}</Text><Text style={localStyles.playlistPickerMeta}>{playlist.tracks.length} тр.</Text></View>{savingPlaylistId === playlist.id ? <LoadingIndicator size="small" /> : <Plus color="#53606c" size={21} />}</Pressable>) : <Text style={localStyles.playlistPickerEmpty}>У вас пока нет плейлистов. Создать их можно в разделе «Мои треки».</Text>}
         </AppSheetModal>
       </Animated.View>
     </View>;
 
-  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  if (Platform.OS === 'web' && !modalPresentation && typeof document !== 'undefined') {
     return createPortal(createElement('div', {
       style: {
         position: 'fixed',
@@ -3326,7 +3674,82 @@ const LiveStreamWave = memo(function LiveStreamWave({ active }: { active: boolea
   );
 });
 
-const ExpandedBottomControls = memo(function ExpandedBottomControls({ audio, track }: { audio: GlobalAudioControlsContextValue; track: GlobalTrack }) {
+function expandedReleasePresentation(track: GlobalTrack) {
+  const explicitReleaseParticipants = (track.participants ?? [])
+    .map((participant, index) => participant.entityType === 'text'
+      ? { entityType: 'text' as const, key: `text-${index}-${participant.name}`, label: participant.name.trim(), username: null }
+      : { entityType: participant.entityType, key: `${participant.entityType}-${participant.id}`, label: `@${participant.username.trim()}`, username: participant.username.trim() })
+    .filter((participant) => Boolean(participant.label));
+  const fallbackParticipantName = track.artist?.trim() || 'Неизвестный';
+  const releaseParticipants = explicitReleaseParticipants.length
+    ? explicitReleaseParticipants
+    : track.isLiveStream
+      ? []
+      : [{ entityType: 'text' as const, key: `fallback-artist-${fallbackParticipantName}`, label: fallbackParticipantName, username: null }];
+  const hasReleaseLabel = Boolean(track.labelName?.trim());
+  const releaseGenresText = [...new Set((track.genres ?? [])
+    .map((genre) => genre.trim())
+    .filter(Boolean)
+    .map(musicSubgenreDisplayName))].join(', ') || 'Неизвестно';
+  const releaseDate = track.releaseDate ? new Date(track.releaseDate) : null;
+  const releaseDateText = releaseDate && Number.isFinite(releaseDate.getTime())
+    ? new Intl.DateTimeFormat('ru-RU', { year: 'numeric', timeZone: 'UTC' }).format(releaseDate)
+    : 'Дата не указана';
+  return { releaseParticipants, hasReleaseLabel, releaseGenresText, releaseDateText };
+}
+
+/** Shared display only; callers own navigation and playback. */
+export function ExpandedReleaseMetadata({ track, onOpenProfile, onOpenPublicPage }: { track: GlobalTrack; onOpenProfile?: (username: string) => void; onOpenPublicPage?: (username: string) => void }) {
+  const { releaseParticipants, hasReleaseLabel, releaseGenresText, releaseDateText } = expandedReleasePresentation(track);
+  const openLinkedEntity = (entityType: 'account' | 'community', username: string) => {
+    (entityType === 'account' ? onOpenProfile : onOpenPublicPage)?.(username);
+  };
+  return <>
+            {track.releaseId || releaseParticipants.length ? (
+              <View style={localStyles.expandedLabelRow}>
+                {track.releaseId ? <>
+                  <Disc3 color="#6f7b86" size={14} strokeWidth={1.9} style={localStyles.expandedLabelIcon} />
+                  {track.labelUsername && hasReleaseLabel ? (
+                    <Pressable
+                      accessibilityLabel={`Открыть лейбл ${track.labelName!.trim()}`}
+                      accessibilityRole="link"
+                      hitSlop={6}
+                      onPress={() => {
+                        openLinkedEntity('community', track.labelUsername!);
+                      }}
+                      style={localStyles.expandedLabelLinkHitbox}
+                    >
+                      <Text numberOfLines={1} style={localStyles.expandedLabelLink}>{track.labelName!.trim()}</Text>
+                    </Pressable>
+                  ) : <Text numberOfLines={1} style={localStyles.expandedLabelFallback}>{track.labelName?.trim() || 'отсутствует или неизвестен'}</Text>}
+                </> : null}
+                {releaseParticipants.length ? <>
+                  {track.releaseId && hasReleaseLabel ? <Text accessibilityElementsHidden importantForAccessibility="no" style={localStyles.expandedMetadataSeparator}>·</Text> : null}
+                  <View style={[localStyles.expandedParticipantsGroup, track.releaseId && !hasReleaseLabel && localStyles.expandedParticipantsGroupWithoutLabel]}>
+                    <UsersRound color="#6f7b86" size={14} strokeWidth={1.9} style={localStyles.expandedParticipantsIcon} />
+                    <Text numberOfLines={1} style={localStyles.expandedParticipantsText}>
+                      {releaseParticipants.map((participant, index) => (
+                        <Text
+                          accessibilityRole={participant.username ? 'link' : undefined}
+                          key={participant.key}
+                          onPress={participant.username && (participant.entityType === 'account' ? onOpenProfile : onOpenPublicPage) ? () => {
+                            openLinkedEntity(participant.entityType, participant.username!);
+                          } : undefined}
+                          style={participant.username ? localStyles.expandedParticipantLink : localStyles.expandedParticipantFallback}
+                        >
+                          {index ? ', ' : ''}{participant.label}
+                        </Text>
+                      ))}
+                    </Text>
+                  </View>
+                </> : null}
+              </View>
+            ) : null}
+            {!track.isLiveStream ? <MarqueeTrackTitle accessibilityLabel={`Год релиза: ${releaseDateText}. Жанры: ${releaseGenresText}`} metadata title={`${releaseDateText} · ${releaseGenresText}`} /> : null}
+  </>;
+}
+
+export const ExpandedBottomControls = memo(function ExpandedBottomControls({ audio, track }: { audio: GlobalAudioControlsContextValue; track: GlobalTrack }) {
   const { durationSeconds, progress } = useGlobalAudioProgress();
   const progressWidth = useRef(1);
   const scrubStartX = useRef(0);
@@ -3409,7 +3832,7 @@ const ExpandedBottomControls = memo(function ExpandedBottomControls({ audio, tra
       <View style={localStyles.expandedControls}>
         <View style={localStyles.expandedModeButton} />
         <View style={localStyles.expandedSkip} />
-        <PlayerAnimatedButton accessibilityLabel={audio.isAudioLoading ? 'Аудиопоток загружается' : audio.isPlaying ? 'Пауза' : 'Продолжить воспроизведение'} disabled={audio.isAudioLoading} onPress={() => audio.isPlaying ? audio.pause() : void audio.play(track)} style={localStyles.expandedPlay}>{audio.isAudioLoading ? <ActivityIndicator color="#fff" size="small" /> : <AnimatedStateIcon active={audio.isPlaying} activeIcon={<Pause color="#fff" fill="#fff" size={27} />} inactiveIcon={<Play color="#fff" fill="#fff" size={27} />} size={27} />}</PlayerAnimatedButton>
+        <PlayerAnimatedButton accessibilityLabel={audio.isAudioLoading ? 'Аудиопоток загружается' : audio.isPlaying ? 'Пауза' : 'Продолжить воспроизведение'} disabled={audio.isAudioLoading} onPress={() => audio.isPlaying ? audio.pause() : void audio.play(track)} style={localStyles.expandedPlay}>{audio.isAudioLoading ? <LoadingIndicator tone="inverse" size="small" /> : <AnimatedStateIcon active={audio.isPlaying} activeIcon={<Pause color="#fff" fill="#fff" size={27} />} inactiveIcon={<Play color="#fff" fill="#fff" size={27} />} size={27} />}</PlayerAnimatedButton>
         <View style={localStyles.expandedSkip} />
         <View style={localStyles.expandedModeButton} />
       </View>
@@ -3476,7 +3899,7 @@ const ExpandedBottomControls = memo(function ExpandedBottomControls({ audio, tra
     <View style={localStyles.expandedControls}>
       <PlayerAnimatedButton accessibilityLabel={audio.isShuffleEnabled ? 'Выключить случайный порядок' : 'Включить случайный порядок'} onPress={audio.toggleShuffle} style={localStyles.expandedModeButton}><AnimatedStateIcon active={audio.isShuffleEnabled} activeIcon={<Shuffle color="#111" size={22} strokeWidth={2.3} />} inactiveIcon={<Shuffle color="#6f7b86" size={22} strokeWidth={1.9} />} size={22} /></PlayerAnimatedButton>
       <PlayerAnimatedButton accessibilityLabel="Предыдущий трек" disabled={!audio.hasPreviousTrack} onPress={() => void audio.playPrevious()} style={[localStyles.expandedSkip, !audio.hasPreviousTrack && localStyles.expandedSkipDisabled]}><SkipBack color="#111" fill="#111" size={25} /></PlayerAnimatedButton>
-      <PlayerAnimatedButton accessibilityLabel={audio.isAudioLoading ? 'Аудио загружается' : audio.isPlaying ? 'Пауза' : 'Продолжить воспроизведение'} disabled={audio.isAudioLoading} onPress={() => audio.isPlaying ? audio.pause() : void audio.play(track)} style={localStyles.expandedPlay}>{audio.isAudioLoading ? <ActivityIndicator color="#fff" size="small" /> : <AnimatedStateIcon active={audio.isPlaying} activeIcon={<Pause color="#fff" fill="#fff" size={27} />} inactiveIcon={<Play color="#fff" fill="#fff" size={27} />} size={27} />}</PlayerAnimatedButton>
+      <PlayerAnimatedButton accessibilityLabel={audio.isAudioLoading ? 'Аудио загружается' : audio.isPlaying ? 'Пауза' : 'Продолжить воспроизведение'} disabled={audio.isAudioLoading} onPress={() => audio.isPlaying ? audio.pause() : void audio.play(track)} style={localStyles.expandedPlay}>{audio.isAudioLoading ? <LoadingIndicator tone="inverse" size="small" /> : <AnimatedStateIcon active={audio.isPlaying} activeIcon={<Pause color="#fff" fill="#fff" size={27} />} inactiveIcon={<Play color="#fff" fill="#fff" size={27} />} size={27} />}</PlayerAnimatedButton>
       <PlayerAnimatedButton accessibilityLabel="Следующий трек" disabled={!audio.hasNextTrack} onPress={() => void audio.playNext()} style={[localStyles.expandedSkip, !audio.hasNextTrack && localStyles.expandedSkipDisabled]}><SkipForward color="#111" fill="#111" size={25} /></PlayerAnimatedButton>
       <PlayerAnimatedButton accessibilityLabel={audio.isRepeatEnabled ? 'Выключить повтор трека' : 'Повторять текущий трек'} onPress={audio.toggleRepeat} style={localStyles.expandedModeButton}><AnimatedStateIcon active={audio.isRepeatEnabled} activeIcon={<Repeat1 color="#111" size={24} strokeWidth={2.3} />} inactiveIcon={<Repeat2 color="#6f7b86" size={24} strokeWidth={1.9} />} size={24} /></PlayerAnimatedButton>
     </View>
@@ -3498,8 +3921,11 @@ const playerMediaOutline = Platform.OS === 'web'
   ? ({ boxShadow: 'inset 0 0 0 1px rgb(226, 231, 236)' } as const)
   : ({ borderWidth: 1, borderColor: 'rgb(226, 231, 236)' } as const);
 
-const localStyles = StyleSheet.create({
-  shell: { position: 'absolute', zIndex: 30, left: 10, right: 10, height: 58, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.72)', borderRadius: 29, backgroundColor: 'rgba(255,255,255,0.88)', overflow: 'hidden', ...(Platform.OS === 'web' ? { backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)', boxShadow: 'rgba(0, 0, 0, 0.1) 0px 5px 18px' } : { shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 8 }) },
+export const localStyles = StyleSheet.create({
+  shell: { position: 'absolute', zIndex: 30, left: 10, right: 10, height: 58, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.72)', borderRadius: 29, backgroundColor: 'rgba(255,255,255,0.88)', overflow: 'hidden', ...(Platform.OS === 'web' ? { backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)', WebkitTouchCallout: 'none', WebkitUserSelect: 'none', boxShadow: 'rgba(0, 0, 0, 0.1) 0px 5px 18px', touchAction: 'pan-y', userSelect: 'none' } : { shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 8 }) },
+  miniProgressFill: { position: 'absolute', zIndex: 0, top: 0, bottom: 0, left: 0, backgroundColor: 'rgba(220,226,232,0.82)' },
+  inlineShell: { position: 'relative', left: 0, right: 0, flexShrink: 0, marginHorizontal: 10, marginTop: 8 },
+  miniPlayerContent: { position: 'relative', zIndex: 1, width: '100%', height: '100%', flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 8 },
   artwork: { ...playerMediaOutline, width: 44, height: 44, borderRadius: 22, backgroundColor: '#d7dee5' },
   artworkFallback: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#d7dee5' },
   artworkFallbackText: { color: '#53606c', fontSize: 19 },
@@ -3511,8 +3937,6 @@ const localStyles = StyleSheet.create({
   miniControlDisabled: { opacity: 0.25 },
   playerAnimatedButtonContent: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
   playerStateIconLayer: { position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' },
-  progressTrack: { position: 'absolute', left: 18, right: 18, bottom: 2, height: 2, borderRadius: 1, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.12)' },
-  progressFill: { height: 2, backgroundColor: '#111' },
   modalBackdrop: { flex: 1, backgroundColor: 'transparent' },
   expandedCard: {
     flex: 1,
@@ -3583,13 +4007,8 @@ const localStyles = StyleSheet.create({
   expandedParticipantFallback: { fontWeight: '400' },
   expandedParticipantLink: { color: '#111', fontWeight: '600', textDecorationLine: 'none' },
   expandedPreviewLabel: { marginTop: 3, color: '#7d8894', fontSize: 12, lineHeight: 16, fontWeight: '400' },
-  expandedGenreMarqueeViewport: { position: 'relative', width: '100%', height: 28, overflow: 'hidden' },
-  expandedGenreMarqueeContent: { alignSelf: 'flex-start', flexDirection: 'row', flexShrink: 0, gap: 6 },
-  expandedGenreMarqueeMeasure: { position: 'absolute', left: 0, top: 0, opacity: 0 },
-  expandedGenreMarqueeContentWeb: { width: 'max-content' } as any,
-  expandedGenreTag: { minHeight: 28, borderRadius: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#e8edf2' },
-  expandedGenreTagText: { color: '#606c78', fontSize: 11, lineHeight: 15, fontWeight: '400' },
-  expandedGenreName: { color: '#323a43', fontWeight: '600' },
+  expandedMetadataViewport: { marginTop: 6, height: 17 },
+  expandedMetadataText: { color: '#6f7b86', fontSize: 13, lineHeight: 17, fontWeight: '400' },
   soundcloudDiagnostic: { marginTop: 12, borderRadius: 14, backgroundColor: '#fff0ed', paddingHorizontal: 14, paddingVertical: 12 },
   soundcloudDiagnosticTitle: { color: '#9f2418', fontSize: 13, fontWeight: '700', lineHeight: 18 },
   soundcloudDiagnosticText: { marginTop: 5, color: '#5c2520', fontSize: 10, lineHeight: 14 },

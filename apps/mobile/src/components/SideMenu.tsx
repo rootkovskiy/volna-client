@@ -1,5 +1,5 @@
 import { Disc3, KeyRound, LogOut, MessageSquare, Settings, ShieldCheck, Star, UserRound, UsersRound, X } from 'lucide-react-native';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Text, View, type ViewStyle } from 'react-native';
 import { AppImage as Image } from './AppImage';
 import { getAvatarInitial } from '../domain';
 import { styles } from '../styles';
@@ -59,7 +59,7 @@ export function SideMenu({
           <X color="#111" size={24} strokeWidth={2} />
         </Pressable>
       </View>
-      <ScrollView contentContainerStyle={styles.sideMenuScrollContent} showsVerticalScrollIndicator={false} style={styles.sideMenuScroll}>
+      <ScrollView contentContainerStyle={styles.sideMenuScrollContent} showsVerticalScrollIndicator={false} style={[styles.sideMenuScroll, Platform.OS === 'web' ? { touchAction: 'pan-y pinch-zoom' } as ViewStyle : null]}>
       <Pressable onPress={onOpenProfile} style={styles.sideMenuProfileCard}>
         {profile.avatarUrl ? (
           <Image source={{ uri: profile.avatarUrl }} style={styles.sideMenuProfileAvatar} resizeMode="cover" />
@@ -93,12 +93,6 @@ export function SideMenu({
         <Settings color="#111" size={22} strokeWidth={2} />
         <Text style={styles.sideMenuText}>Настройки и приватность</Text>
       </Pressable>
-      {showModeration ? (
-        <Pressable onPress={onShowModeration} style={styles.sideMenuItem}>
-          <ShieldCheck color="#111" size={22} strokeWidth={2} />
-          <Text style={styles.sideMenuText}>Модерация</Text>
-        </Pressable>
-      ) : null}
       <Pressable onPress={onShowSecurity} style={styles.sideMenuItem}>
         <KeyRound color="#111" size={22} strokeWidth={2} />
         <Text style={styles.sideMenuText}>Пароль и безопасность</Text>
@@ -113,6 +107,13 @@ export function SideMenu({
         <LogOut color="#111" size={22} strokeWidth={2} />
         <Text style={styles.sideMenuText}>Выйти</Text>
       </Pressable>
+      {showModeration || isAdmin ? <View style={styles.sideMenuAdminSection}>
+      {showModeration ? (
+        <Pressable accessibilityRole="button" onPress={onShowModeration} style={styles.sideMenuItem}>
+          <ShieldCheck color="#111" size={22} strokeWidth={2} />
+          <Text style={styles.sideMenuText}>Модерация</Text>
+        </Pressable>
+      ) : null}
       {isAdmin ? (
         <View style={styles.sideMenuAdminModeCard}>
           <View style={styles.sideMenuAdminModeCopy}>
@@ -122,6 +123,7 @@ export function SideMenu({
           <VolnaSwitch accessibilityLabel="Режим администрирования" onValueChange={onChangeAdminMode} surfaceTone="neutral" value={adminMode} />
         </View>
       ) : null}
+      </View> : null}
       </ScrollView>
     </View>
   );

@@ -52,7 +52,7 @@ export function AnimatedSegmentedControl<T extends SegmentValue>({
       }]} /> : null}
       {options.map((option) => {
         const active = option.value === value;
-        return <Pressable accessibilityLabel={option.label} accessibilityRole="tab" accessibilityState={{ selected: active }} key={String(option.value)} onPress={() => onChange(option.value)} style={localStyles.item}>
+        return <Pressable accessibilityLabel={option.label} accessibilityRole="tab" accessibilityState={{ selected: active }} aria-selected={active} key={String(option.value)} onPress={() => onChange(option.value)} style={localStyles.item}>
           {option.renderContent
             ? option.renderContent(active)
             : <Text numberOfLines={1} style={[localStyles.text, textStyle, active && activeTextStyle, localStyles.labelTypography, active && localStyles.activeText]}>{option.label}</Text>}

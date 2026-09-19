@@ -1,5 +1,6 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { styles } from '../styles';
 import { normalizeYouTubeVideoId } from '../security/externalUrls.mjs';
@@ -11,7 +12,7 @@ export function YouTubePostEmbed({ startSeconds = 0, videoId }: { startSeconds?:
   if (!safeVideoId) return null;
   const uri = `https://www.youtube-nocookie.com/embed/${safeVideoId}?playsinline=1&rel=0&iv_load_policy=3${safeStartSeconds > 0 ? `&start=${safeStartSeconds}` : ''}`;
   return <View style={styles.youtubePostEmbed}>
-    {!isReady ? <View pointerEvents="none" style={styles.youtubePostLoading}><ActivityIndicator color="#6f7b86" /></View> : null}
+    {!isReady ? <View pointerEvents="none" style={styles.youtubePostLoading}><LoadingIndicator /></View> : null}
     <WebView
       allowsFullscreenVideo
       javaScriptEnabled

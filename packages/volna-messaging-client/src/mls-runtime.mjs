@@ -1674,9 +1674,14 @@ export class VolnaMlsRuntime {
     let rollback = cloneGroupState(group.state, 'process_state_clone');
     let candidateState;
     const previousExpectedMembers = group.expectedMembers;
+    let rejectableApplication = false;
+    let cryptographicProcessing = false;
     try {
     const { canonical, parsed } = normalizeCanonicalAad(input.aad);
     if (parsed[2] !== threadId) fail('process_aad_thread');
+    rejectableApplication = parsed[6] === 'APPLICATION'
+      && parsed[7] === input.epoch
+      && parsed[7] === group.state.groupContext.epoch.toString();
     const message = decodeExact(
       decodeMlsMessage,
       base64UrlToBytes(input.ciphertext, 96 * 1024),
@@ -1696,6 +1701,7 @@ export class VolnaMlsRuntime {
     if (parsed[6] === 'APPLICATION' && messageEpoch.toString() !== parsed[7]) fail('envelope_epoch');
     if (parsed[6] === 'COMMIT' && (messageEpoch + 1n).toString() !== parsed[7]) fail('envelope_epoch');
     const ciphersuite = await this.getCiphersuite();
+    cryptographicProcessing = true;
     const sender = isPrivate
       ? await inspectPrivateSender(group.state, message.privateMessage, ciphersuite)
       : memberAtLeafIndex(group.state.ratchetTree, getSenderLeafNodeIndex(message.publicMessage.content.sender));
@@ -1743,11 +1749,18 @@ export class VolnaMlsRuntime {
     } catch (error) {
       if (candidateState !== undefined) zeroByteArraysDeep(candidateState);
       zeroByteArraysDeep(group.state);
+      for (const buffer of group.retainedStateBuffers ?? []) buffer.fill(0);
       group.state = rollback.state;
-      group.retainedStateBuffers ??= [];
-      group.retainedStateBuffers.push(rollback.encoded);
+      group.retainedStateBuffers = [rollback.encoded];
       rollback = undefined;
       group.expectedMembers = previousExpectedMembers;
+      // A malformed/replayed application record must not poison the durable
+      // cursor. Only reject in the currently available epoch after rollback;
+      // COMMITs, future epochs and unavailable crypto still stop synchronization.
+      if (rejectableApplication && (cryptographicProcessing
+        || (error instanceof MlsRuntimeError && ['envelope_decode', 'envelope_wireformat', 'envelope_binding', 'envelope_epoch'].includes(error.code)))) {
+        return { rejected: true, rejectionReason: 'invalid_ciphertext', stateChanged: false };
+      }
       throw error;
     } finally {
       if (rollback !== undefined) {

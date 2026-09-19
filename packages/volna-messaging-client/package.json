@@ -12,6 +12,20 @@
   "main": "src/index.js",
   "types": "src/index.d.ts",
   "exports": {
+    "./app-activity": "./src/app-activity.ts",
+    "./community-labels": { "types": "./src/community-labels.d.ts", "default": "./src/community-labels.js" },
+    "./matrix-account-security": "./src/matrix-account-security.tsx",
+    "./app-sheet": "./src/app-sheet.tsx",
+    "./sheet-design": "./src/sheet-design.ts",
+    "./web-visual-viewport": "./src/web-visual-viewport.ts",
+    "./screen-top-bar": "./src/screen-top-bar.tsx",
+    "./search-field": "./src/search-field.tsx",
+    "./loading": "./src/loading.tsx",
+    "./ui-motion": "./src/ui-motion.tsx",
+    "./music-availability": {
+      "types": "./src/music-availability.d.ts",
+      "default": "./src/music-availability.js"
+    },
     ".": {
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
@@ -94,6 +108,21 @@
       "types": "./src/media-policy.d.mts",
       "import": "./src/media-policy.mjs",
       "default": "./src/media-policy.mjs"
+    },
+    "./matrix-engine-web": {
+      "types": "./src/matrix-engine.d.ts",
+      "import": "./src/matrix-engine-web.ts",
+      "default": "./src/matrix-engine-web.ts"
+    },
+    "./matrix-engine-native": {
+      "types": "./src/matrix-engine.d.ts",
+      "import": "./src/matrix-engine-native.ts",
+      "default": "./src/matrix-engine-native.ts"
+    },
+    "./matrix-message-codec": {
+      "types": "./src/matrix-message-codec.d.mts",
+      "import": "./src/matrix-message-codec.mjs",
+      "default": "./src/matrix-message-codec.mjs"
     }
   },
   "files": [
@@ -101,6 +130,7 @@
     "key-transparency-policy.json",
     "LICENSE",
     "NOTICE",
+    "metro.cjs",
     "pnpm-lock.yaml",
     "pnpm-lock.public.yaml",
     "pnpm-workspace.yaml",
@@ -124,6 +154,7 @@
     "@noble/ciphers": "2.1.1",
     "@noble/curves": "2.0.1",
     "@noble/hashes": "2.0.1",
+    "matrix-js-sdk": "42.1.0",
     "socket.io-client": "4.8.3",
     "ts-mls": "1.6.2"
   },
@@ -141,6 +172,7 @@
     "react": ">=19.1.0 <20",
     "react-native": ">=0.81.0 <0.82",
     "react-native-qrcode-svg": ">=6.3.0 <7",
+    "react-native-safe-area-context": ">=5.6.0 <6",
     "react-native-svg": ">=15.12.0 <16"
   },
   "peerDependenciesMeta": {
@@ -157,6 +189,7 @@
     "react": { "optional": true },
     "react-native": { "optional": true },
     "react-native-qrcode-svg": { "optional": true },
+    "react-native-safe-area-context": { "optional": true },
     "react-native-svg": { "optional": true }
   },
   "devDependencies": {
@@ -174,6 +207,7 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-qrcode-svg": "6.3.21",
+    "react-native-safe-area-context": "5.6.2",
     "react-native-svg": "15.12.1",
     "typescript": "5.9.3"
   },
@@ -189,6 +223,6 @@
     "provenance": true
   },
   "engines": {
-    "node": ">=20 <25"
+    "node": ">=22 <25"
   }
 }

@@ -36,7 +36,7 @@ export function bandcampPlaybackUrl(releaseUrl: string, trackId: string) {
   return `${apiUrl}/music/bandcamp/stream?url=${encodeURIComponent(releaseUrl)}&trackId=${encodeURIComponent(trackId)}`;
 }
 
-export function buildPlayableQueue(release: PublicPageAudioRelease | { id?: string; releaseUrl: string; genres?: string[]; metadata: BandcampReleaseSnapshot }): GlobalTrackQueueItem[] {
+export function buildPlayableQueue(release: PublicPageAudioRelease | { id?: string; releaseUrl: string; genres?: string[]; releaseDate?: string | null; metadata: BandcampReleaseSnapshot }): GlobalTrackQueueItem[] {
   const metadata = release.metadata as BandcampReleaseSnapshot;
   if (!Array.isArray(metadata.tracks)) return [];
   const provider = 'provider' in release ? release.provider : 'bandcamp';
@@ -70,6 +70,7 @@ export function buildPlayableQueue(release: PublicPageAudioRelease | { id?: stri
     collectionId: metadata.externalUrl || release.releaseUrl,
     collectionTitle: provider === 'youtube' ? normalizeYouTubeTrackMetadata(metadata.title, metadata.artist).title : metadata.title,
     genres: release.genres ?? [],
+    releaseDate: release.releaseDate !== undefined ? release.releaseDate || null : metadata.releaseDate ?? null,
     releaseId,
     labelName,
     labelUsername,

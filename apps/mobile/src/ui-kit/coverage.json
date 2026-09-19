@@ -1,0 +1,407 @@
+[
+  {
+    "title": "Вход и регистрация",
+    "sources": [
+      "screens/AuthScreen.tsx"
+    ],
+    "examples": [
+      "auth-login",
+      "auth-register",
+      "auth-invite",
+      "password"
+    ],
+    "note": "Формы используют общие стили; Telegram, email и проверка инвайта не отправляются.",
+    "notShown": [
+      "Полный экран и переходы Telegram/email/инвайт → регистрация",
+      "Согласие с правилами, ошибки проверки и состояния авторизации"
+    ]
+  },
+  {
+    "title": "Лента и публикации",
+    "sources": [
+      "screens/FeedScreen.tsx",
+      "components/PostFeed.tsx",
+      "components/MentionText.tsx"
+    ],
+    "examples": [
+      "post",
+      "post-images",
+      "post-thread",
+      "post-poll",
+      "post-quote",
+      "post-composer",
+      "post-actions"
+    ],
+    "notShown": [
+      "Полный редактор публикации с автором, вложенной музыкой, опросом и настройками",
+      "Редактирование, упоминания и состояния загрузки медиа"
+    ]
+  },
+  {
+    "title": "Личный профиль",
+    "sources": [
+      "screens/ProfileScreens.tsx",
+      "components/AvatarEditButton.tsx",
+      "components/PrimaryTrackPreviewCard.tsx",
+      "components/PasswordStrengthIndicator.tsx",
+      "components/FollowListModal.tsx"
+    ],
+    "examples": [
+      "profile-header",
+      "profile-edit",
+      "identity",
+      "photos",
+      "music-preview-states",
+      "music-primary-editor",
+      "chat-recipient"
+    ],
+    "note": "Выбор фото, кадрирование и работа клавиатуры требуют проверки на устройстве. Списки подписчиков представлены общими строками, без запроса аккаунтов. Главный трек: общая карточка над вкладками и локальное удаление иконкой; поиск и сохранение не выполняются.",
+    "notShown": [
+      "Полный редактор с группой имени и @username",
+      "Списки подписок/подписчиков, приватный и заблокированный профиль",
+      "Кадрирование и полноэкранное фото"
+    ]
+  },
+  {
+    "title": "Коннект",
+    "sources": [
+      "components/ConnectProfileInterests.tsx",
+      "components/ConnectLikeIcon.tsx"
+    ],
+    "examples": [
+      "connect-grid",
+      "connect-identity",
+      "goals",
+      "interests",
+      "range",
+      "photos"
+    ],
+    "notShown": [
+      "Полноэкранная карточка с фотографиями, закрытием и редактированием своего профиля",
+      "Совпадение с кнопкой чата, полный фильтр и пустая выдача"
+    ]
+  },
+  {
+    "title": "Сообщества и места",
+    "sources": [
+      "screens/CommunityScreens.tsx",
+      "components/CommunityOwnershipSection.tsx",
+      "components/OwnershipTransferStatus.tsx",
+      "components/OwnershipTransferNotification.tsx",
+      "components/EntityUsernameLookup.tsx"
+    ],
+    "examples": [
+      "community-header",
+      "community-edit",
+      "music-primary-editor",
+      "community-team",
+      "community-products",
+      "ownership",
+      "catalog",
+      "location"
+    ],
+    "note": "Кабинет показан через общие формы, карточки команды, товаров и статусы передачи. Поиск участников и передача владения не выполняются.",
+    "notShown": [
+      "Полный кабинет: права, администраторы, партнеры и редактор товара",
+      "Создание сообщества и подтверждение передачи владельцем/получателем"
+    ]
+  },
+  {
+    "title": "События",
+    "sources": [
+      "screens/EventScreens.tsx",
+      "screens/CreateEventScreen.tsx",
+      "components/CalendarPickerModal.tsx"
+    ],
+    "examples": [
+      "event-card",
+      "event-compact",
+      "event-past",
+      "event-schedule",
+      "calendar",
+      "event-time",
+      "community-team",
+      "form"
+    ],
+    "notShown": [
+      "Полная страница события, билеты, архив и фильтры",
+      "Полный редактор события, площадки, сцен и участников"
+    ]
+  },
+  {
+    "title": "Музыкальный каталог",
+    "sources": [
+      "screens/MusicScreens.tsx",
+      "screens/MusicDiscovery.tsx",
+      "components/CatalogPaginationFooter.tsx",
+      "components/useCatalogPagination.ts",
+      "components/catalogPagination.ts",
+      "components/AudioReleaseAttachmentCard.tsx",
+      "components/AppleMusicPickerModal.tsx",
+      "components/ExternalReleaseEditorField.tsx",
+      "components/ReleaseMetadataRows.tsx",
+      "components/ExpandableReleaseTrackList.tsx",
+      "components/AnimatedReleaseTrackList.tsx",
+      "components/AnimatedMusicLibraryRow.tsx"
+    ],
+    "examples": [
+      "release",
+      "attached-search",
+      "links",
+      "genres",
+      "music-queue",
+      "catalog",
+      "music-pagination",
+      "motion"
+    ],
+    "note": "Поиск провайдеров и проверка доступности заменены локальными результатами. Карточки представлены элементами и композициями общего каталога.",
+    "notShown": [
+      "Полная выдача с личными/публичными результатами, реальными задержками и нижним плеером",
+      "Редактор релиза, загрузка и ошибки источника"
+    ]
+  },
+  {
+    "title": "Плеер, плейлисты, радио и скачанное",
+    "sources": [
+      "components/GlobalAudioPlayer.tsx",
+      "components/PlaylistGrid.tsx",
+      "components/MusicCategoryTile.tsx",
+      "components/CompactPlaylistTrackList.tsx",
+      "components/CompactTrackScrubber.tsx",
+      "components/RadioSchedule.tsx",
+      "components/MusicDownloadButton.tsx",
+      "components/DownloadedMusicHeader.tsx",
+      "screens/DownloadedMusic.tsx",
+      "components/PlaylistEditorSurface.tsx"
+    ],
+    "examples": [
+      "music-mini",
+      "music-full",
+      "music-radio",
+      "radio-schedule",
+      "playlists",
+      "music-queue",
+      "music-download",
+      "downloads-header",
+      "lists-states",
+      "playlist-editor"
+    ],
+    "note": "Плеер управляет демонстрационным состоянием без звука, сохранения и скачивания файлов. Категории музыки и сетка плейлистов используют общий выбор своей/автоматической обложки; переключение в примере не сохраняется. Шапка скачанного показывает корзину, занятое и пустое состояния через общий DownloadedMusicHeader, без хранилища устройства.",
+    "notShown": [
+      "Целый расширенный плеер: шапка, карусель, действия библиотеки и источник",
+      "Страница плейлиста, системный выбор/обрезка обложки, отложенные релизы и справка",
+      "Список скачанного и подтверждение очистки; редактор станции"
+    ]
+  },
+  {
+    "title": "Сообщения",
+    "sources": [
+      "@public/react-native-messages.tsx"
+    ],
+    "examples": [
+      "chat-list",
+      "chat",
+      "chat-composer",
+      "chat-attachments",
+      "chat-recipient",
+      "chat-unavailable",
+      "chat-history",
+      "chat-history-unavailable",
+      "chat-encryption-unavailable",
+      "chat-store-ownership",
+      "delete"
+    ],
+    "note": "Сообщения, получатели и счётчики вымышлены. Сетевой контроллер чатов не создаётся. Обычный незашифрованный режим удалён; примеры сообщений изображают результат расшифровки на устройстве. Недоступный E2EE не переключается на обычный чат. Состояния владения хранилищем используют реальные сообщения ошибок и MessagesEmptyState, без Web Locks, хранилища или ключей. Подгрузка истории показывает общий Web/native-компонент, ошибку, занятость и локальное достижение начала истории; это не проверка реального SDK или удержания позиции прокрутки.",
+    "notShown": [
+      "Целый диалог с состояниями клавиатуры, историей и мини-плеером",
+      "Музыкальное вложение, выбор местоположения и редактирование сообщения",
+      "Подтверждённые E2EE-квитанции доставки и прочтения: не реализованы, галочки не имитируются"
+    ]
+  },
+  {
+    "title": "Безопасность сообщений",
+    "sources": [
+      "screens/MessageSecurityScreen.tsx",
+      "@public/matrix-security-flow.tsx",
+      "@public/matrix-account-security.tsx",
+      "@public/react-native-message-security.tsx"
+    ],
+    "examples": [
+      "security-overview",
+      "security-devices",
+      "security-recovery",
+      "security-verification",
+      "security-qr",
+      "security-details"
+    ],
+    "note": "Показан state-driven Matrix flow. Менеджеры MLS/Matrix, QR-камера, реальные устройства и ключи не запускаются. Это не проверка безопасности протокола.",
+    "notShown": [
+      "Первичная настройка, сохранение ключа, QR-перенос и отзыв устройства",
+      "Нативные системные действия и ошибки полного процесса восстановления"
+    ]
+  },
+  {
+    "title": "Настройки, подписка и модерация",
+    "sources": [
+      "screens/SettingsScreens.tsx",
+      "components/VolnaSwitch.tsx",
+      "components/AnimatedSegmentedControl.tsx",
+      "components/ChatPrivacyControls.tsx"
+    ],
+    "examples": [
+      "privacy",
+      "settings-visibility",
+      "notification-settings",
+      "password-change",
+      "password",
+      "session-revoke",
+      "moderation",
+      "form",
+      "buttons"
+    ],
+    "note": "Системные сеансы, подписка и модерация представлены формами, действиями и подтверждениями. Платежи и изменения аккаунта не выполняются. Конфиденциальность использует настоящий ChatPrivacyControls: друзья, разрешение совпадений, онлайн и прочтения; значения и изменения только локальные.",
+    "notShown": [
+      "Список сеансов и полный экран безопасности",
+      "Подписка, заявки/очереди модерации и редактор обложек категорий"
+    ]
+  },
+  {
+    "title": "Уведомления",
+    "sources": [
+      "components/PushPermissionPrompt.tsx",
+      "components/TopToast.tsx"
+    ],
+    "examples": [
+      "notification-rows",
+      "notification-settings",
+      "event-reminders",
+      "push-permission",
+      "feedback"
+    ],
+    "note": "Нативный системный запрос push и панель ОС не являются HTML-компонентами; здесь только интерфейс приложения.",
+    "notShown": [
+      "Уведомление о передаче владения с действиями",
+      "Инвайт-коды, обязательные каналы и полная группировка настроек"
+    ]
+  },
+  {
+    "title": "Администрирование",
+    "sources": [
+      "screens/AdminPanelScreen.tsx"
+    ],
+    "examples": [
+      "admin-metrics",
+      "admin-services",
+      "moderation",
+      "form",
+      "lists-states"
+    ],
+    "note": "Числа и статусы демонстрационные. Доступ к логам, настройкам сервера и аудит-записям не запрашивается.",
+    "notShown": [
+      "Полные таблицы, графики, логи, фильтры и навигация админки",
+      "Управление и модерация с заполненными/пустыми/ошибочными состояниями"
+    ]
+  },
+  {
+    "title": "Навигация",
+    "sources": [
+      "components/navigation.tsx",
+      "components/ScreenTopBar.tsx",
+      "components/CatalogInnerHeader.tsx",
+      "components/CatalogBackArea.tsx",
+      "components/CatalogTabs.tsx",
+      "components/ContentTabIndicator.tsx",
+      "components/SideMenu.tsx",
+      "components/DrawerDismissArea.tsx"
+    ],
+    "examples": [
+      "headers",
+      "catalog-back",
+      "tabs",
+      "menu",
+      "notification-rows"
+    ],
+    "notShown": [
+      "Боковое меню в движении и оболочка с клавиатурой/safe area",
+      "Физическая проверка свайпа на iOS/Android и системного жеста от края экрана"
+    ]
+  },
+  {
+    "title": "Панели, выбор и отправка",
+    "sources": [
+      "components/AppSheetModal.tsx",
+      "components/SelectionPickerModal.tsx",
+      "components/LocationPickerModal.tsx",
+      "components/EntityShareModal.tsx",
+      "components/ReleaseShareModal.tsx"
+    ],
+    "examples": [
+      "sheet",
+      "picker",
+      "location",
+      "calendar",
+      "event-time",
+      "share",
+      "delete"
+    ],
+    "note": "Системный share, геолокация и отправка через реальные диалоги не вызываются. Их оболочки и действия показаны общими компонентами.",
+    "notShown": [
+      "Музыкальная отправка, редактор репоста и выбор автора",
+      "Ошибки определения города; системный share и разрешения ОС вне HTML"
+    ]
+  },
+  {
+    "title": "Изображения, карточки и состояния",
+    "sources": [
+      "components/AppImage.tsx",
+      "components/CatalogCategoryTile.tsx",
+      "components/VerifiedBadge.tsx",
+      "components/EditorAutosaveStatus.tsx",
+      "screens/EntityNotFoundScreen.tsx",
+      "components/AppRefreshControl.tsx",
+      "components/editorAutosave.ts",
+      "components/useEditorAutosave.ts"
+    ],
+    "examples": [
+      "identity",
+      "catalog",
+      "photos",
+      "feedback",
+      "empty",
+      "lists-states",
+      "profile-edit",
+      "community-edit"
+    ],
+    "note": "Pull-to-refresh использует системный native adapter; его физический жест проверяется отдельно.",
+    "notShown": [
+      "Экран недоступного/удалённого объекта и восстановление сессии",
+      "Физический pull-to-refresh и загрузка/ошибки реальных изображений",
+      "Завершение процесса/вкладки не гарантирует доставку незавершённого сохранения; реальные серверные ошибки и переходы App проверяются отдельно от локального примера."
+    ]
+  },
+  {
+    "title": "Платформенные и невизуальные адаптеры",
+    "sources": [
+      "components/ScreenContinuity.tsx",
+      "components/YouTubeAudioEngine.tsx",
+      "components/YouTubeAudioEngine.web.tsx",
+      "components/YouTubeAudioEngine.native.tsx",
+      "components/YouTubePostEmbed.web.tsx",
+      "components/YouTubePostEmbed.native.tsx",
+      "components/TelegramPostEmbed.web.tsx",
+      "components/TelegramPostEmbed.native.tsx",
+      "screens/WaveBackgroundTestScreen.tsx"
+    ],
+    "examples": [
+      "motion",
+      "post-images",
+      "music-mini",
+      "lists-states"
+    ],
+    "note": "Continuity и аудиодвижки не имеют собственных контролов. Содержимое YouTube/Telegram рисуется внешним сервисом; виджеты, авторизация и воспроизведение в галерее не загружаются. Тестовый фон не является отдельным продуктовым экраном.",
+    "notShown": [
+      "Системные и внешние окна не воспроизводятся в HTML; их проверяют отдельно"
+    ]
+  }
+]
+

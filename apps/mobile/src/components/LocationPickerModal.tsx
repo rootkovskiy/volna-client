@@ -1,8 +1,10 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing } from 'react-native';
-import { MapPin, RotateCcw } from 'lucide-react-native';
-import { apiUrl, remoteSearchDebounceMs, reportApiError } from '../api/client';
+import { LocateFixed, MapPin, RotateCcw } from 'lucide-react-native';
+import { apiFetch as fetch, apiUrl, remoteSearchDebounceMs, reportApiError } from '../api/client';
 import { SelectionPickerModal, type SelectionPickerOption } from './SelectionPickerModal';
+import { detectCurrentCity } from '../location/detectCity';
 
 export type LocationSelection = {
   cityId: string;
@@ -30,15 +32,37 @@ export function LocationPickerModal({
   const [cities, setCities] = useState<CityOption[]>([]);
   const [country, setCountry] = useState<CountryOption | null>(null);
   const [query, setQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [countriesLoading, setCountriesLoading] = useState(false);
+  const [citiesLoading, setCitiesLoading] = useState(false);
+  const isLoading = country ? citiesLoading : countriesLoading;
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [detectionError, setDetectionError] = useState('');
+  const detection = useRef<AbortController | null>(null);
+  const visible = useRef(isVisible);
+  visible.current = isVisible;
+  const levelGeneration = useRef(0);
   const levelOpacity = useRef(new Animated.Value(1)).current;
   const levelOffset = useRef(new Animated.Value(0)).current;
 
+  const cancelDetection = () => {
+    detection.current?.abort();
+    detection.current = null;
+    setIsDetecting(false);
+  };
+  const close = () => {
+    levelGeneration.current++;
+    cancelDetection();
+    onClose();
+  };
+
   const changeLevel = (nextCountry: CountryOption | null, direction: 1 | -1) => {
+    cancelDetection();
+    const generation = ++levelGeneration.current;
     Animated.parallel([
       Animated.timing(levelOpacity, { toValue: 0, duration: 90, easing: Easing.out(Easing.quad), useNativeDriver: true }),
       Animated.timing(levelOffset, { toValue: -direction * 10, duration: 90, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-    ]).start(() => {
+    ]).start(({ finished }) => {
+      if (!finished || !visible.current || generation !== levelGeneration.current) return;
       setCountry(nextCountry);
       setQuery('');
       levelOffset.setValue(direction * 22);
@@ -51,18 +75,30 @@ export function LocationPickerModal({
 
   useEffect(() => {
     if (!isVisible) return;
+    setDetectionError('');
+    setIsDetecting(false);
+    const controller = new AbortController();
     levelOpacity.setValue(1);
     levelOffset.setValue(0);
     setCountry(null);
     setQuery('');
-    setIsLoading(true);
-    fetch(`${apiUrl}/locations/countries`)
+    setCountriesLoading(true);
+    fetch(`${apiUrl}/locations/countries`, { signal: controller.signal, headers: { 'x-volna-suppress-error-report': '1' } })
       .then(async (response) => {
         if (!response.ok) throw new Error('Не удалось загрузить страны');
-        setCountries(await response.json() as CountryOption[]);
+        const result = await response.json() as CountryOption[];
+        if (!controller.signal.aborted) setCountries(result);
       })
-      .catch((reason) => reportApiError(reason instanceof Error ? reason.message : 'Не удалось загрузить страны'))
-      .finally(() => setIsLoading(false));
+      .catch((reason) => { if (!controller.signal.aborted) reportApiError(reason instanceof Error ? reason.message : 'Не удалось загрузить страны'); })
+      .finally(() => { if (!controller.signal.aborted) setCountriesLoading(false); });
+    return () => {
+      controller.abort();
+      detection.current?.abort();
+      detection.current = null;
+      levelGeneration.current++;
+      levelOpacity.stopAnimation();
+      levelOffset.stopAnimation();
+    };
   }, [isVisible]);
 
   useEffect(() => {
@@ -71,18 +107,21 @@ export function LocationPickerModal({
       return;
     }
     const controller = new AbortController();
+    setCitiesLoading(true);
+    setCities([]);
     const timer = setTimeout(() => {
-      setIsLoading(true);
-      fetch(`${apiUrl}/locations/cities?countryCode=${country.code}&q=${encodeURIComponent(query.trim())}`, { signal: controller.signal })
+      setCitiesLoading(true);
+      fetch(`${apiUrl}/locations/cities?countryCode=${country.code}&q=${encodeURIComponent(query.trim())}`, { signal: controller.signal, headers: { 'x-volna-suppress-error-report': '1' } })
         .then(async (response) => {
           if (!response.ok) throw new Error('Не удалось загрузить города');
-          setCities(await response.json() as CityOption[]);
+          const result = await response.json() as CityOption[];
+          if (!controller.signal.aborted) setCities(result);
         })
         .catch((reason) => {
           if (!controller.signal.aborted) reportApiError(reason instanceof Error ? reason.message : 'Не удалось загрузить города');
         })
         .finally(() => {
-          if (!controller.signal.aborted) setIsLoading(false);
+          if (!controller.signal.aborted) setCitiesLoading(false);
         });
     }, query ? remoteSearchDebounceMs : 0);
     return () => {
@@ -99,8 +138,29 @@ export function LocationPickerModal({
   }, [countries, query]);
 
   const choose = (selection: LocationSelection) => {
+    cancelDetection();
     onSelect(selection);
-    onClose();
+    close();
+  };
+
+  const detect = async () => {
+    if (detection.current || !visible.current) return;
+    const controller = new AbortController();
+    detection.current = controller;
+    setIsDetecting(true);
+    setDetectionError('');
+    try {
+      const city = await detectCurrentCity(controller.signal);
+      if (controller.signal.aborted || detection.current !== controller || !visible.current) return;
+      choose({ kind: 'city', cityId: city.id, cityName: city.name, countryCode: city.countryCode, countryName: city.country.name });
+    } catch (error) {
+      if (!controller.signal.aborted && detection.current === controller && visible.current) {
+        setDetectionError(error instanceof Error ? error.message : 'Не удалось определить город. Выберите его вручную');
+      }
+    } finally {
+      controller.abort();
+      if (detection.current === controller) { detection.current = null; setIsDetecting(false); }
+    }
   };
 
   const options: SelectionPickerOption[] = country
@@ -155,9 +215,18 @@ export function LocationPickerModal({
       isLoading={isLoading}
       isVisible={isVisible}
       onBack={country ? () => changeLevel(null, -1) : undefined}
-      onChangeSearch={setQuery}
-      onClose={onClose}
+      onChangeSearch={(value) => { cancelDetection(); setQuery(value); }}
+      onClose={close}
       options={options}
+      topOptions={[{
+        key: 'detect-city',
+        title: isDetecting ? 'Определяем город…' : 'Определить город',
+        meta: detectionError || 'Ближайший доступный город по геолокации',
+        metaLines: 3,
+        disabled: isDetecting,
+        leading: isDetecting ? <LoadingIndicator size="small" /> : <LocateFixed color="#111" size={20} strokeWidth={1.8} />,
+        onPress: () => { void detect(); },
+      }]}
       search={query}
       searchPlaceholder={country ? 'Найти город' : 'Найти страну'}
       subtitle={country ? country.name : initialCountryName ? `Сейчас: ${initialCountryName}` : 'Можно выбрать страну или конкретный город'}

@@ -1,0 +1,1765 @@
+diff --git a/crates/matrix-sdk-crypto/Cargo.toml b/crates/matrix-sdk-crypto/Cargo.toml
+--- a/crates/matrix-sdk-crypto/Cargo.toml
++++ b/crates/matrix-sdk-crypto/Cargo.toml
+@@ -25,6 +25,7 @@
+ 
+ [features]
+ default = []
++strict-room-key-recipients = []
+ automatic-room-key-forwarding = []
+ experimental-send-custom-to-device = []
+ 
+diff --git a/crates/matrix-sdk-crypto/src/backups/authenticated.rs b/crates/matrix-sdk-crypto/src/backups/authenticated.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/matrix-sdk-crypto/src/backups/authenticated.rs
+@@ -0,0 +1,278 @@
++// Copyright 2026 VOLNA contributors
++// SPDX-License-Identifier: Apache-2.0
++//! MSC4048's backwards-compatible v1 backup MAC, pinned at proposal revision
++//! 20b767f5f4ac616b10237c2fb23a1b4bfc8baa3f. No legacy key is promoted by import.
++//!
++//! VOLNA's encrypted context retains the SDK's already-established sender data
++//! and binds the account/room/session. Only this MAC-verifying Rust path may
++//! restore that context; plaintext exports and forwarded keys do not carry it.
++
++use hkdf::Hkdf;
++use hmac::{Hmac, KeyInit, Mac, digest::FixedOutput};
++use ruma::{RoomId, UserId, canonical_json::to_canonical_value, serde::Raw};
++use serde_json::{Value, json};
++use sha2::Sha256;
++use thiserror::Error;
++use vodozemac::{base64_decode, base64_encode, pk_encryption::PkEncryption};
++use zeroize::{Zeroize, Zeroizing};
++
++use super::MegolmV1BackupKey;
++use crate::{
++    olm::{BackedUpRoomKey, ExportedRoomKey, InboundGroupSession, SenderData},
++    store::types::BackupDecryptionKey,
++};
++
++const MAC_FIELD: &str = "org.matrix.msc4048.backup_mac";
++const UNAUTHENTICATED: &str = "org.matrix.msc4048.unauthenticated";
++const CONTEXT: &str = "social.volna.backup_context";
++const MAX_SESSION_BYTES: usize = 65_536;
++
++struct SecretJson(Value);
++impl Drop for SecretJson {
++    fn drop(&mut self) {
++        fn wipe(value: &mut Value) {
++            match value {
++                Value::String(s) => s.zeroize(),
++                Value::Array(a) => a.iter_mut().for_each(wipe),
++                Value::Object(o) => o.values_mut().for_each(wipe),
++                _ => {},
++            }
++        }
++        wipe(&mut self.0);
++    }
++}
++
++/// An untrusted backup entry failed validation. Never attach its contents to logs.
++#[derive(Debug, Error)]
++#[error("Invalid authenticated room-key backup")]
++pub struct AuthenticatedBackupError;
++
++fn mac_key(key: &BackupDecryptionKey) -> Zeroizing<[u8; 32]> {
++    let mut result = Zeroizing::new([0; 32]);
++    Hkdf::<Sha256>::new(None, key.as_bytes())
++        .expand(b"MATRIX_BACKUP_MAC_KEY", result.as_mut())
++        .expect("32-byte HKDF output is valid");
++    result
++}
++
++fn canonical_ciphertext(value: &Value) -> Result<String, AuthenticatedBackupError> {
++    let mut object = value.as_object().cloned().ok_or(AuthenticatedBackupError)?;
++    object.remove("unsigned");
++    object.remove("signatures");
++    to_canonical_value(object).map(|v| v.to_string()).map_err(|_| AuthenticatedBackupError)
++}
++
++fn create_mac(key: &BackupDecryptionKey, data: &Value) -> Result<String, AuthenticatedBackupError> {
++    let key = mac_key(key);
++    let mut mac = Hmac::<Sha256>::new_from_slice(key.as_ref()).expect("valid HMAC key length");
++    mac.update(canonical_ciphertext(data)?.as_bytes());
++    Ok(base64_encode(mac.finalize_fixed()))
++}
++
++fn verify_mac(key: &BackupDecryptionKey, data: &Value) -> Result<bool, AuthenticatedBackupError> {
++    let Some(tag) = data.get("unsigned").and_then(|v| v.get(MAC_FIELD)) else {
++        return Ok(false);
++    };
++    let tag = tag.as_str().ok_or(AuthenticatedBackupError)?;
++    if tag.len() != 43 { return Err(AuthenticatedBackupError); }
++    let tag = base64_decode(tag).map_err(|_| AuthenticatedBackupError)?;
++    if tag.len() != 32 { return Err(AuthenticatedBackupError); }
++    let key = mac_key(key);
++    let mut mac = Hmac::<Sha256>::new_from_slice(key.as_ref()).expect("valid HMAC key length");
++    mac.update(canonical_ciphertext(data)?.as_bytes());
++    mac.verify_slice(&tag).map_err(|_| AuthenticatedBackupError)?;
++    Ok(true)
++}
++
++fn known_sender(data: &SenderData) -> bool {
++    matches!(data, SenderData::SenderVerified(_) | SenderData::SenderUnverified(_)
++        | SenderData::VerificationViolation(_))
++}
++
++/// Encrypt an SDK session using the existing v1 cipher plus MSC4048 authentication.
++pub(super) async fn encrypt(
++    session: InboundGroupSession,
++    key: &MegolmV1BackupKey,
++    secret: &BackupDecryptionKey,
++    user: &UserId,
++) -> Result<Raw<ruma::api::client::backup::KeyBackupData>, vodozemac::pk_encryption::Error> {
++    // The caller matches the private key to the active backup public key/version.
++    let mut plaintext = SecretJson(serde_json::to_value(session.to_backup().await)
++        .expect("room key is serializable"));
++    // SenderData is only established by authenticated Olm receipt or a previous
++    // authenticated import. Untrusted file/legacy imports retain UnknownDevice.
++    let authenticated = known_sender(&session.sender_data) && session.forwarder_data.is_none()
++        && (!session.has_been_imported() || session.has_authenticated_backup());
++    if authenticated {
++        plaintext.0[CONTEXT] = json!({ "version": 1, "user_id": user,
++            "room_id": session.room_id(), "session_id": session.session_id(),
++            "sender_data": session.sender_data });
++    } else {
++        plaintext.0[UNAUTHENTICATED] = json!("m.undefined");
++    }
++    let plaintext = Zeroizing::new(serde_json::to_vec(&plaintext.0).expect("room key is serializable"));
++    let public = vodozemac::Curve25519PublicKey::from_base64(&key.to_base64())
++        .expect("stored backup public key is valid");
++    let message = PkEncryption::from_key(public).encrypt(&plaintext)?;
++    let mut data = json!({ "ephemeral": message.ephemeral_key.to_base64(),
++        "ciphertext": base64_encode(message.ciphertext), "mac": base64_encode(message.mac) });
++    data["unsigned"] = json!({ MAC_FIELD: create_mac(secret, &data).expect("generated backup is canonical") });
++    let result = json!({ "first_message_index": session.first_known_index(),
++        "forwarded_count": u8::from(session.has_been_imported()),
++        // Server merge preference for proven origin, not a claim of peer SAS.
++        // The importer ignores this unauthenticated metadata entirely.
++        "is_verified": authenticated,
++        "session_data": data });
++    Ok(Raw::from_json_string(result.to_string()).expect("backup entry is serializable"))
++}
++
++impl BackupDecryptionKey {
++    /// Check a present MSC4048 MAC before decrypting v1 data. This returns bytes,
++    /// not sender trust; only the version-bound importer restores sender data.
++    pub fn decrypt_v1_with_authentication(&self, serialized: &str) -> Result<String, AuthenticatedBackupError> {
++        if serialized.len() > MAX_SESSION_BYTES { return Err(AuthenticatedBackupError); }
++        let data: Value = serde_json::from_str(serialized).map_err(|_| AuthenticatedBackupError)?;
++        verify_mac(self, &data)?;
++        let field = |name: &str| data.get(name).and_then(Value::as_str).ok_or(AuthenticatedBackupError);
++        self.decrypt_v1(field("ephemeral")?, field("mac")?, field("ciphertext")?)
++            .map_err(|_| AuthenticatedBackupError)
++    }
++}
++
++/// Verify ciphertext before interpreting sender provenance. A missing MAC retains
++/// legacy import semantics; an invalid present MAC is an error, never a fallback.
++pub(super) async fn decrypt(
++    secret: &BackupDecryptionKey,
++    user: &UserId,
++    room: &RoomId,
++    session_id: &str,
++    serialized: &str,
++) -> Result<InboundGroupSession, AuthenticatedBackupError> {
++    if serialized.len() > MAX_SESSION_BYTES || session_id.len() > 128 {
++        return Err(AuthenticatedBackupError);
++    }
++    let data: Value = serde_json::from_str(serialized).map_err(|_| AuthenticatedBackupError)?;
++    let authenticated = verify_mac(secret, &data)?;
++    let plaintext = Zeroizing::new(secret.decrypt_v1_with_authentication(serialized)?);
++    let value = SecretJson(serde_json::from_str(&plaintext).map_err(|_| AuthenticatedBackupError)?);
++    let key: BackedUpRoomKey = serde_json::from_str(&plaintext).map_err(|_| AuthenticatedBackupError)?;
++    // The intrinsic Megolm session id must match routing, including legacy input.
++    let exported = ExportedRoomKey::from_backed_up_room_key(room.to_owned(), session_id.to_owned(), key);
++    let mut session = InboundGroupSession::try_from(&exported).map_err(|_| AuthenticatedBackupError)?;
++    let pickle = session.pickle().await;
++    let roundtrip = InboundGroupSession::from_pickle(pickle).map_err(|_| AuthenticatedBackupError)?;
++    if roundtrip.session_id() != session_id { return Err(AuthenticatedBackupError); }
++    if authenticated && value.0.get(UNAUTHENTICATED).is_none() && value.0.get("unauthenticated").is_none() {
++        let context = value.0.get(CONTEXT).ok_or(AuthenticatedBackupError)?;
++        if context.get("version").and_then(Value::as_u64) != Some(1)
++            || context.get("user_id").and_then(Value::as_str) != Some(user.as_str())
++            || context.get("room_id").and_then(Value::as_str) != Some(room.as_str())
++            || context.get("session_id").and_then(Value::as_str) != Some(session_id) {
++            return Err(AuthenticatedBackupError);
++        }
++        let sender: SenderData = serde_json::from_value(context.get("sender_data")
++            .cloned().ok_or(AuthenticatedBackupError)?).map_err(|_| AuthenticatedBackupError)?;
++        if !known_sender(&sender) { return Err(AuthenticatedBackupError); }
++        session.restore_authenticated_backup_sender(sender);
++    }
++    Ok(session)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use matrix_sdk_test::async_test;
++    use ruma::{device_id, room_id, user_id};
++    use crate::olm::{Account, KnownSenderData};
++
++    #[test]
++    fn test_msc4048_mac_matches_independent_python_vector() {
++        let secret = BackupDecryptionKey::from_bytes(&std::array::from_fn(|i| i as u8));
++        let data = json!({ "ciphertext": "AQID", "ephemeral": "BAUG", "mac": "BwgJ" });
++        assert_eq!(create_mac(&secret, &data).unwrap(), "MX82TENnNpcPL0JIZJj+6N/8nnrF5t8xon7g3TrYZb8");
++    }
++
++    async fn fixture() -> (InboundGroupSession, BackupDecryptionKey, MegolmV1BackupKey) {
++        let account = Account::new(user_id!("@alice:example.org"));
++        let (_, mut session) = account.create_group_session_pair_with_defaults(room_id!("!room:example.org")).await;
++        session.sender_data = SenderData::SenderUnverified(KnownSenderData {
++            user_id: user_id!("@alice:example.org").to_owned(),
++            device_id: Some(device_id!("ALICE").to_owned()),
++            master_key: Box::new(account.identity_keys().ed25519),
++        });
++        let secret = BackupDecryptionKey::new();
++        let public = secret.megolm_v1_public_key();
++        (session, secret, public)
++    }
++
++    async fn encrypted(session: InboundGroupSession, secret: &BackupDecryptionKey, public: &MegolmV1BackupKey) -> Value {
++        let raw = encrypt(session, public, secret, user_id!("@owner:example.org")).await.unwrap();
++        let value: Value = serde_json::from_str(raw.json().get()).unwrap();
++        value["session_data"].clone()
++    }
++
++    #[async_test]
++    async fn test_authenticated_backup_survives_pickle_and_second_backup() {
++        let (session, secret, public) = fixture().await;
++        let data = encrypted(session.clone(), &secret, &public).await;
++        let recovered = decrypt(&secret, user_id!("@owner:example.org"), session.room_id(), session.session_id(), &data.to_string()).await.unwrap();
++        assert!(recovered.has_been_imported()); // Do not pretend this was live Olm.
++        assert_eq!(recovered.sender_data, session.sender_data);
++        assert!(recovered.has_authenticated_backup());
++        let reopened = InboundGroupSession::from_pickle(recovered.pickle().await).unwrap();
++        let data = encrypted(reopened, &secret, &public).await;
++        let recovered = decrypt(&secret, user_id!("@owner:example.org"), session.room_id(), session.session_id(), &data.to_string()).await.unwrap();
++        assert_eq!(recovered.sender_data, session.sender_data);
++        assert!(recovered.has_authenticated_backup());
++    }
++
++    #[async_test]
++    async fn test_authenticated_backup_rejects_wrong_secret_mutation_and_context() {
++        let (session, secret, public) = fixture().await;
++        let data = encrypted(session.clone(), &secret, &public).await;
++        assert!(decrypt(&BackupDecryptionKey::new(), user_id!("@owner:example.org"), session.room_id(), session.session_id(), &data.to_string()).await.is_err());
++        for field in ["ciphertext", "ephemeral", "mac"] {
++            let mut changed = data.clone(); changed[field] = json!("AAAA");
++            assert!(decrypt(&secret, user_id!("@owner:example.org"), session.room_id(), session.session_id(), &changed.to_string()).await.is_err());
++        }
++        assert!(decrypt(&secret, user_id!("@attacker:example.org"), session.room_id(), session.session_id(), &data.to_string()).await.is_err());
++        assert!(decrypt(&secret, user_id!("@owner:example.org"), room_id!("!other:example.org"), session.session_id(), &data.to_string()).await.is_err());
++        assert!(decrypt(&secret, user_id!("@owner:example.org"), session.room_id(), "different-session", &data.to_string()).await.is_err());
++    }
++
++    #[async_test]
++    async fn test_stripped_mac_and_plaintext_exports_never_authenticate() {
++        let (session, secret, public) = fixture().await;
++        let mut data = encrypted(session.clone(), &secret, &public).await;
++        data.as_object_mut().unwrap().remove("unsigned");
++        let recovered = decrypt(&secret, user_id!("@owner:example.org"), session.room_id(), session.session_id(), &data.to_string()).await.unwrap();
++        assert!(!known_sender(&recovered.sender_data));
++        assert!(!recovered.has_authenticated_backup());
++        let ordinary = InboundGroupSession::try_from(&session.export().await).unwrap();
++        assert!(!known_sender(&ordinary.sender_data));
++    }
++
++    #[async_test]
++    async fn test_rebacking_legacy_keys_does_not_launder_their_provenance() {
++        let (session, secret, public) = fixture().await;
++        let legacy = InboundGroupSession::try_from(&session.export().await).unwrap();
++        let data = encrypted(legacy, &secret, &public).await;
++        assert!(verify_mac(&secret, &data).unwrap());
++        let recovered = decrypt(&secret, user_id!("@owner:example.org"), session.room_id(), session.session_id(), &data.to_string()).await.unwrap();
++        assert!(!known_sender(&recovered.sender_data));
++        assert!(!recovered.has_authenticated_backup());
++    }
++
++    #[async_test]
++    async fn test_additional_signed_fields_and_invalid_present_tags_are_rejected() {
++        let (session, secret, public) = fixture().await;
++        let data = encrypted(session.clone(), &secret, &public).await;
++        let mut changed = data.clone(); changed["extra"] = json!(1);
++        assert!(verify_mac(&secret, &changed).is_err());
++        for tag in [Value::Null, json!(1), json!(""), json!("A".repeat(43))] {
++            let mut changed = data.clone(); changed["unsigned"][MAC_FIELD] = tag;
++            assert!(secret.decrypt_v1_with_authentication(&changed.to_string()).is_err());
++        }
++        assert!(secret.decrypt_v1_with_authentication(&" ".repeat(MAX_SESSION_BYTES + 1)).is_err());
++    }
++}
+diff --git a/crates/matrix-sdk-crypto/src/backups/mod.rs b/crates/matrix-sdk-crypto/src/backups/mod.rs
+--- a/crates/matrix-sdk-crypto/src/backups/mod.rs
++++ b/crates/matrix-sdk-crypto/src/backups/mod.rs
+@@ -46,6 +46,8 @@
+ };
+ 
+ mod keys;
++mod authenticated;
++pub use authenticated::AuthenticatedBackupError;
+ 
+ pub use keys::{DecodeError, DecryptionError, MegolmV1BackupKey};
+ 
+@@ -533,8 +535,19 @@
+             return Ok(None);
+         }
+ 
++        let secrets = self.store.load_backup_keys().await?;
++        let secret = secrets.decryption_key.filter(|secret| {
++            secrets.backup_version.as_deref() == Some(version.as_str())
++                && secret.megolm_v1_public_key().to_base64() == backup_key.to_base64()
++        });
++        // VOLNA never acknowledges a newly uploaded key before it can authenticate
++        // its backup. Saving/recovering the private backup key resumes the uploader.
++        #[cfg(feature = "strict-room-key-recipients")]
++        if secret.is_none() { return Ok(None); }
+         let key_count = sessions.len();
+-        let (backup, session_record) = Self::backup_keys(sessions, backup_key).await?;
++        let (backup, session_record) = Self::backup_keys(
++            sessions, backup_key, secret.as_ref(), self.store.user_id(),
++        ).await?;
+ 
+         info!(
+             key_count = key_count,
+@@ -556,6 +569,8 @@
+     async fn backup_keys(
+         sessions: Vec<InboundGroupSession>,
+         backup_key: &MegolmV1BackupKey,
++        secret: Option<&BackupDecryptionKey>,
++        user: &ruma::UserId,
+     ) -> Result<
+         (
+             BTreeMap<OwnedRoomId, RoomKeyBackup>,
+@@ -571,7 +586,11 @@
+             let room_id = session.room_id().to_owned();
+             let session_id = session.session_id().to_owned();
+             let sender_key = session.sender_key().to_owned();
+-            let session = backup_key.encrypt(session).await?;
++            let session = if let Some(secret) = secret {
++                authenticated::encrypt(session, backup_key, secret, user).await?
++            } else {
++                Raw::new(&backup_key.encrypt(session).await?).expect("serializable backup")
++            };
+ 
+             session_record
+                 .entry(room_id.to_owned())
+@@ -580,7 +599,6 @@
+                 .or_default()
+                 .insert(session_id.clone());
+ 
+-            let session = Raw::new(&session).expect("Can't serialize a backed up room key");
+ 
+             backup
+                 .entry(room_id)
+@@ -590,6 +608,47 @@
+         }
+ 
+         Ok((backup, session_record))
++    }
++
++    /// Import encrypted backup entries. Authentication is verified inside Rust
++    /// against the locally held, version-bound recovery secret. No caller-supplied
++    /// plaintext flag, server metadata, file import or SAS action grants this trust.
++    pub async fn import_encrypted_room_keys(
++        &self,
++        encrypted: BTreeMap<OwnedRoomId, BTreeMap<String, serde_json::Value>>,
++        version: &str,
++        progress: impl Fn(usize, usize),
++    ) -> Result<RoomKeyImportResult, CryptoStoreError> {
++        let keys = self.store.load_backup_keys().await?;
++        // A preserved predecessor version may use the same recovery secret.
++        // Authentication is bound to that secret and the encrypted account/room/
++        // session context, never to server-provided version metadata.
++        let secret = keys.decryption_key.ok_or_else(||
++            CryptoStoreError::backend(AuthenticatedBackupError))?;
++        let count: usize = encrypted.values().map(|v| v.len()).sum();
++        if count > 1024 { return Err(CryptoStoreError::backend(AuthenticatedBackupError)); }
++        let mut sessions = Vec::new();
++        let mut processed = 0;
++        for (room, entries) in encrypted {
++            for (session, ciphertext) in entries {
++                let serialized = serde_json::to_string(&ciphertext)?;
++                if let Ok(session) = authenticated::decrypt(&secret, self.store.user_id(),
++                    &room, &session, &serialized).await {
++                    sessions.push(session);
++                }
++                processed += 1;
++                progress(processed, count);
++            }
++        }
++        // A concurrently replaced recovery key/version must not admit late data.
++        let current = self.store.load_backup_keys().await?;
++        if current.decryption_key.as_ref().map(|k| k.megolm_v1_public_key().to_base64())
++                != Some(secret.megolm_v1_public_key().to_base64()) {
++            return Err(CryptoStoreError::backend(AuthenticatedBackupError));
++        }
++        let mut result = self.store.import_sessions_impl(sessions.into_iter(), Some(version), |_, _| {}).await?;
++        result.total_count = count;
++        Ok(result)
+     }
+ 
+     /// Import the given room keys into our store.
+diff --git a/crates/matrix-sdk-crypto/src/gossiping/machine.rs b/crates/matrix-sdk-crypto/src/gossiping/machine.rs
+--- a/crates/matrix-sdk-crypto/src/gossiping/machine.rs
++++ b/crates/matrix-sdk-crypto/src/gossiping/machine.rs
+@@ -756,6 +756,19 @@
+         use super::KeyForwardDecision;
+         use crate::olm::ShareState;
+ 
++        #[cfg(feature = "strict-room-key-recipients")]
++        {
++            let binding = crate::recipient_policy::Binding::load(
++                &self.inner.store.crypto_store(),
++                session.room_id(),
++            )
++            .await
++            .map_err(|_| KeyForwardDecision::RecipientPolicy)?;
++            if !binding.allows(device.user_id()) {
++                return Err(KeyForwardDecision::RecipientPolicy);
++            }
++        }
++
+         let outbound_session = self
+             .inner
+             .outbound_group_sessions
+diff --git a/crates/matrix-sdk-crypto/src/gossiping/mod.rs b/crates/matrix-sdk-crypto/src/gossiping/mod.rs
+--- a/crates/matrix-sdk-crypto/src/gossiping/mod.rs
++++ b/crates/matrix-sdk-crypto/src/gossiping/mod.rs
+@@ -69,6 +69,10 @@
+ #[cfg(feature = "automatic-room-key-forwarding")]
+ #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+ pub enum KeyForwardDecision {
++    /// The endpoint's immutable direct-room recipient policy withheld the key.
++    #[cfg(feature = "strict-room-key-recipients")]
++    #[error("room-key recipient policy rejected the request")]
++    RecipientPolicy,
+     /// The key request is from a device that we don't own, we're only sharing
+     /// sessions that we know the requesting device already was supposed to get.
+     #[error("can't find an active outbound group session")]
+diff --git a/crates/matrix-sdk-crypto/src/identities/device.rs b/crates/matrix-sdk-crypto/src/identities/device.rs
+--- a/crates/matrix-sdk-crypto/src/identities/device.rs
++++ b/crates/matrix-sdk-crypto/src/identities/device.rs
+@@ -184,7 +184,9 @@
+         &self,
+         session: &InboundGroupSession,
+     ) -> Result<bool, MismatchedIdentityKeysError> {
+-        if session.has_been_imported() {
++        // A MAC-verified backup retains the prior endpoint's authenticated
++        // ownership evidence. Continue checking the exact Curve/Ed identity keys.
++        if session.has_been_imported() && !session.has_authenticated_backup() {
+             // An imported room key means that we did not receive the room key as a
+             // `m.room_key` event when the room key was initially exchanged.
+             //
+@@ -834,6 +836,13 @@
+         event_type: &str,
+         content: impl Serialize,
+     ) -> OlmResult<(Session, Raw<ToDeviceEncryptedEventContent>, String)> {
++        #[cfg(feature = "strict-room-key-recipients")]
++        let content = {
++            let content = serde_json::to_value(content)?;
++            crate::recipient_policy::check_key_content(store, self.user_id(), event_type, &content)
++                .await?;
++            content
++        };
+         #[cfg(not(target_family = "wasm"))]
+         let message_id = ulid::Ulid::generate().to_string();
+         #[cfg(target_family = "wasm")]
+diff --git a/crates/matrix-sdk-crypto/src/identities/manager.rs b/crates/matrix-sdk-crypto/src/identities/manager.rs
+--- a/crates/matrix-sdk-crypto/src/identities/manager.rs
++++ b/crates/matrix-sdk-crypto/src/identities/manager.rs
+@@ -1133,7 +1133,11 @@
+         match SenderDataFinder::find_using_device_data(&self.store, device.clone(), session).await {
+             Ok(sender_data) => {
+                 debug!("Updating existing InboundGroupSession with new SenderData {sender_data:?}");
+-                session.sender_data = sender_data;
++                if session.sender_data != sender_data {
++                    session.sender_data = sender_data;
++                    // The authenticated backup must retain improved provenance.
++                    session.reset_backup_state();
++                }
+             }
+             Err(SessionDeviceCheckError::CryptoStoreError(e)) => {
+                 return Err(e);
+diff --git a/crates/matrix-sdk-crypto/src/lib.rs b/crates/matrix-sdk-crypto/src/lib.rs
+--- a/crates/matrix-sdk-crypto/src/lib.rs
++++ b/crates/matrix-sdk-crypto/src/lib.rs
+@@ -27,6 +27,10 @@
+ mod identities;
+ mod machine;
+ pub mod olm;
++#[cfg(feature = "strict-room-key-recipients")]
++mod recipient_policy;
++#[cfg(all(test, feature = "strict-room-key-recipients"))]
++mod recipient_policy_tests;
+ pub mod secret_storage;
+ mod session_manager;
+ pub mod store;
+diff --git a/crates/matrix-sdk-crypto/src/olm/group_sessions/inbound.rs b/crates/matrix-sdk-crypto/src/olm/group_sessions/inbound.rs
+--- a/crates/matrix-sdk-crypto/src/olm/group_sessions/inbound.rs
++++ b/crates/matrix-sdk-crypto/src/olm/group_sessions/inbound.rs
+@@ -206,6 +206,10 @@
+     /// correct.
+     imported: bool,
+ 
++    // Set only after an authenticated backup is checked against the account's
++    // recovery secret. Not included in exported/forwarded room-key formats.
++    authenticated_backup: bool,
++
+     /// The messaging algorithm of this [`InboundGroupSession`] as defined by
+     /// the [spec]. Will be one of the `m.megolm.*` algorithms.
+     ///
+@@ -303,6 +307,7 @@
+             forwarder_data,
+             room_id: room_id.into(),
+             imported: false,
++            authenticated_backup: false,
+             algorithm: encryption_algorithm.into(),
+             backed_up: AtomicBool::new(false).into(),
+             shared_history,
+@@ -399,6 +404,7 @@
+             forwarder_data: self.forwarder_data.clone(),
+             room_id: self.room_id().to_owned(),
+             imported: self.imported,
++            authenticated_backup: self.authenticated_backup,
+             backed_up: self.backed_up(),
+             history_visibility: self.history_visibility.as_ref().clone(),
+             algorithm: (*self.algorithm).to_owned(),
+@@ -479,6 +485,7 @@
+             forwarder_data,
+             room_id,
+             imported,
++            authenticated_backup,
+             backed_up,
+             history_visibility,
+             algorithm,
+@@ -504,6 +511,7 @@
+             backed_up: AtomicBool::from(backed_up).into(),
+             algorithm: algorithm.into(),
+             imported,
++            authenticated_backup,
+             shared_history,
+         })
+     }
+@@ -529,8 +537,17 @@
+         self.first_known_index
+     }
+ 
+-    /// Has the session been imported from a file or server-side backup? As
+-    /// opposed to being directly received as an `m.room_key` event.
++    /// Did the importer verify the account's authenticated backup provenance?
++    pub(crate) fn has_authenticated_backup(&self) -> bool {
++        self.authenticated_backup
++    }
++
++    pub(crate) fn restore_authenticated_backup_sender(&mut self, sender: SenderData) {
++        self.sender_data = sender;
++        self.authenticated_backup = true;
++    }
++
++    /// Has the session been imported rather than directly received over Olm?
+     pub fn has_been_imported(&self) -> bool {
+         self.imported
+     }
+@@ -718,6 +735,10 @@
+     /// Flag remembering if the session was directly sent to us by the sender
+     /// or if it was imported.
+     pub imported: bool,
++
++    /// Authenticated backup provenance, protected by the local crypto store.
++    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
++    pub authenticated_backup: bool,
+     /// Flag remembering if the session has been backed up.
+     #[serde(default)]
+     pub backed_up: bool,
+@@ -794,6 +815,7 @@
+             first_known_index,
+             room_id: room_id.to_owned(),
+             imported: true,
++            authenticated_backup: false,
+             algorithm: algorithm.to_owned().into(),
+             backed_up: AtomicBool::from(false).into(),
+             shared_history: true,
+@@ -835,6 +857,7 @@
+             first_known_index,
+             room_id: room_id.to_owned(),
+             imported: true,
++            authenticated_backup: false,
+             algorithm: algorithm.to_owned().into(),
+             backed_up: AtomicBool::from(false).into(),
+             shared_history: *shared_history,
+@@ -867,6 +890,7 @@
+             first_known_index,
+             room_id: value.room_id.to_owned(),
+             imported: true,
++            authenticated_backup: false,
+             algorithm: EventEncryptionAlgorithm::MegolmV1AesSha2.into(),
+             backed_up: AtomicBool::from(false).into(),
+             shared_history: false,
+@@ -895,6 +919,7 @@
+             first_known_index,
+             room_id: value.room_id.to_owned(),
+             imported: true,
++            authenticated_backup: false,
+             algorithm: EventEncryptionAlgorithm::MegolmV1AesSha2.into(),
+             backed_up: AtomicBool::from(false).into(),
+             shared_history: false,
+diff --git a/crates/matrix-sdk-crypto/src/olm/group_sessions/outbound.rs b/crates/matrix-sdk-crypto/src/olm/group_sessions/outbound.rs
+--- a/crates/matrix-sdk-crypto/src/olm/group_sessions/outbound.rs
++++ b/crates/matrix-sdk-crypto/src/olm/group_sessions/outbound.rs
+@@ -212,6 +212,7 @@
+     settings: Arc<EncryptionSettings>,
+     shared_with_set: Arc<StdRwLock<ShareInfoSet>>,
+     to_share_with_set: Arc<StdRwLock<ToShareMap>>,
++    pub(crate) recipient_policy: Option<[OwnedUserId; 2]>,
+ }
+ 
+ /// A a map of userid/device it to a `ShareInfo`.
+@@ -393,6 +394,7 @@
+             settings: Arc::new(settings),
+             shared_with_set: Default::default(),
+             to_share_with_set: Default::default(),
++            recipient_policy: None,
+         })
+     }
+ 
+@@ -836,6 +838,7 @@
+             settings: pickle.settings,
+             shared_with_set: Arc::new(StdRwLock::new(pickle.shared_with_set)),
+             to_share_with_set: Arc::new(StdRwLock::new(pickle.requests)),
++            recipient_policy: pickle.volna_recipient_policy_v1,
+         })
+     }
+ 
+@@ -859,6 +862,7 @@
+             invalidated: self.invalidated(),
+             shared_with_set: self.shared_with_set.read().clone(),
+             requests: self.to_share_with_set.read().clone(),
++            volna_recipient_policy_v1: self.recipient_policy.clone(),
+         }
+     }
+ }
+@@ -882,6 +886,10 @@
+ #[derive(Deserialize, Serialize)]
+ #[allow(missing_debug_implementations)]
+ pub struct PickledOutboundGroupSession {
++    /// Endpoint recipient binding when this session was created; old sessions
++    /// remain unmarked and must be quarantined before strict-mode reuse.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub volna_recipient_policy_v1: Option<[OwnedUserId; 2]>,
+     /// The pickle string holding the OutboundGroupSession.
+     pub pickle: GroupSessionPickle,
+     /// The settings this session adheres to.
+diff --git a/crates/matrix-sdk-crypto/src/recipient_policy.rs b/crates/matrix-sdk-crypto/src/recipient_policy.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/matrix-sdk-crypto/src/recipient_policy.rs
+@@ -0,0 +1,109 @@
++// SPDX-License-Identifier: Apache-2.0
++//! VOLNA's opt-in build-time, endpoint-owned direct-room recipient boundary.
++//! Compile this feature into every SDK entry point, before sync or queue replay.
++use crate::{
++    CryptoStoreError, OlmMachine,
++    olm::OutboundGroupSession,
++    store::{CryptoStoreWrapper, Result},
++};
++use ruma::{OwnedRoomId, OwnedUserId, RoomId, UserId};
++use serde::{Deserialize, Serialize};
++use sha2::{Digest, Sha256};
++
++#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub(crate) struct Binding {
++    version: u8,
++    room_id: OwnedRoomId,
++    own: OwnedUserId,
++    peer: OwnedUserId,
++}
++
++pub(crate) fn failure() -> CryptoStoreError {
++    CryptoStoreError::backend(std::io::Error::new(
++        std::io::ErrorKind::PermissionDenied,
++        "room-key recipient policy rejected the operation",
++    ))
++}
++
++pub(crate) fn opaque_key(namespace: &str, value: &str) -> String {
++    let hash: String =
++        Sha256::digest(value.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
++    format!("volna.{namespace}.v1.{hash}")
++}
++
++impl Binding {
++    pub(crate) fn allows(&self, user: &UserId) -> bool {
++        user == self.own || user == self.peer
++    }
++    pub(crate) fn pair(&self) -> [OwnedUserId; 2] {
++        [self.own.clone(), self.peer.clone()]
++    }
++    pub(crate) async fn load(store: &CryptoStoreWrapper, room: &RoomId) -> Result<Self> {
++        let raw = store
++            .get_custom_value(&opaque_key("recipient", room.as_str()))
++            .await?
++            .ok_or_else(failure)?;
++        let binding: Self = serde_json::from_slice(&raw)?;
++        if binding.version != 1
++            || binding.room_id != room
++            || binding.own != store.policy_user_id()
++            || binding.own == binding.peer
++        {
++            return Err(failure());
++        }
++        Ok(binding)
++    }
++    pub(crate) fn accepts_session(&self, session: &OutboundGroupSession) -> bool {
++        session.recipient_policy.as_ref() == Some(&self.pair())
++            && session.sharing_view().shared_with_users().all(|u| self.allows(u))
++            && session.pending_requests().iter().all(|r| r.messages.keys().all(|u| self.allows(u)))
++    }
++}
++
++impl OlmMachine {
++    /// Bind a direct room to this account and one endpoint-selected peer.
++    /// Existing bindings are immutable across threads, processes and restarts.
++    /// Never derive the peer from a homeserver membership list. The host must
++    /// authorize this destination before calling, and before enabling its queue.
++    pub async fn bind_room_key_recipients(&self, room: &RoomId, peer: &UserId) -> Result<()> {
++        if peer == self.user_id() {
++            return Err(failure());
++        }
++        let binding = Binding {
++            version: 1,
++            room_id: room.to_owned(),
++            own: self.user_id().to_owned(),
++            peer: peer.to_owned(),
++        };
++        let key = opaque_key("recipient", room.as_str());
++        self.store().set_custom_value_if_absent(&key, serde_json::to_vec(&binding)?).await?;
++        if Binding::load(&self.store().crypto_store(), room).await? != binding {
++            return Err(failure());
++        }
++        Ok(())
++    }
++}
++
++pub(crate) async fn check_key_content(
++    store: &CryptoStoreWrapper,
++    recipient: &UserId,
++    event_type: &str,
++    content: &serde_json::Value,
++) -> Result<()> {
++    if !matches!(
++        event_type,
++        "m.room_key"
++            | "m.forwarded_room_key"
++            | "m.room_key_bundle"
++            | "io.element.msc4268.room_key_bundle"
++    ) {
++        return Ok(());
++    }
++    let room: OwnedRoomId =
++        serde_json::from_value(content.get("room_id").cloned().ok_or_else(failure)?)?;
++    if !Binding::load(store, &room).await?.allows(recipient) {
++        return Err(failure());
++    }
++    Ok(())
++}
+diff --git a/crates/matrix-sdk-crypto/src/recipient_policy_tests.rs b/crates/matrix-sdk-crypto/src/recipient_policy_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/matrix-sdk-crypto/src/recipient_policy_tests.rs
+@@ -0,0 +1,427 @@
++// SPDX-License-Identifier: Apache-2.0
++use crate::{
++    DeviceData, EncryptionSettings,
++    machine::test_helpers::{
++        build_session_for_pair, get_machine_pair_with_session, get_prepared_machine_test_helper,
++    },
++};
++use matrix_sdk_test::async_test;
++use ruma::{TransactionId, room_id, user_id};
++use sha2::{Digest, Sha256};
++
++#[async_test]
++async fn test_recipient_policy_filters_late_member_at_real_share_boundary() {
++    let own = user_id!("@alice:example.org");
++    let peer = user_id!("@bob:example.org");
++    let service = user_id!("@volna_messaging:example.org");
++    let room = room_id!("!direct:example.org");
++    let (alice, _) = get_machine_pair_with_session(own, peer, false).await;
++    let (outsider, keys) = get_prepared_machine_test_helper(service, false).await;
++    alice
++        .store()
++        .save_device_data(&[DeviceData::from_machine_test_helper(&outsider).await.unwrap()])
++        .await
++        .unwrap();
++    let (alice, _) = build_session_for_pair(alice, outsider, keys).await;
++    let digest: String =
++        Sha256::digest(room.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
++    let key = format!("volna.recipient.v1.{digest}");
++    alice
++        .store()
++        .set_custom_value(
++            &key,
++            serde_json::to_vec(&serde_json::json!({
++                "version": 1, "room_id": room, "own": own, "peer": peer
++            }))
++            .unwrap(),
++        )
++        .await
++        .unwrap();
++    let requests = alice
++        .share_room_key(room, [own, peer, service].into_iter(), EncryptionSettings::default())
++        .await
++        .unwrap();
++    assert!(requests.iter().any(|r| r.messages.contains_key(peer)), "ordinary peer lost its key");
++    assert!(
++        requests.iter().all(|r| !r.messages.contains_key(service)),
++        "outsider received a room-key request after membership expansion"
++    );
++}
++
++async fn pair() -> (crate::OlmMachine, crate::OlmMachine) {
++    let (alice, bob) = get_machine_pair_with_session(
++        user_id!("@alice:example.org"),
++        user_id!("@bob:example.org"),
++        false,
++    )
++    .await;
++    alice.bind_room_key_recipients(room_id!("!direct:example.org"), bob.user_id()).await.unwrap();
++    (alice, bob)
++}
++
++#[async_test]
++async fn test_recipient_policy_cross_signed_service_and_valid_peer() {
++    use crate::{
++        CollectStrategy, machine::test_helpers::bootstrap_requests_to_keys_query_response,
++    };
++    let (alice, bob) = pair().await;
++    let (service, keys) =
++        get_prepared_machine_test_helper(user_id!("@volna_messaging:example.org"), false).await;
++    alice.bootstrap_cross_signing(true).await.unwrap();
++    for machine in [&bob, &service] {
++        let bootstrap = machine.bootstrap_cross_signing(true).await.unwrap();
++        let signed_device: crate::types::DeviceKeys = serde_json::from_str(
++            bootstrap
++                .upload_signatures_req
++                .signed_keys
++                .get(machine.user_id())
++                .unwrap()
++                .iter()
++                .next()
++                .unwrap()
++                .1
++                .get(),
++        )
++        .unwrap();
++        let signing_id = bootstrap
++            .upload_signing_keys_req
++            .self_signing_key
++            .as_ref()
++            .unwrap()
++            .get_first_key_and_id()
++            .unwrap()
++            .0
++            .to_owned();
++        let mut device_keys = machine
++            .get_device(machine.user_id(), machine.device_id(), None)
++            .await
++            .unwrap()
++            .unwrap()
++            .as_device_keys()
++            .to_owned();
++        device_keys.signatures.add_signature(
++            machine.user_id().to_owned(),
++            signing_id.clone(),
++            signed_device.signatures.get_signature(machine.user_id(), &signing_id).unwrap(),
++        );
++        let mut response = bootstrap_requests_to_keys_query_response(bootstrap);
++        response.device_keys.entry(machine.user_id().to_owned()).or_default().insert(
++            machine.device_id().to_owned(),
++            ruma::serde::Raw::from_json(serde_json::value::to_raw_value(&device_keys).unwrap()),
++        );
++        alice.mark_request_as_sent(&TransactionId::new(), &response).await.unwrap();
++    }
++    let (alice, service) = build_session_for_pair(alice, service, keys).await;
++    let settings = EncryptionSettings {
++        sharing_strategy: CollectStrategy::IdentityBasedStrategy,
++        ..Default::default()
++    };
++    let requests = alice
++        .share_room_key(
++            room_id!("!direct:example.org"),
++            [alice.user_id(), bob.user_id(), service.user_id()].into_iter(),
++            settings,
++        )
++        .await
++        .unwrap();
++    assert!(requests.iter().all(|r| !r.messages.contains_key(service.user_id())));
++    let payload = requests
++        .iter()
++        .filter(|r| r.event_type == "m.room.encrypted".into())
++        .find_map(|r| r.messages.get(bob.user_id()))
++        .unwrap()
++        .values()
++        .next()
++        .unwrap();
++    let event = crate::types::events::room::encrypted::EncryptedToDeviceEvent::new(
++        alice.user_id().to_owned(),
++        payload.deserialize_as_unchecked().unwrap(),
++    );
++    let changes = crate::EncryptionSyncChanges {
++        to_device_events: vec![crate::utilities::json_convert(&event).unwrap()],
++        changed_devices: &Default::default(),
++        one_time_keys_counts: &Default::default(),
++        unused_fallback_keys: None,
++        next_batch_token: None,
++    };
++    let (decrypted, _) = bob
++        .receive_sync_changes(
++            changes,
++            &crate::DecryptionSettings {
++                sender_device_trust_requirement: crate::TrustRequirement::Untrusted,
++            },
++        )
++        .await
++        .unwrap();
++    assert!(matches!(
++        decrypted.first(),
++        Some(matrix_sdk_common::deserialized_responses::ProcessedToDeviceEvent::Decrypted { .. })
++    ));
++}
++
++#[async_test]
++async fn test_recipient_policy_direct_key_events_and_secret_control() {
++    let (alice, bob) = pair().await;
++    let device = alice.get_device(bob.user_id(), bob.device_id(), None).await.unwrap().unwrap();
++    let room = room_id!("!direct:example.org");
++    let other = room_id!("!other:example.org");
++    alice.bind_room_key_recipients(other, user_id!("@carol:example.org")).await.unwrap();
++    device.set_local_trust(crate::LocalTrust::Verified).await.unwrap();
++    for event in [
++        "m.room_key",
++        "m.forwarded_room_key",
++        "m.room_key_bundle",
++        "io.element.msc4268.room_key_bundle",
++    ] {
++        assert!(
++            device.encrypt(event, serde_json::json!({"room_id": other})).await.is_err(),
++            "{event} admitted a verified contact from another chat"
++        );
++        assert!(device.encrypt(event, serde_json::json!({"room_id": []})).await.is_err());
++        assert!(device.encrypt(event, serde_json::json!({})).await.is_err());
++        assert!(device.encrypt(event, serde_json::json!({"room_id": room})).await.is_ok());
++    }
++    assert!(
++        device
++            .encrypt(
++                "m.secret.send",
++                serde_json::json!({"request_id": "fixture", "secret": "fixture"})
++            )
++            .await
++            .is_ok()
++    );
++}
++
++#[async_test]
++async fn test_recipient_policy_immutable_concurrent_and_corrupt_binding() {
++    let (alice, bob) = pair().await;
++    let room = room_id!("!racing:example.org");
++    let carol = user_id!("@carol:example.org");
++    let (first, second) = tokio::join!(
++        alice.bind_room_key_recipients(room, bob.user_id()),
++        alice.bind_room_key_recipients(room, carol)
++    );
++    assert_ne!(first.is_ok(), second.is_ok());
++    let winner = if first.is_ok() { bob.user_id() } else { carol };
++    alice.bind_room_key_recipients(room, winner).await.unwrap();
++    let key = crate::recipient_policy::opaque_key("recipient", room.as_str());
++    alice.store().set_custom_value(&key, b"broken".to_vec()).await.unwrap();
++    assert!(alice.bind_room_key_recipients(room, winner).await.is_err());
++    assert_eq!(alice.store().get_custom_value(&key).await.unwrap().unwrap(), b"broken");
++    assert!(
++        alice
++            .share_room_key(room, [winner].into_iter(), EncryptionSettings::default())
++            .await
++            .is_err()
++    );
++    assert!(
++        alice
++            .share_room_key(
++                room_id!("!unknown:example.org"),
++                [winner].into_iter(),
++                EncryptionSettings::default()
++            )
++            .await
++            .is_err()
++    );
++}
++
++#[async_test]
++async fn test_recipient_policy_reopen_old_pending_rotate_and_preserve_history() {
++    use crate::{OlmMachineBuilder, olm::OutboundGroupSession, store::types::Changes};
++    use std::sync::Arc;
++    let store = Arc::new(crate::store::MemoryStore::new());
++    let alice = OlmMachineBuilder::new(user_id!("@alice:example.org"), ruma::device_id!("ALICE"))
++        .with_crypto_store(store.clone())
++        .build()
++        .await
++        .unwrap();
++    let (bob, keys) = get_prepared_machine_test_helper(user_id!("@bob:example.org"), false).await;
++    alice
++        .store()
++        .save_device_data(&[DeviceData::from_machine_test_helper(&bob).await.unwrap()])
++        .await
++        .unwrap();
++    let (alice, bob) = build_session_for_pair(alice, bob, keys).await;
++    let room = room_id!("!direct:example.org");
++    alice.bind_room_key_recipients(room, bob.user_id()).await.unwrap();
++    let requests = alice
++        .share_room_key(room, [bob.user_id()].into_iter(), EncryptionSettings::default())
++        .await
++        .unwrap();
++    let old = alice.store().get_outbound_group_session(room).await.unwrap().unwrap();
++    let old_id = old.session_id().to_owned();
++    let mut pickle = old.pickle().await;
++    pickle.volna_recipient_policy_v1 = None;
++    let legacy = OutboundGroupSession::from_pickle(
++        alice.device_id().to_owned(),
++        Arc::new(alice.identity_keys()),
++        pickle,
++    )
++    .unwrap();
++    alice
++        .store()
++        .save_changes(Changes { outbound_group_sessions: vec![legacy], ..Default::default() })
++        .await
++        .unwrap();
++    let reopened = OlmMachineBuilder::new(alice.user_id(), alice.device_id())
++        .with_crypto_store(store)
++        .build()
++        .await
++        .unwrap();
++    assert!(
++        reopened
++            .encrypt_room_event(
++                room,
++                ruma::events::room::message::RoomMessageEventContent::text_plain("fixture")
++            )
++            .await
++            .is_err()
++    );
++    let archive =
++        crate::recipient_policy::opaque_key("quarantine", &format!("{}\0{}", room, old_id));
++    reopened.store().set_custom_value(&archive, b"broken".to_vec()).await.unwrap();
++    assert!(
++        reopened
++            .share_room_key(room, [bob.user_id()].into_iter(), EncryptionSettings::default())
++            .await
++            .is_err(),
++        "a corrupt existing archive must not permit replacement of the active legacy queue"
++    );
++    let retained = reopened.store().get_outbound_group_session(room).await.unwrap().unwrap();
++    assert_eq!(old_id, retained.session_id());
++    assert!(!retained.pending_requests().is_empty());
++    assert_eq!(reopened.store().get_custom_value(&archive).await.unwrap().unwrap(), b"broken");
++    // Remove only the deliberately corrupted test fixture to exercise normal rotation.
++    reopened.store().remove_custom_value(&archive).await.unwrap();
++    let new_requests = reopened
++        .share_room_key(room, [bob.user_id()].into_iter(), EncryptionSettings::default())
++        .await
++        .unwrap();
++    assert!(!new_requests.is_empty());
++    let new = reopened.store().get_outbound_group_session(room).await.unwrap().unwrap();
++    assert_ne!(old_id, new.session_id());
++    let archived: crate::olm::PickledOutboundGroupSession = serde_json::from_slice(
++        &reopened.store().get_custom_value(&archive).await.unwrap().unwrap(),
++    )
++    .unwrap();
++    assert!(!archived.requests.is_empty());
++    assert!(reopened.store().get_inbound_group_session(room, &old_id).await.unwrap().is_some());
++    reopened
++        .mark_request_as_sent(
++            &requests[0].txn_id,
++            &ruma::api::client::to_device::send_event_to_device::v3::Response::new(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(
++        new.session_id(),
++        reopened.store().get_outbound_group_session(room).await.unwrap().unwrap().session_id()
++    );
++    reopened
++        .encrypt_room_event(
++            room,
++            ruma::events::room::message::RoomMessageEventContent::text_plain("fixture"),
++        )
++        .await
++        .unwrap();
++}
++
++#[async_test]
++async fn test_recipient_policy_does_not_reintroduce_removed_peer() {
++    let (alice, bob) = pair().await;
++    let room = room_id!("!direct:example.org");
++    let initial = alice
++        .share_room_key(room, [bob.user_id()].into_iter(), EncryptionSettings::default())
++        .await
++        .unwrap();
++    assert!(!initial.is_empty());
++    let requests = alice
++        .share_room_key(room, [alice.user_id()].into_iter(), EncryptionSettings::default())
++        .await
++        .unwrap();
++    assert!(requests.iter().all(|r| !r.messages.contains_key(bob.user_id())));
++}
++
++#[async_test]
++async fn test_recipient_policy_typed_history_and_forwarding() {
++    use crate::{CollectStrategy, types::events::room_key_bundle::RoomKeyBundleContent};
++    use ruma::events::room::{EncryptedFile, V2EncryptedFileInfo};
++    let (alice, bob) = pair().await;
++    let room = room_id!("!direct:example.org");
++    let device = alice.get_device(bob.user_id(), bob.device_id(), None).await.unwrap().unwrap();
++    device.set_local_trust(crate::LocalTrust::Verified).await.unwrap();
++    let make_bundle = |id: &ruma::RoomId| RoomKeyBundleContent {
++        room_id: id.to_owned(),
++        file: EncryptedFile::new(
++            ruma::OwnedMxcUri::from("mxc://example.org/fixture"),
++            V2EncryptedFileInfo::encode([0; 32], [0; 16]).into(),
++            Default::default(),
++        ),
++    };
++    let other = room_id!("!carol-room:example.org");
++    alice.bind_room_key_recipients(other, user_id!("@carol:example.org")).await.unwrap();
++    assert!(
++        alice
++            .share_room_key_bundle_data(
++                bob.user_id(),
++                &CollectStrategy::OnlyTrustedDevices,
++                make_bundle(other)
++            )
++            .await
++            .is_err()
++    );
++    assert!(
++        !alice
++            .share_room_key_bundle_data(
++                bob.user_id(),
++                &CollectStrategy::OnlyTrustedDevices,
++                make_bundle(room)
++            )
++            .await
++            .unwrap()
++            .is_empty()
++    );
++    for id in [room, other] {
++        alice
++            .share_room_key(id, [alice.user_id()].into_iter(), EncryptionSettings::default())
++            .await
++            .unwrap();
++        let outbound = alice.store().get_outbound_group_session(id).await.unwrap().unwrap();
++        let inbound = alice
++            .store()
++            .get_inbound_group_session(id, outbound.session_id())
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(device.encrypt_room_key_for_forwarding(inbound, None).await.is_ok(), id == room);
++    }
++}
++
++#[async_test]
++async fn test_recipient_policy_own_device_key_and_secret_control() {
++    let own = user_id!("@alice:example.org");
++    let (alice, second) = get_machine_pair_with_session(own, own, false).await;
++    let room = room_id!("!direct:example.org");
++    alice.bind_room_key_recipients(room, user_id!("@bob:example.org")).await.unwrap();
++    let device = alice.get_device(own, second.device_id(), None).await.unwrap().unwrap();
++    device.set_local_trust(crate::LocalTrust::Verified).await.unwrap();
++    let requests =
++        alice.share_room_key(room, [own].into_iter(), EncryptionSettings::default()).await.unwrap();
++    assert!(requests.iter().any(|r| {
++        r.messages.get(own).is_some_and(|d| d.contains_key(&second.device_id().to_owned().into()))
++    }));
++    let session = alice.store().get_outbound_group_session(room).await.unwrap().unwrap();
++    let inbound =
++        alice.store().get_inbound_group_session(room, session.session_id()).await.unwrap().unwrap();
++    assert!(device.encrypt_room_key_for_forwarding(inbound, None).await.is_ok());
++    assert!(
++        device
++            .encrypt(
++                "m.secret.send",
++                serde_json::json!({"request_id": "fixture", "secret": "fixture"})
++            )
++            .await
++            .is_ok()
++    );
++}
+diff --git a/crates/matrix-sdk-crypto/src/session_manager/group_sessions/mod.rs b/crates/matrix-sdk-crypto/src/session_manager/group_sessions/mod.rs
+--- a/crates/matrix-sdk-crypto/src/session_manager/group_sessions/mod.rs
++++ b/crates/matrix-sdk-crypto/src/session_manager/group_sessions/mod.rs
+@@ -89,15 +89,31 @@
+     /// # Arguments
+     ///
+     /// * `room_id` - The id of the room this session is used for.
++    #[cfg(feature = "automatic-room-key-forwarding")]
+     pub async fn get_or_load(&self, room_id: &RoomId) -> Option<OutboundGroupSession> {
++        match self.get_or_load_checked(room_id).await {
++            Ok(session) => session,
++            Err(e) => {
++                error!("Couldn't restore an outbound group session: {e:?}");
++                None
++            }
++        }
++    }
++
++    /// Read failures are not an empty queue. Creation/encryption callers must
++    /// propagate them instead of overwriting the unreadable persisted session.
++    async fn get_or_load_checked(
++        &self,
++        room_id: &RoomId,
++    ) -> StoreResult<Option<OutboundGroupSession>> {
+         // Get the cached session, if there isn't one load one from the store
+         // and put it in the cache.
+         if let Some(s) = self.sessions.read().get(room_id) {
+-            return Some(s.clone());
+-        }
+-
+-        match self.store.get_outbound_group_session(room_id).await {
+-            Ok(Some(s)) => {
++            return Ok(Some(s.clone()));
++        }
++
++        match self.store.get_outbound_group_session(room_id).await? {
++            Some(s) => {
+                 {
+                     let mut sessions_being_shared = self.sessions_being_shared.write();
+                     for request_id in s.pending_request_ids() {
+@@ -107,13 +123,9 @@
+ 
+                 self.sessions.write().insert(room_id.to_owned(), s.clone());
+ 
+-                Some(s)
++                Ok(Some(s))
+             }
+-            Ok(None) => None,
+-            Err(e) => {
+-                error!("Couldn't restore an outbound group session: {e:?}");
+-                None
+-            }
++            None => Ok(None),
+         }
+     }
+ 
+@@ -155,12 +167,23 @@
+ impl GroupSessionManager {
+     const MAX_TO_DEVICE_MESSAGES: usize = 250;
+ 
++    #[cfg(feature = "strict-room-key-recipients")]
++    async fn check_recipient_session(&self, session: &OutboundGroupSession) -> StoreResult<()> {
++        let binding =
++            crate::recipient_policy::Binding::load(&self.store.crypto_store(), session.room_id())
++                .await?;
++        if session.invalidated() || !binding.accepts_session(session) {
++            return Err(crate::recipient_policy::failure());
++        }
++        Ok(())
++    }
++
+     pub fn new(store: Store) -> Self {
+         Self { store: store.clone(), sessions: GroupSessionCache::new(store) }
+     }
+ 
+     pub async fn invalidate_group_session(&self, room_id: &RoomId) -> StoreResult<bool> {
+-        if let Some(s) = self.sessions.get_or_load(room_id).await {
++        if let Some(s) = self.sessions.get_or_load_checked(room_id).await? {
+             s.invalidate_session();
+ 
+             let mut changes = Changes::default();
+@@ -214,10 +237,16 @@
+         event_type: &str,
+         content: &Raw<AnyMessageLikeEventContent>,
+     ) -> MegolmResult<OutboundGroupSessionEncryptionResult> {
+-        let session =
+-            self.sessions.get_or_load(room_id).await.expect("Session wasn't created nor shared");
++        let session = self
++            .sessions
++            .get_or_load_checked(room_id)
++            .await?
++            .expect("Session wasn't created nor shared");
+ 
+         assert!(!session.expired(), "Session expired");
++
++        #[cfg(feature = "strict-room-key-recipients")]
++        self.check_recipient_session(&session).await?;
+ 
+         let result = session.encrypt(event_type, content).await;
+ 
+@@ -258,11 +287,16 @@
+         state_key: &str,
+         content: &Raw<AnyStateEventContent>,
+     ) -> MegolmResult<Raw<RoomEncryptedEventContent>> {
+-        let session =
+-            self.sessions.get_or_load(room_id).await.expect("Session wasn't created nor shared");
++        let session = self
++            .sessions
++            .get_or_load_checked(room_id)
++            .await?
++            .expect("Session wasn't created nor shared");
+ 
+         assert!(!session.expired(), "Session expired");
+ 
++        #[cfg(feature = "strict-room-key-recipients")]
++        self.check_recipient_session(&session).await?;
+         let content = session.encrypt_state(event_type, state_key, content).await;
+ 
+         let mut changes = Changes::default();
+@@ -281,13 +315,21 @@
+         settings: EncryptionSettings,
+         own_sender_data: SenderData,
+     ) -> OlmResult<(OutboundGroupSession, InboundGroupSession)> {
+-        let (outbound, inbound) = self
++        #[cfg(feature = "strict-room-key-recipients")]
++        let binding =
++            crate::recipient_policy::Binding::load(&self.store.crypto_store(), room_id).await?;
++        #[allow(unused_mut)]
++        let (mut outbound, inbound) = self
+             .store
+             .static_account()
+             .create_group_session_pair(room_id, settings, own_sender_data)
+             .await
+             .map_err(|_| EventError::UnsupportedAlgorithm)?;
+ 
++        #[cfg(feature = "strict-room-key-recipients")]
++        {
++            outbound.recipient_policy = Some(binding.pair());
++        }
+         self.sessions.insert(outbound.clone());
+         Ok((outbound, inbound))
+     }
+@@ -298,11 +340,45 @@
+         settings: EncryptionSettings,
+         own_sender_data: SenderData,
+     ) -> OlmResult<(OutboundGroupSession, Option<InboundGroupSession>)> {
+-        let outbound_session = self.sessions.get_or_load(room_id).await;
++        let outbound_session = self.sessions.get_or_load_checked(room_id).await?;
+ 
+         // If there is no session or the session has expired or is invalid,
+         // create a new one.
+         if let Some(s) = outbound_session {
++            #[cfg(feature = "strict-room-key-recipients")]
++            {
++                let binding =
++                    crate::recipient_policy::Binding::load(&self.store.crypto_store(), room_id)
++                        .await?;
++                if !binding.accepts_session(&s) {
++                    // Preserve the old ciphertext/pickle before removing its active
++                    // queue. Archival failure stops rotation and sending.
++                    let key = crate::recipient_policy::opaque_key(
++                        "quarantine",
++                        &format!("{}\0{}", room_id, s.session_id()),
++                    );
++                    let snapshot = serde_json::to_value(s.pickle().await)?;
++                    self.store
++                        .set_custom_value_if_absent(&key, serde_json::to_vec(&snapshot)?)
++                        .await?;
++                    // Insert-only storage may have retained an older or corrupt
++                    // value. Confirm this exact snapshot before replacing the
++                    // active queue; never turn archival failure into data loss.
++                    let archived = self
++                        .store
++                        .get_custom_value(&key)
++                        .await?
++                        .ok_or_else(crate::recipient_policy::failure)?;
++                    if serde_json::from_slice::<serde_json::Value>(&archived)? != snapshot {
++                        return Err(crate::recipient_policy::failure().into());
++                    }
++                    s.invalidate_session();
++                    self.sessions
++                        .sessions_being_shared
++                        .write()
++                        .retain(|_, old| old.session_id() != s.session_id());
++                }
++            }
+             if s.expired() || s.invalidated() {
+                 self.create_outbound_group_session(room_id, settings, own_sender_data)
+                     .await
+@@ -687,6 +763,12 @@
+     ) -> OlmResult<Vec<Arc<ToDeviceRequest>>> {
+         trace!("Checking if a room key needs to be shared");
+ 
++        #[cfg(feature = "strict-room-key-recipients")]
++        let binding =
++            crate::recipient_policy::Binding::load(&self.store.crypto_store(), room_id).await?;
++        #[cfg(feature = "strict-room-key-recipients")]
++        let users = users.filter(|user| binding.allows(user));
++
+         let account = self.store.static_account();
+         let device = self.store.get_device(account.user_id(), account.device_id()).await?;
+ 
+@@ -782,6 +864,8 @@
+         // The to-device requests get added to the outbound group session, this
+         // way we're making sure that they are persisted and scoped to the
+         // session.
++        #[cfg(feature = "strict-room-key-recipients")]
++        self.check_recipient_session(&outbound).await?;
+         let requests = outbound.pending_requests();
+ 
+         if requests.is_empty() {
+@@ -828,6 +912,13 @@
+         collect_strategy: &CollectStrategy,
+         bundle_data: RoomKeyBundleContent,
+     ) -> OlmResult<Vec<ToDeviceRequest>> {
++        #[cfg(feature = "strict-room-key-recipients")]
++        if !crate::recipient_policy::Binding::load(&self.store.crypto_store(), &bundle_data.room_id)
++            .await?
++            .allows(user_id)
++        {
++            return Err(crate::recipient_policy::failure().into());
++        }
+         // Only allow conservative sharing strategies
+         let collect_strategy = match collect_strategy {
+             CollectStrategy::AllDevices | CollectStrategy::ErrorOnVerifiedUserProblem => {
+diff --git a/crates/matrix-sdk-crypto/src/store/crypto_store_wrapper.rs b/crates/matrix-sdk-crypto/src/store/crypto_store_wrapper.rs
+--- a/crates/matrix-sdk-crypto/src/store/crypto_store_wrapper.rs
++++ b/crates/matrix-sdk-crypto/src/store/crypto_store_wrapper.rs
+@@ -59,6 +59,11 @@
+ }
+ 
+ impl CryptoStoreWrapper {
++    #[cfg(feature = "strict-room-key-recipients")]
++    pub(crate) fn policy_user_id(&self) -> &UserId {
++        &self.user_id
++    }
++
+     pub(crate) fn new(user_id: &UserId, device_id: &DeviceId, store: impl IntoCryptoStore) -> Self {
+         let room_keys_received_sender = broadcast::Sender::new(10);
+         let room_keys_withheld_received_sender = broadcast::Sender::new(10);
+diff --git a/crates/matrix-sdk-crypto/src/store/integration_tests.rs b/crates/matrix-sdk-crypto/src/store/integration_tests.rs
+--- a/crates/matrix-sdk-crypto/src/store/integration_tests.rs
++++ b/crates/matrix-sdk-crypto/src/store/integration_tests.rs
+@@ -1465,6 +1465,23 @@
+             }
+ 
+             #[async_test]
++            async fn test_custom_value_atomic_insert() {
++                let (_, store) = get_loaded_store("custom_value_atomic_insert").await;
++                let (a, b) = tokio::join!(
++                    store.set_custom_value_if_absent("binding", b"first".to_vec()),
++                    store.set_custom_value_if_absent("binding", b"second".to_vec())
++                );
++                a.unwrap(); b.unwrap();
++                let winner = store.get_custom_value("binding").await.unwrap().unwrap();
++                assert!(winner == b"first" || winner == b"second");
++                store.set_custom_value_if_absent("binding", b"replacement".to_vec()).await.unwrap();
++                assert_eq!(store.get_custom_value("binding").await.unwrap().unwrap(), winner);
++                store.set_custom_value("corrupt-binding", vec![255]).await.unwrap();
++                store.set_custom_value_if_absent("corrupt-binding", b"replacement".to_vec()).await.unwrap();
++                assert_eq!(store.get_custom_value("corrupt-binding").await.unwrap().unwrap(), vec![255]);
++            }
++
++            #[async_test]
+             async fn test_received_room_key_bundle() {
+                 let store = get_store("received_room_key_bundle", None, true).await;
+                 let test_room = room_id!("!room:example.org");
+diff --git a/crates/matrix-sdk-crypto/src/store/memorystore.rs b/crates/matrix-sdk-crypto/src/store/memorystore.rs
+--- a/crates/matrix-sdk-crypto/src/store/memorystore.rs
++++ b/crates/matrix-sdk-crypto/src/store/memorystore.rs
+@@ -815,6 +815,11 @@
+         Ok(())
+     }
+ 
++    async fn set_custom_value_if_absent(&self, key: &str, value: Vec<u8>) -> Result<()> {
++        self.custom_values.write().entry(key.to_owned()).or_insert(value);
++        Ok(())
++    }
++
+     async fn remove_custom_value(&self, key: &str) -> Result<()> {
+         self.custom_values.write().remove(key);
+         Ok(())
+@@ -1671,6 +1676,14 @@
+             self.0.set_custom_value(key, value).await
+         }
+ 
++        async fn set_custom_value_if_absent(
++            &self,
++            key: &str,
++            value: Vec<u8>,
++        ) -> Result<(), Self::Error> {
++            self.0.set_custom_value_if_absent(key, value).await
++        }
++
+         async fn remove_custom_value(&self, key: &str) -> Result<(), Self::Error> {
+             self.0.remove_custom_value(key).await
+         }
+diff --git a/crates/matrix-sdk-crypto/src/store/mod.rs b/crates/matrix-sdk-crypto/src/store/mod.rs
+--- a/crates/matrix-sdk-crypto/src/store/mod.rs
++++ b/crates/matrix-sdk-crypto/src/store/mod.rs
+@@ -1552,7 +1552,7 @@
+         self.import_room_keys(exported_keys, None, progress_listener).await
+     }
+ 
+-    async fn import_sessions_impl(
++    pub(crate) async fn import_sessions_impl(
+         &self,
+         sessions: impl Iterator<Item = InboundGroupSession>,
+         from_backup_version: Option<&str>,
+diff --git a/crates/matrix-sdk-crypto/src/store/traits.rs b/crates/matrix-sdk-crypto/src/store/traits.rs
+--- a/crates/matrix-sdk-crypto/src/store/traits.rs
++++ b/crates/matrix-sdk-crypto/src/store/traits.rs
+@@ -390,6 +390,14 @@
+     /// * `value` - The value to insert
+     async fn set_custom_value(&self, key: &str, value: Vec<u8>) -> Result<(), Self::Error>;
+ 
++    /// Atomically insert only if the key is absent. Must not replace existing
++    /// bytes, including corrupt values, across independent store connections.
++    async fn set_custom_value_if_absent(
++        &self,
++        key: &str,
++        value: Vec<u8>,
++    ) -> Result<(), Self::Error>;
++
+     /// Remove arbitrary data into the store
+     ///
+     /// # Arguments
+@@ -681,6 +689,14 @@
+         self.0.set_custom_value(key, value).await.map_err(Into::into)
+     }
+ 
++    async fn set_custom_value_if_absent(
++        &self,
++        key: &str,
++        value: Vec<u8>,
++    ) -> Result<(), Self::Error> {
++        self.0.set_custom_value_if_absent(key, value).await.map_err(Into::into)
++    }
++
+     async fn remove_custom_value(&self, key: &str) -> Result<(), Self::Error> {
+         self.0.remove_custom_value(key).await.map_err(Into::into)
+     }
+diff --git a/crates/matrix-sdk-crypto/src/types/backup.rs b/crates/matrix-sdk-crypto/src/types/backup.rs
+--- a/crates/matrix-sdk-crypto/src/types/backup.rs
++++ b/crates/matrix-sdk-crypto/src/types/backup.rs
+@@ -63,6 +63,35 @@
+     },
+ }
+ 
++impl RoomKeyBackupInfo {
++    /// Mark a version for VOLNA's MSC4048 v1 backup extension before signing.
++    pub fn with_authenticated_backup(mut self, predecessor: Option<String>) -> Self {
++        if let Self::MegolmBackupV1Curve25519AesSha2(ref mut data) = self {
++            data.extra.insert("social.volna.authenticated_backup".into(), Value::from(1));
++            if let Some(version) = predecessor {
++                data.extra.insert("social.volna.backup_parent_version".into(), Value::from(version));
++            }
++        }
++        self
++    }
++
++    /// This marker selects backup migration only; it never grants session trust.
++    pub fn is_authenticated_backup(&self) -> bool {
++        matches!(self, Self::MegolmBackupV1Curve25519AesSha2(data)
++            if data.extra.get("social.volna.authenticated_backup").and_then(Value::as_u64) == Some(1))
++    }
++
++    /// One preserved legacy version, using the same recovery secret.
++    pub fn backup_parent_version(&self) -> Option<&str> {
++        match self {
++            Self::MegolmBackupV1Curve25519AesSha2(data) if self.is_authenticated_backup() =>
++                data.extra.get("social.volna.backup_parent_version").and_then(Value::as_str)
++                    .filter(|v| !v.is_empty() && v.len() <= 128),
++            _ => None,
++        }
++    }
++}
++
+ impl JsonCastable<ruma::api::client::backup::BackupAlgorithm> for RoomKeyBackupInfo {}
+ 
+ impl JsonCastable<RoomKeyBackupInfo> for ruma::api::client::backup::BackupAlgorithm {}
+diff --git a/crates/matrix-sdk-indexeddb/src/crypto_store/mod.rs b/crates/matrix-sdk-indexeddb/src/crypto_store/mod.rs
+--- a/crates/matrix-sdk-indexeddb/src/crypto_store/mod.rs
++++ b/crates/matrix-sdk-indexeddb/src/crypto_store/mod.rs
+@@ -1687,6 +1687,20 @@
+         Ok(())
+     }
+ 
++    async fn set_custom_value_if_absent(&self, key: &str, value: Vec<u8>) -> Result<()> {
++        let serialized = self.serializer.serialize_value(&value)?;
++        let transaction = self.inner.transaction(keys::CORE).with_mode(TransactionMode::Readwrite).build()?;
++        let object_store = transaction.object_store(keys::CORE)?;
++        let key = JsValue::from_str(key);
++        // get() maps stored null/undefined to None in the IDB adapter. Count
++        // keys, not decoded values, so corrupt existing records stay intact.
++        if object_store.count().with_query(&key).await? == 0 {
++            object_store.put(&serialized).with_key(key).build()?;
++        }
++        transaction.commit().await?;
++        Ok(())
++    }
++
+     async fn try_take_leased_lock(
+         &self,
+         lease_duration_ms: u32,
+@@ -2312,6 +2326,37 @@
+     }
+     cryptostore_integration_tests!();
+ 
++    #[async_test]
++    async fn test_custom_value_preserves_null_and_undefined() {
++        use super::{TransactionMode, keys};
++        use indexed_db_futures::prelude::*;
++        use wasm_bindgen::JsValue;
++        let store = get_store("recipient-corrupt-preservation", None, true).await;
++        for (name, value) in [("null", JsValue::NULL), ("undefined", JsValue::UNDEFINED)] {
++            let key = JsValue::from_str(name);
++            let tx = store
++                .inner
++                .transaction(keys::CORE)
++                .with_mode(TransactionMode::Readwrite)
++                .build()
++                .unwrap();
++            tx.object_store(keys::CORE).unwrap().put(&value).with_key(key.clone()).build().unwrap();
++            tx.commit().await.unwrap();
++            store.set_custom_value_if_absent(name, b"replacement".to_vec()).await.unwrap();
++            assert!(store.get_custom_value(name).await.unwrap().is_none());
++            let tx = store
++                .inner
++                .transaction(keys::CORE)
++                .with_mode(TransactionMode::Readonly)
++                .build()
++                .unwrap();
++            assert_eq!(
++                tx.object_store(keys::CORE).unwrap().count().with_query(&key).await.unwrap(),
++                1
++            );
++        }
++    }
++
+     /// Test that we can migrate a store created with a passphrase, to being
+     /// encrypted with a key instead.
+     #[async_test]
+diff --git a/crates/matrix-sdk-sqlite/src/crypto_store.rs b/crates/matrix-sdk-sqlite/src/crypto_store.rs
+--- a/crates/matrix-sdk-sqlite/src/crypto_store.rs
++++ b/crates/matrix-sdk-sqlite/src/crypto_store.rs
+@@ -1825,6 +1825,26 @@
+         Ok(())
+     }
+ 
++    async fn set_custom_value_if_absent(&self, key: &str, value: Vec<u8>) -> Result<()> {
++        let serialized = if let Some(cipher) = &self.store_cipher {
++            rmp_serde::to_vec_named(&cipher.encrypt_value_data(value)?)?
++        } else {
++            value
++        };
++        let key = key.to_owned();
++        self.write()
++            .await?
++            .interact(move |conn| {
++                conn.execute(
++                    "INSERT INTO kv (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO NOTHING",
++                    (&key, &serialized),
++                )
++            })
++            .await
++            .unwrap()?;
++        Ok(())
++    }
++
+     #[instrument(skip(self))]
+     async fn try_take_leased_lock(
+         &self,
+@@ -1917,8 +1937,8 @@
+     use tempfile::{TempDir, tempdir};
+     use tokio::fs;
+ 
+-    use super::SqliteCryptoStore;
+-    use crate::SqliteStoreConfig;
++    use super::{SqliteCryptoStore, SqliteObjectCryptoStoreExt};
++    use crate::{SqliteStoreConfig, utils::EncryptableStore};
+ 
+     static TMP_DIR: LazyLock<TempDir> = LazyLock::new(|| tempdir().unwrap());
+ 
+@@ -2530,6 +2550,79 @@
+         }
+     }
+ 
++    #[async_test]
++    async fn test_custom_value_atomic_across_connections() {
++        let first = get_store("recipient-cas-connections", Some("fixture-passphrase"), true).await;
++        let second =
++            get_store("recipient-cas-connections", Some("fixture-passphrase"), false).await;
++        let (a, b) = tokio::join!(
++            first.set_custom_value_if_absent("recipient", b"alice-bob".to_vec()),
++            second.set_custom_value_if_absent("recipient", b"alice-carol".to_vec())
++        );
++        a.unwrap();
++        b.unwrap();
++        let winner = first.get_custom_value("recipient").await.unwrap().unwrap();
++        assert!(winner == b"alice-bob" || winner == b"alice-carol");
++        assert_eq!(second.get_custom_value("recipient").await.unwrap().unwrap(), winner);
++        drop(first);
++        drop(second);
++        let reopened =
++            get_store("recipient-cas-connections", Some("fixture-passphrase"), false).await;
++        reopened.set_custom_value_if_absent("recipient", b"replacement".to_vec()).await.unwrap();
++        assert_eq!(reopened.get_custom_value("recipient").await.unwrap().unwrap(), winner);
++    }
++
++    #[async_test]
++    async fn test_recipient_corrupt_outbound_is_not_empty() {
++        use matrix_sdk_crypto::{EncryptionSettings, OlmMachineBuilder};
++        let store = std::sync::Arc::new(
++            get_store("recipient-corrupt-outbound", Some("fixture-passphrase"), true).await,
++        );
++        let own = user_id!("@alice:example.org");
++        let device = device_id!("ALICE");
++        let room = room_id!("!direct:example.org");
++        let machine = OlmMachineBuilder::new(own, device)
++            .with_crypto_store(store.clone())
++            .build()
++            .await
++            .unwrap();
++        drop(machine);
++        let encoded_room = store.encode_key("outbound_group_session", room.as_bytes());
++        store
++            .write()
++            .await
++            .unwrap()
++            .interact(move |conn| {
++                conn.execute(
++                    "INSERT INTO outbound_group_session (room_id, data) VALUES (?1, ?2)",
++                    (&encoded_room, b"corrupt".as_slice()),
++                )
++            })
++            .await
++            .unwrap()
++            .unwrap();
++        let reopened = OlmMachineBuilder::new(own, device)
++            .with_crypto_store(store.clone())
++            .build()
++            .await
++            .unwrap();
++        assert!(
++            reopened
++                .share_room_key(room, [own].into_iter(), EncryptionSettings::default())
++                .await
++                .is_err()
++        );
++        let raw = store
++            .read()
++            .await
++            .unwrap()
++            .get_outbound_group_session(store.encode_key("outbound_group_session", room.as_bytes()))
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(raw, b"corrupt");
++    }
++
+     async fn get_store(
+         name: &str,
+         passphrase: Option<&str>,

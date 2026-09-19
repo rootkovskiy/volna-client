@@ -1,6 +1,7 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react-native';
-import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { Animated, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { AppRefreshControl } from '../components/AppRefreshControl';
 import {
   MINI_PLAYER_ENTER_DURATION_MS,
@@ -97,7 +98,7 @@ export function FeedScreen({ authToken, composerAuthor, composerRequest, onNotif
       })}
     </View>
     <View style={styles.feedScreenBody}>
-      {Platform.OS === 'web' ? <Animated.View pointerEvents="none" style={[styles.feedRefreshIndicator, { opacity: webRefreshIndicatorOpacity }]}><View style={styles.feedRefreshIndicatorBubble}><ActivityIndicator color="#111" size="small" /></View></Animated.View> : null}
+      {Platform.OS === 'web' ? <Animated.View pointerEvents="none" style={[styles.feedRefreshIndicator, { opacity: webRefreshIndicatorOpacity }]}><View style={styles.feedRefreshIndicatorBubble}><LoadingIndicator size="small" /></View></Animated.View> : null}
       <Animated.View style={[styles.feedPullContent, Platform.OS === 'web' ? { transform: [{ translateY: webPullOffset }] } : undefined]}>
         <ScrollView
           alwaysBounceVertical

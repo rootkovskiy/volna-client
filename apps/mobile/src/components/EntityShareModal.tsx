@@ -1,8 +1,10 @@
 import { MessagingShareTargets } from '@volna/messaging-client/react-native-messages';
 import type { MessagingAttachment } from '@volna/messaging-client/messaging-surface-controller';
-import { Check, ChevronDown, ExternalLink, MessageSquare, Repeat2 } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Share as NativeShare, Text, TextInput, View } from 'react-native';
+import { ChevronDown, ExternalLink, MessageSquare, Repeat2 } from 'lucide-react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, Share as NativeShare, Text, TextInput, View } from 'react-native';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { SelectionPickerModal } from './SelectionPickerModal';
 import { AppImage as Image } from './AppImage';
 import { apiFetch as fetch, apiUrl, readApiError } from '../api/client';
 import { messagingSurfaceController } from '../messaging/secureMessaging';
@@ -53,6 +55,7 @@ export function EntityShareModal({
   const [mode, setMode] = useState<'actions' | 'chat' | 'repost'>('actions');
   const [comment, setComment] = useState('');
   const [isWorking, setIsWorking] = useState(false);
+  const publishing = useRef(false);
   const [ownedPages, setOwnedPages] = useState<PublicPage[]>([]);
   const [accountAuthor, setAccountAuthor] = useState<{ avatarUrl: string | null; name: string } | null>(null);
   const [repostDestination, setRepostDestination] = useState<RepostDestination>({ type: 'account' });
@@ -110,7 +113,8 @@ export function EntityShareModal({
   };
 
   const publishRepost = async () => {
-    if (!repost) return;
+    if (!repost || publishing.current) return;
+    publishing.current = true;
     setIsWorking(true);
     try {
       const response = await fetch(`${apiUrl}/posts`, {
@@ -130,20 +134,26 @@ export function EntityShareModal({
     } catch (error) {
       onNotify(error instanceof Error ? error.message : 'Не удалось сделать репост', 'error');
     } finally {
+      publishing.current = false;
       setIsWorking(false);
     }
   };
 
-  return <AppSheetModal
+  const authorAvatar = (avatarUrl: string | null | undefined, name: string) => avatarUrl
+    ? <Image source={{ uri: avatarUrl }} style={styles.postRepostDestinationAvatar} />
+    : <View style={styles.postRepostDestinationIcon}><Text style={styles.postRepostDestinationInitial}>{name.slice(0, 1) || '?'}</Text></View>;
+  const selectedPage = repostDestination.type === 'community' ? ownedPages.find(page => page.username === repostDestination.username) : null;
+
+  return <><AppSheetModal
     isVisible={isVisible}
     onClose={onClose}
+    scroll={mode === 'repost'}
+    contentContainerStyle={mode === 'repost' ? styles.entityRepostForm : undefined}
+    footer={mode === 'repost' && repost ? <Pressable accessibilityRole="button" accessibilityLabel="Репостнуть" accessibilityState={{ disabled: isWorking, busy: isWorking }} disabled={isWorking} onPress={() => void publishRepost()} style={[styles.eventShareSubmit, isWorking && styles.disabledButton]}>{isWorking ? <LoadingIndicator tone="inverse" accessibilityLabel="Публикуем репост" /> : <Text style={styles.eventShareSubmitText}>Репостнуть</Text>}</Pressable> : undefined}
+    footerContainerStyle={mode === 'repost' ? styles.entityRepostFooter : undefined}
     title={mode === 'chat' ? 'Отправить в чат' : mode === 'repost' ? `Репост: ${shareTitle}` : 'Поделиться'}
   >
-        {mode === 'actions' ? <>
-          <Pressable onPress={() => setMode('chat')} style={[styles.safetyAction, styles.eventShareAction]}><MessageSquare color="#111" size={20} /><Text style={styles.safetyActionText}>Отправить в личный чат</Text></Pressable>
-          {repost ? <Pressable onPress={() => setMode('repost')} style={[styles.safetyAction, styles.eventShareAction]}><Repeat2 color="#111" size={20} /><Text style={styles.safetyActionText}>Репостнуть</Text></Pressable> : null}
-          <Pressable onPress={() => void NativeShare.share({ title: shareTitle, message: shareText, url: shareUrl })} style={[styles.safetyAction, styles.eventShareAction]}><ExternalLink color="#111" size={20} /><Text style={styles.safetyActionText}>Другие приложения</Text></Pressable>
-        </> : null}
+        {mode === 'actions' ? <EntityShareActions onChat={() => setMode('chat')} onRepost={repost ? () => setMode('repost') : undefined} onExternal={() => void NativeShare.share({ title: shareTitle, message: shareText, url: shareUrl })} /> : null}
         {mode === 'chat' ? <MessagingShareTargets
           controller={messagingSurfaceController}
           draft={chatAttachment ? { attachment: chatAttachment } : { text: shareText }}
@@ -154,20 +164,32 @@ export function EntityShareModal({
         {mode === 'repost' && repost ? <>
           {ownedPages.length ? <View style={styles.entityRepostDestination}>
             <Text style={styles.postRepostDestinationLabel}>Опубликовать от имени</Text>
-            <Pressable accessibilityRole="button" accessibilityState={{ expanded: isDestinationOpen }} onPress={() => setIsDestinationOpen((value) => !value)} style={[styles.postRepostDestinationInput, styles.entityRepostDestinationInput]}>
-              {repostDestination.type === 'account' ? accountAuthor?.avatarUrl ? <Image source={{ uri: accountAuthor.avatarUrl }} style={styles.postRepostDestinationAvatar} /> : <View style={styles.postRepostDestinationIcon}><Text style={styles.postRepostDestinationInitial}>{accountAuthor?.name.slice(0, 1) ?? '?'}</Text></View> : ownedPages.find((page) => page.username === repostDestination.username)?.avatarUrl ? <Image source={{ uri: ownedPages.find((page) => page.username === repostDestination.username)!.avatarUrl! }} style={styles.postRepostDestinationAvatar} /> : <View style={styles.postRepostDestinationIcon}><Text style={styles.postRepostDestinationInitial}>{ownedPages.find((page) => page.username === repostDestination.username)?.name.slice(0, 1) ?? '?'}</Text></View>}
-              <View style={styles.entityRepostDestinationCopy}><Text numberOfLines={1} style={styles.postRepostDestinationName}>{repostDestination.type === 'account' ? 'Личный профиль' : ownedPages.find((page) => page.username === repostDestination.username)?.name}</Text>{repostDestination.type === 'community' ? <Text numberOfLines={1} style={styles.postRepostDestinationUsername}>@{repostDestination.username}</Text> : null}</View>
+            <Pressable accessibilityLabel="Опубликовать от имени" accessibilityRole="button" accessibilityState={{ expanded: isDestinationOpen, disabled: isWorking }} disabled={isWorking} onPress={() => setIsDestinationOpen(true)} style={styles.postRepostDestinationInput}>
+              {authorAvatar(selectedPage ? selectedPage.avatarUrl : accountAuthor?.avatarUrl, selectedPage?.name ?? accountAuthor?.name ?? '')}
+              <View style={styles.entityRepostDestinationCopy}><Text numberOfLines={1} style={styles.postRepostDestinationName}>{selectedPage?.name ?? 'Личный профиль'}</Text>{repostDestination.type === 'community' ? <Text numberOfLines={1} style={styles.postRepostDestinationUsername}>@{repostDestination.username}</Text> : null}</View>
               <ChevronDown color="#6f7b86" size={20} strokeWidth={1.9} />
             </Pressable>
-            {isDestinationOpen ? <ScrollView style={styles.entityRepostDestinationOptions}>
-              <Pressable onPress={() => { setRepostDestination({ type: 'account' }); setIsDestinationOpen(false); }} style={styles.postRepostDestinationOption}>{accountAuthor?.avatarUrl ? <Image source={{ uri: accountAuthor.avatarUrl }} style={styles.postRepostDestinationAvatar} /> : <View style={styles.postRepostDestinationIcon}><Text style={styles.postRepostDestinationInitial}>{accountAuthor?.name.slice(0, 1) ?? '?'}</Text></View>}<Text style={styles.entityRepostDestinationCopy}>Личный профиль</Text>{repostDestination.type === 'account' ? <Check color="#198f45" size={20} strokeWidth={2.2} /> : null}</Pressable>
-              {ownedPages.map((page) => <Pressable key={page.id} onPress={() => { setRepostDestination({ type: 'community', username: page.username }); setIsDestinationOpen(false); }} style={styles.postRepostDestinationOption}>{page.avatarUrl ? <Image source={{ uri: page.avatarUrl }} style={styles.postRepostDestinationAvatar} /> : <View style={styles.postRepostDestinationIcon}><Text style={styles.postRepostDestinationInitial}>{page.name.slice(0, 1)}</Text></View>}<View style={styles.entityRepostDestinationCopy}><Text numberOfLines={1} style={styles.postRepostDestinationOptionText}>{page.name}</Text><Text numberOfLines={1} style={styles.postRepostDestinationUsername}>@{page.username}</Text></View>{repostDestination.type === 'community' && repostDestination.username === page.username ? <Check color="#198f45" size={20} strokeWidth={2.2} /> : null}</Pressable>)}
-            </ScrollView> : null}
+
           </View> : null}
-          <TextInput maxLength={280} multiline onChangeText={setComment} placeholder="Добавить комментарий" placeholderTextColor="#8e99a4" style={styles.eventShareComment} value={comment} />
-          <Text style={styles.entityRepostCounter}>{comment.length}/280</Text>
+          <View style={styles.entityRepostCommentGroup}>
+            <TextInput accessibilityLabel="Комментарий к репосту" editable={!isWorking} maxLength={280} multiline onChangeText={setComment} placeholder="Добавить комментарий" placeholderTextColor="#8e99a4" style={[styles.eventShareComment, styles.editorBorderlessSurface]} value={comment} />
+            <Text style={styles.entityRepostCounter}>{comment.length}/280</Text>
+          </View>
           <View style={styles.eventSharePreview}><Text style={styles.eventSharePreviewTitle}>{repost.previewTitle}</Text><Text style={styles.eventSharePreviewMeta}>{repost.previewMeta}</Text></View>
-          <Pressable disabled={isWorking} onPress={() => void publishRepost()} style={styles.eventShareSubmit}><Text style={styles.eventShareSubmitText}>{isWorking ? 'Публикуем…' : 'Репостнуть'}</Text></Pressable>
         </> : null}
-  </AppSheetModal>;
+  </AppSheetModal>
+  <SelectionPickerModal isVisible={isVisible && isDestinationOpen && mode === 'repost'} onClose={() => setIsDestinationOpen(false)} title="Опубликовать от имени" options={[
+    { key: 'account', title: 'Личный профиль', leading: authorAvatar(accountAuthor?.avatarUrl, accountAuthor?.name ?? ''), selected: repostDestination.type === 'account', onPress: () => { setRepostDestination({ type: 'account' }); setIsDestinationOpen(false); } },
+    ...ownedPages.map(page => ({ key: page.id, title: page.name, meta: `@${page.username}`, leading: authorAvatar(page.avatarUrl, page.name), selected: repostDestination.type === 'community' && repostDestination.username === page.username, onPress: () => { setRepostDestination({ type: 'community', username: page.username }); setIsDestinationOpen(false); } })),
+  ]} />
+  </>;
+}
+
+/** Presentation shared with the component catalog; no transport or system calls. */
+export function EntityShareActions({ onChat, onRepost, onExternal }: { onChat: () => void; onRepost?: () => void; onExternal: () => void }) {
+  return <>
+    <Pressable accessibilityRole="button" onPress={onChat} style={[styles.safetyAction, styles.eventShareAction]}><MessageSquare color="#111" size={20} /><Text style={styles.safetyActionText}>Отправить в личный чат</Text></Pressable>
+    {onRepost ? <Pressable accessibilityRole="button" onPress={onRepost} style={[styles.safetyAction, styles.eventShareAction]}><Repeat2 color="#111" size={20} /><Text style={styles.safetyActionText}>Репостнуть</Text></Pressable> : null}
+    <Pressable accessibilityRole="button" onPress={onExternal} style={[styles.safetyAction, styles.eventShareAction]}><ExternalLink color="#111" size={20} /><Text style={styles.safetyActionText}>Другие приложения</Text></Pressable>
+  </>;
 }

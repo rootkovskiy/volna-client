@@ -3,6 +3,7 @@ packages:
   - "packages/content-policy"
   - "packages/music-taxonomy"
   - "packages/volna-messaging-client"
+  - "packages/volna-matrix-native"
   - "packages/volna-key-directory-witness"
 injectWorkspacePackages: true
 auditConfig:
@@ -10,11 +11,16 @@ auditConfig:
     - GHSA-5p2g-fcmc-qvqq
     - GHSA-w3rx-r6r6-pgpr
 overrides:
+  "@matrix-org/matrix-sdk-crypto-wasm": file:packages/volna-matrix-native/sdk/matrix-org-matrix-sdk-crypto-wasm-18.5.0-volna.2.tgz
+  "@xmldom/xmldom@>=0.7.0 <0.9.0": 0.8.15
+  "@xmldom/xmldom@>=0.9.0 <0.10.0": 0.9.12
   "brace-expansion@<2.0.0": 1.1.18
   "brace-expansion@>=2.0.0 <3.0.0": 2.1.4
   "brace-expansion@>=4.0.0 <5.0.9": 5.0.9
-  "js-yaml@>=3.0.0 <4.0.0": 3.15.1
-  "js-yaml@>=4.0.0 <5.0.0": 4.3.1
+  "browserslist@<=4.28.6": 4.28.7
+  "decode-uri-component@<=0.4.2": 0.5.0
+  "js-yaml@>=3.0.0 <4.0.0": 3.15.2
+  "js-yaml@>=4.0.0 <5.0.0": 4.3.2
   "nanoid@<3.3.18": 3.3.18
   postcss: 8.5.26
   "socket.io-parser@>=4.0.0 <4.2.7": 4.2.7
@@ -30,4 +36,6 @@ allowBuilds:
   "protobufjs": true
   "unrs-resolver": true
 patchedDependencies:
+  expo-camera@17.0.10: patches/expo-camera@17.0.10.patch
+  matrix-js-sdk@42.1.0: patches/matrix-js-sdk@42.1.0.patch
   image-size@1.2.1: patches/image-size@1.2.1.patch

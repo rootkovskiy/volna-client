@@ -1,7 +1,8 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import { AtSign, CalendarDays, Check, ChevronDown, Eye, EyeOff, KeyRound, LockKeyhole, Mail, X } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Easing, KeyboardAvoidingView, LayoutAnimation, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Animated, Easing, KeyboardAvoidingView, LayoutAnimation, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { AppImage as Image } from '../components/AppImage';
 import { apiFetch as fetch, apiUrl, readApiError, reportApiError } from '../api/client';
 import { getPasswordStrength, isValidEmailInput, normalizeAsciiPassword, normalizeEmailInput, normalizeUsernameInput, validateDisplayName, validateRequiredText, validateUsername } from '../domain';
@@ -417,7 +418,7 @@ export function AuthScreen({
         ) : null}
 
         {!isRegister ? <><View style={styles.oauthRow}>
-          <Pressable disabled={isTelegramLoading || isLoading} onPress={() => void startTelegramAuth()} style={[styles.oauthButton, (isTelegramLoading || isLoading) && styles.disabledButton]}>{isTelegramLoading ? <ActivityIndicator color="#fff" /> : <><FontAwesome6 color="#fff" iconStyle="brand" name="telegram" size={18} /><Text style={styles.oauthText}>Telegram</Text></>}</Pressable>
+          <Pressable disabled={isTelegramLoading || isLoading} onPress={() => void startTelegramAuth()} style={[styles.oauthButton, (isTelegramLoading || isLoading) && styles.disabledButton]}>{isTelegramLoading ? <LoadingIndicator tone="inverse" /> : <><FontAwesome6 color="#fff" iconStyle="brand" name="telegram" size={18} /><Text style={styles.oauthText}>Telegram</Text></>}</Pressable>
         </View><View style={styles.authDividerRow}>
           <View style={styles.authDivider} />
           <Text style={styles.authDividerText}>или</Text>
@@ -449,7 +450,7 @@ export function AuthScreen({
             style={styles.authIconTextInput}
             value={username}
           />
-          {isRegister && hasUsernameFieldBeenFocused ? <View style={styles.authUsernameStatus}>{usernameState === 'checking' ? <ActivityIndicator color="#7d8894" size="small" /> : null}{usernameState === 'available' ? <Check color="#2fa84f" size={20} strokeWidth={2.4} /> : null}{usernameState === 'invalid' || usernameState === 'taken' ? <X color="#c62828" size={19} strokeWidth={2.4} /> : null}</View> : null}
+          {isRegister && hasUsernameFieldBeenFocused ? <View style={styles.authUsernameStatus}>{usernameState === 'checking' ? <LoadingIndicator size="small" /> : null}{usernameState === 'available' ? <Check color="#2fa84f" size={20} strokeWidth={2.4} /> : null}{usernameState === 'invalid' || usernameState === 'taken' ? <X color="#c62828" size={19} strokeWidth={2.4} /> : null}</View> : null}
         </View>
         {isRegister ? <View style={styles.authUsernameHint}><Text style={styles.authUsernameHintTitle}>Не используйте чужие username публичных лиц или сообществ!</Text><Pressable accessibilityRole="button" onPress={() => { if (Platform.OS !== 'web') LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setIsUsernameHintExpanded((expanded) => !expanded); }}><Text style={styles.authUsernameHintLink}>{isUsernameHintExpanded ? 'Скрыть' : 'Подробнее'}</Text></Pressable>{isUsernameHintExpanded ? <Text style={styles.authUsernameHintBody}>Администрация вправе отвязать занятый вами юзернейм, если он в интернете явно ассоциируется с другим человеком или организацией. Если у вас есть сомнения по поводу выбранного юзернейма, обратитесь к администрации приложения для получения галочки, которая будет гарантировать, что юзернейм останется закреплён за вашим профилем.</Text> : null}</View> : null}
         </View>
@@ -490,7 +491,7 @@ export function AuthScreen({
             style={[styles.primaryAuthButton, !isRegister && styles.primaryAuthButtonLogin]}
           >
             {isSubmitting || isLoading ? (
-              <ActivityIndicator color={isRegister ? '#fff' : '#111'} />
+              <LoadingIndicator tone={isRegister ? 'inverse' : 'default'} />
             ) : (
               <Text style={[styles.primaryAuthText, !isRegister && styles.primaryAuthTextLogin]}>{isRegister ? inviteValidationToken ? 'Зарегистрироваться' : 'Продолжить' : 'Войти'}</Text>
             )}

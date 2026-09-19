@@ -46,6 +46,16 @@ for (const [dependency, expected] of [['postcss', '8.5.26'], ['uuid', '11.1.1']]
     failures.push(`standalone lockfile must resolve only ${dependency}@${expected}`);
   }
 }
+for (const [selector, version] of [
+  ['@xmldom/xmldom@>=0.7.0 <0.9.0', '0.8.15'],
+  ['@xmldom/xmldom@>=0.9.0 <0.10.0', '0.9.12'],
+  ['browserslist@<=4.28.6', '4.28.7'],
+  ['decode-uri-component@<=0.4.2', '0.5.0'],
+]) {
+  if (!standaloneWorkspace.includes(`  "${selector}": ${version}`)) {
+    failures.push(`standalone workspace must retain reviewed override ${selector} -> ${version}`);
+  }
+}
 for (const [kind, dependencies] of Object.entries({
   dependencies: packageJson.dependencies,
   devDependencies: packageJson.devDependencies,

@@ -65,7 +65,7 @@ test('opaque transport fails closed on protocol downgrade', async () => {
       rolloutEnabled: true,
       plaintextFallback: true,
       contentPlane: 'opaque-only-for-mls-v1',
-      legacyHistoryServerReadable: true,
+      serverReadableHistory: false,
     }),
   });
   await assert.rejects(() => transport.capabilities(), /capabilities_mismatch/);
@@ -502,7 +502,7 @@ test('opaque transport verifies a sparse directory map inside a fresh 2-of-3 C2S
           membershipRekeyEnabled: true,
           plaintextFallback: false,
           contentPlane: 'opaque-only-for-mls-v1',
-          legacyHistoryServerReadable: true,
+          serverReadableHistory: false,
           keyTransparencyRequired: true,
           keyTransparencyVersion: 1,
           keyTransparencyPolicyStatus: 'configured',

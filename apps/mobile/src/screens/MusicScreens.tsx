@@ -1,14 +1,18 @@
+import { isMusicLibraryProvider } from '@volna/music-taxonomy/library-policy';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { SearchField, searchFieldStyles } from '@volna/messaging-client/search-field';
+import { MotionSurface } from '@volna/messaging-client/ui-motion';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import { CalendarDays, Check, ChevronDown, ChevronLeft, FileAudio, ListMusic, Pause, Pencil, Play, Plus, Radio, Search, Trash2, X } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, LayoutAnimation, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { CalendarDays, Check, ChevronLeft, Download, FileAudio, Info, ListMusic, Pause, Pencil, Play, Plus, Radio, Trash2, X } from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppImage as Image } from '../components/AppImage';
-import { apiFetch as fetch, apiUrl, readApiError, remoteSearchDebounceMs } from '../api/client';
+import { apiFetch as fetch, apiUrl, readApiError } from '../api/client';
 import { audioReleaseGenreLimit, discardMusicArtworkAsset, discardMusicAsset, finalizeMusicAsset, isMusicSubgenreValue, musicArtworkThumbnail, prepareMusicAsset, releasePrimaryGenreLimit, uploadMusicArtworkAsset } from '../domain';
-import type { AvatarCropAsset, Profile, ProfileMusicTrack, ProfileUpdate, PublicUploadedMusicTrack, ToastMessage, UploadedMusicTrack } from '../types';
-import { AppleMusicSelector, AvatarCropModal, buildFavoriteMusicQueue, MusicGenreSelector, ProfileMusicPlayerItem, TrackPlayerPill, UploadedMusicPlayerCard } from './ProfileScreens';
+import type { AvatarCropAsset, MusicCatalogDestination, Profile, ProfileMusicTrack, ProfileUpdate, PublicUploadedMusicTrack, ToastMessage, UploadedMusicTrack } from '../types';
+import { AvatarCropModal, buildFavoriteMusicQueue, MusicGenreSelector, ProfileMusicPlayerItem, TrackPlayerPill, UploadedMusicPlayerCard } from './ProfileScreens';
 import { AppSheetModal } from '../components/AppSheetModal';
 import { AppRefreshControl } from '../components/AppRefreshControl';
 import { AnimatedSegmentedControl } from '../components/AnimatedSegmentedControl';
@@ -19,10 +23,22 @@ import { emitMusicLibraryChanged, subscribeMusicLibraryChanged } from '../compon
 import { AnimatedMusicLibraryRow } from '../components/AnimatedMusicLibraryRow';
 import { ScreenTopBar } from '../components/navigation';
 import { getBandcampRelease } from '../music/musicRuntime';
+import { emptyReleaseDateDraft, releaseDateDraftReducer } from '../music/releaseDateAutofill';
 import { styles } from '../styles';
-import { CalendarPickerModal } from './CreateEventScreen';
-import { boundedPlaybackQueue, uploadedTrackPlayerId } from '../components/audioPlayerCore';
+import { CalendarPickerModal } from '../components/CalendarPickerModal';
+import { boundedPlaybackQueue, listenLaterDisplayGroups, listenLaterPlaybackQueue, unreviewedQueue, uploadedTrackPlayerId } from '../components/audioPlayerCore';
 import { CatalogInnerHeader } from '../components/CatalogInnerHeader';
+import { CatalogBackArea } from '../components/CatalogBackArea';
+import { PlaylistGrid } from '../components/PlaylistGrid';
+import { PlaylistEditorSurface } from '../components/PlaylistEditorSurface';
+import { MusicCategoryTile, musicCategoryStyles } from '../components/MusicCategoryTile';
+import { playlistCategoryArtwork, resolvePlaylistArtwork } from '../music/playlistArtwork';
+import { DownloadedMusic } from './DownloadedMusic';
+import { supportsDeviceDownloads } from '../music/downloadDevice';
+import { useDeviceDownloads } from '../music/deviceDownloads';
+import { CatalogTabs } from '../components/CatalogTabs';
+import { MusicDiscovery } from './MusicDiscovery';
+import type { MusicCatalogItem } from '../music/musicCatalogSearch';
 
 type MusicPlaylist = {
   id: string;
@@ -70,24 +86,6 @@ type UploadEditDraft = {
   includeSelfAsParticipant: boolean;
   releaseDate: string;
 };
-type CatalogSearchTrack = {
-  id: string;
-  provider: NonNullable<GlobalTrackQueueItem['provider']>;
-  title: string;
-  artist: string;
-  username: string;
-  artworkUrl: string | null;
-  previewUrl: string;
-  externalUrl: string | null;
-  startSeconds: number;
-  clipDurationSeconds: number | null;
-  durationSeconds: number | null;
-  collectionId?: string | null;
-  collectionTitle?: string | null;
-  releaseId?: string;
-  labelName?: string | null;
-  labelUsername?: string | null;
-};
 type ListenLaterItem = {
   id: string;
   title: string;
@@ -113,28 +111,12 @@ function absolutePlaybackUrl(value: string) {
   return value.startsWith('/') ? `${apiUrl}${value}` : value;
 }
 
-function catalogTrackQueueItem(track: CatalogSearchTrack): GlobalTrackQueueItem {
-  return {
-    id: `catalog:${track.provider}:${track.id}`,
-    title: track.title,
-    artist: track.artist,
-    artworkUrl: track.artworkUrl,
-    previewUrl: absolutePlaybackUrl(track.previewUrl),
-    externalUrl: track.externalUrl,
-    provider: track.provider,
-    collectionId: track.collectionId ?? undefined,
-    collectionTitle: track.collectionTitle ?? undefined,
-    releaseId: track.releaseId,
-    labelName: track.labelName,
-    labelUsername: track.labelUsername,
-    startSeconds: track.startSeconds,
-    clipDurationSeconds: track.clipDurationSeconds ?? undefined,
-  };
-}
-
 function listenLaterQueueItem(item: ListenLaterItem, track: GlobalTrackQueueItem): GlobalTrackQueueItem {
   return {
     ...track,
+    id: `listen:${item.id}:${track.id}`,
+    listenLaterItemId: item.id,
+    listenLaterTrackId: track.id,
     artworkUrl: track.artworkUrl ?? item.artworkUrl,
     previewUrl: absolutePlaybackUrl(track.previewUrl),
     collectionTitle: track.collectionTitle ?? item.title,
@@ -143,31 +125,15 @@ function listenLaterQueueItem(item: ListenLaterItem, track: GlobalTrackQueueItem
   };
 }
 
-function MusicCategoryTile({
-  artworkUrl,
-  label,
-  onPress,
-}: {
-  artworkUrl: string | null;
-  label: string;
-  onPress: () => void;
-}) {
-  const hasArtwork = Boolean(artworkUrl?.trim());
-  return (
-    <Pressable accessibilityLabel={label} accessibilityRole="button" onPress={onPress} style={localStyles.musicCategoryTile}>
-      {hasArtwork ? (
-        <>
-          <Image accessibilityIgnoresInvertColors source={{ uri: artworkUrl! }} style={localStyles.musicCategoryArtwork} />
-          <View pointerEvents="none" style={localStyles.musicCategoryArtworkShade} />
-        </>
-      ) : null}
-      <Text style={[localStyles.musicCategoryTitle, hasArtwork && localStyles.musicCategoryTitleOnArtwork]}>{label}</Text>
-    </Pressable>
-  );
+function playlistTrackArtworkLookup(tracks: readonly ProfileMusicTrack[], uploads: readonly (UploadedMusicTrack | PublicUploadedMusicTrack)[]) {
+  return new Map<string, string | null | undefined>([
+    ...tracks.map((track) => [`profile:${track.provider}:${track.id}`, track.artworkUrl ? musicArtworkThumbnail(track.artworkUrl, track.provider, 300) ?? track.artworkUrl : null] as const),
+    ...uploads.filter((track) => !('status' in track) || track.status === 'READY').map((track) => [`upload:${track.id}`, track.artworkUrl ? musicArtworkThumbnail(track.artworkUrl, 'volna', 300) ?? track.artworkUrl : null] as const),
+  ]);
 }
 
 function initialTracks(profile: Profile): ProfileMusicTrack[] {
-  return profile.musicTracks ?? [];
+  return (profile.musicTracks ?? []).filter((track) => isMusicLibraryProvider(track.provider));
 }
 
 function minutes(seconds: number) {
@@ -194,9 +160,70 @@ function releaseDateInputToIso(value: string) {
   return day && month && year ? `${year}-${month}-${day}` : undefined;
 }
 
+function buildPlaylistQueue(trackKeys: readonly string[], favoriteTracks: readonly ProfileMusicTrack[], readyUploadedTracks: readonly (UploadedMusicTrack | PublicUploadedMusicTrack)[], ownerName: string): GlobalTrackQueueItem[] {
+  return trackKeys.flatMap((trackKey): GlobalTrackQueueItem[] => {
+      const profileMatch = /^profile:(apple|yandex|soundcloud|bandcamp|youtube):(.+)$/.exec(trackKey);
+      if (profileMatch) {
+        const track = favoriteTracks.find((item) => item.provider === profileMatch[1] && item.id === profileMatch[2]);
+        return track ? buildFavoriteMusicQueue([track]) : [];
+      }
+      if (trackKey.startsWith('upload:')) {
+        const track = readyUploadedTracks.find((item) => item.id === trackKey.slice('upload:'.length));
+        return track?.publicUrl ? [{
+          id: uploadedTrackPlayerId(track.id),
+          title: track.title,
+          artist: track.artist?.trim() || ownerName,
+          artworkUrl: track.artworkUrl,
+          previewUrl: `${apiUrl}/my-music/stream/${encodeURIComponent(track.id)}`,
+          externalUrl: null,
+          provider: 'volna',
+          startSeconds: 0,
+          clipDurationSeconds: track.durationSeconds,
+          genres: track.genres,
+          releaseDate: track.releaseDate,
+        }] : [];
+      }
+      return [];
+    });
+}
+
+function playlistTrackPlayer(trackKey: string, playlistQueue: GlobalTrackQueueItem[], favoriteTracks: readonly ProfileMusicTrack[], readyUploadedTracks: readonly (UploadedMusicTrack | PublicUploadedMusicTrack)[], ownerName: string) {
+    if (trackKey.startsWith('profile:')) {
+      const match = /^profile:(apple|yandex|soundcloud|bandcamp|youtube):(.+)$/.exec(trackKey);
+      const track = match ? favoriteTracks.find((item) => item.provider === match[1] && item.id === match[2]) : null;
+      return track ? <ProfileMusicPlayerItem key={trackKey} profileQueue={playlistQueue} showGenres={false} track={track} /> : (
+        <Text key={trackKey} style={localStyles.playlistUnavailableTrack}>Трек больше недоступен</Text>
+      );
+    }
+    if (trackKey.startsWith('upload:')) {
+      const track = readyUploadedTracks.find((item) => item.id === trackKey.slice('upload:'.length));
+      return track?.publicUrl ? (
+        <TrackPlayerPill
+          artist={track.artist?.trim() || ownerName}
+          artworkUrl={track.artworkUrl}
+          clipDurationSeconds={track.durationSeconds}
+          externalUrl={null}
+          key={trackKey}
+          previewUrl={`${apiUrl}/my-music/stream/${encodeURIComponent(track.id)}`}
+          provider="volna"
+          queue={playlistQueue.length > 1 ? playlistQueue : undefined}
+          queueIndex={playlistQueue.findIndex((item) => item.id === uploadedTrackPlayerId(track.id))}
+          startSeconds={0}
+          title={track.title}
+          variant="card"
+        />
+      ) : <Text key={trackKey} style={localStyles.playlistUnavailableTrack}>Трек больше недоступен</Text>;
+    }
+    return <Text key={trackKey} style={localStyles.playlistUnavailableTrack}>Трек больше недоступен</Text>;
+  }
+
 export function MusicCatalogScreen({
+  destination,
+  onOpenDestination,
+  onBack,
   onOpenMenu,
   onOpenMessages,
+  onOpenMyMusic,
   onOpenNotifications,
   onOpenPublicPage,
   onEditPlaylist,
@@ -204,8 +231,12 @@ export function MusicCatalogScreen({
   onRefreshProfile,
   profile,
 }: {
+  destination: MusicCatalogDestination | null;
+  onOpenDestination: (destination: MusicCatalogDestination) => void;
+  onBack: () => void;
   onOpenMenu: () => void;
   onOpenMessages: () => void;
+  onOpenMyMusic: () => void;
   onOpenNotifications: () => void;
   onOpenPublicPage: (username: string) => Promise<void>;
   onEditPlaylist: (playlistId: string) => void;
@@ -213,13 +244,15 @@ export function MusicCatalogScreen({
   onRefreshProfile: () => void | Promise<void>;
   profile: Profile;
 }) {
-  const [selectedCategory, setSelectedCategory] = useState<'recommendations' | 'playlists' | 'listen' | 'radios' | 'search' | null>(null);
+  const selectedCategory = destination?.category ?? null;
+  const selectedPlaylistId = destination?.category === 'playlists' ? destination.playlistId : undefined;
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<CatalogSearchTrack[]>([]);
-  const [searchTotal, setSearchTotal] = useState(0);
-  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'mine' | 'browse'>('mine');
+  const [searchGenres, setSearchGenres] = useState<string[]>([]);
   const [listenLaterItems, setListenLaterItems] = useState<ListenLaterItem[]>([]);
+  const listenLaterLoadRef = useRef(0);
   const [isListenLaterLoading, setIsListenLaterLoading] = useState(false);
+  const [isListenLaterInfoVisible, setIsListenLaterInfoVisible] = useState(false);
   const [catalogPlaylists, setCatalogPlaylists] = useState<MusicPlaylist[]>([]);
   const [catalogUploadedTracks, setCatalogUploadedTracks] = useState<Array<UploadedMusicTrack | PublicUploadedMusicTrack>>(
     () => profile.uploadedMusicTracks ?? [],
@@ -230,7 +263,8 @@ export function MusicCatalogScreen({
   const [enteringFavoriteTrackIds, setEnteringFavoriteTrackIds] = useState<string[]>([]);
   const [leavingFavoriteTrackIds, setLeavingFavoriteTrackIds] = useState<string[]>([]);
   const entranceTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
-  const [expandedPlaylistIds, setExpandedPlaylistIds] = useState<string[]>([]);
+  const selectedPlaylist = catalogPlaylists.find((playlist) => playlist.id === selectedPlaylistId);
+  const [playlistsError, setPlaylistsError] = useState<string | null>(null);
   const [isPlaylistsLoading, setIsPlaylistsLoading] = useState(false);
   const [hasLoadedPlaylists, setHasLoadedPlaylists] = useState(false);
   const [isPlaylistCreateVisible, setIsPlaylistCreateVisible] = useState(false);
@@ -240,13 +274,10 @@ export function MusicCatalogScreen({
   const [isRadiosLoading, setIsRadiosLoading] = useState(false);
   const [radiosError, setRadiosError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [trackSection, setTrackSection] = useState<'tracks' | 'fragments'>('tracks');
+  const downloads = useDeviceDownloads();
+  useEffect(() => { if (selectedCategory === 'downloads' && !supportsDeviceDownloads()) onBack(); }, [selectedCategory, onBack]);
   const globalAudio = useGlobalAudioControls();
-  const favoriteTracks = catalogFavoriteTracks;
-  const visibleFavoriteTracks = useMemo(() => favoriteTracks.filter((track) => {
-    const isFragment = track.provider === 'apple' || track.provider === 'yandex';
-    return trackSection === 'fragments' ? isFragment : !isFragment;
-  }), [favoriteTracks, trackSection]);
+  const favoriteTracks = useMemo(() => catalogFavoriteTracks.filter((track) => isMusicLibraryProvider(track.provider)), [catalogFavoriteTracks]);
   const readyUploadedTracks = useMemo(
     () => catalogUploadedTracks.filter((track) => {
       const status = 'status' in track ? (track as UploadedMusicTrack).status : 'READY';
@@ -256,13 +287,13 @@ export function MusicCatalogScreen({
   );
   const visibleMusicEntries = useMemo(() => {
     const entries = [
-      ...(trackSection === 'tracks' ? readyUploadedTracks.map((track, index) => ({
+      ...readyUploadedTracks.map((track, index) => ({
         kind: 'upload' as const,
         track,
         timestamp: Date.parse(track.createdAt),
         stableIndex: index,
-      })) : []),
-      ...visibleFavoriteTracks.map((track, index) => ({
+      })),
+      ...favoriteTracks.map((track, index) => ({
         kind: 'saved' as const,
         track,
         timestamp: track.addedAt ? Date.parse(track.addedAt) : Number.NaN,
@@ -274,7 +305,10 @@ export function MusicCatalogScreen({
       const rightTime = Number.isFinite(right.timestamp) ? right.timestamp : Number.NEGATIVE_INFINITY;
       return rightTime - leftTime || left.stableIndex - right.stableIndex;
     });
-  }, [readyUploadedTracks, trackSection, visibleFavoriteTracks]);
+  }, [readyUploadedTracks, favoriteTracks]);
+  const personalSearchItems = useMemo(() => visibleMusicEntries.map((entry): MusicCatalogItem => entry.kind === 'upload'
+    ? { kind: 'upload', key: `mine:upload:${entry.track.id}`, track: { ...entry.track, artist: entry.track.artist?.trim() || profile.name } }
+    : { kind: 'external', key: `mine:${entry.track.provider}:${entry.track.id}`, track: entry.track }), [profile.name, visibleMusicEntries]);
   const favoriteQueue = useMemo(() => {
     return visibleMusicEntries.flatMap((entry): GlobalTrackQueueItem[] => entry.kind === 'upload' ? [{
         id: uploadedTrackPlayerId(entry.track.id),
@@ -286,69 +320,29 @@ export function MusicCatalogScreen({
         provider: 'volna',
         startSeconds: 0,
         clipDurationSeconds: entry.track.durationSeconds,
+        genres: entry.track.genres,
+        releaseDate: entry.track.releaseDate,
       }] : buildFavoriteMusicQueue([entry.track]));
   }, [profile.name, visibleMusicEntries]);
   const resolveFavoriteQueue = useCallback(
     (target: GlobalTrackQueueItem) => boundedPlaybackQueue(favoriteQueue, target),
     [favoriteQueue],
   );
-  const catalogSearchQueue = useMemo(() => searchResults.map(catalogTrackQueueItem), [searchResults]);
-  const resolveCatalogSearchQueue = useCallback(
-    (target: GlobalTrackQueueItem) => boundedPlaybackQueue(catalogSearchQueue, target),
-    [catalogSearchQueue],
-  );
+  const listenLaterGroups = useMemo(() => listenLaterDisplayGroups(listenLaterItems), [listenLaterItems]);
   const listenLaterQueue = useMemo(
-    () => listenLaterItems.flatMap((item) => item.tracks.map((track) => listenLaterQueueItem(item, track))),
+    () => listenLaterItems.flatMap((item) => unreviewedQueue(item.tracks).map((track) => listenLaterQueueItem(item, track))),
     [listenLaterItems],
   );
   const resolveListenLaterQueue = useCallback(
-    (target: GlobalTrackQueueItem) => boundedPlaybackQueue(listenLaterQueue, target),
+    (target: GlobalTrackQueueItem) => listenLaterPlaybackQueue(listenLaterQueue, target),
     [listenLaterQueue],
   );
-  const playlistQueuesById = useMemo(() => new Map(catalogPlaylists.map((playlist) => [
-    playlist.id,
-    playlist.tracks.flatMap((trackKey): GlobalTrackQueueItem[] => {
-      const profileMatch = /^profile:(apple|yandex|soundcloud|bandcamp|youtube):(.+)$/.exec(trackKey);
-      if (profileMatch) {
-        const track = favoriteTracks.find((item) => item.provider === profileMatch[1] && item.id === profileMatch[2]);
-        return track ? buildFavoriteMusicQueue([track]) : [];
-      }
-      if (trackKey.startsWith('upload:')) {
-        const track = readyUploadedTracks.find((item) => item.id === trackKey.slice('upload:'.length));
-        return track?.publicUrl ? [{
-          id: uploadedTrackPlayerId(track.id),
-          title: track.title,
-          artist: track.artist?.trim() || profile.name,
-          artworkUrl: track.artworkUrl,
-          previewUrl: `${apiUrl}/my-music/stream/${encodeURIComponent(track.id)}`,
-          externalUrl: null,
-          provider: 'volna',
-          startSeconds: 0,
-          clipDurationSeconds: track.durationSeconds,
-        }] : [];
-      }
-      return [];
-    }),
-  ])), [catalogPlaylists, favoriteTracks, profile.name, readyUploadedTracks]);
-  const playlistTileArtwork = useMemo(() => {
-    for (let playlistIndex = catalogPlaylists.length - 1; playlistIndex >= 0; playlistIndex -= 1) {
-      const playlist = catalogPlaylists[playlistIndex];
-      for (let trackIndex = playlist.tracks.length - 1; trackIndex >= 0; trackIndex -= 1) {
-        const trackKey = playlist.tracks[trackIndex];
-        const profileMatch = /^profile:(apple|yandex|soundcloud|bandcamp|youtube):(.+)$/.exec(trackKey);
-        if (profileMatch) {
-          const track = favoriteTracks.find((item) => item.provider === profileMatch[1] && item.id === profileMatch[2]);
-          if (track?.artworkUrl) return musicArtworkThumbnail(track.artworkUrl, track.provider, 300) ?? track.artworkUrl;
-        }
-        if (trackKey.startsWith('upload:')) {
-          const track = catalogUploadedTracks.find((item) => item.id === trackKey.slice('upload:'.length));
-          if (track?.artworkUrl) return musicArtworkThumbnail(track.artworkUrl, 'volna', 300) ?? track.artworkUrl;
-        }
-      }
-      if (playlist.artworkThumbnailUrl || playlist.artworkUrl) return playlist.artworkThumbnailUrl ?? playlist.artworkUrl ?? null;
-    }
-    return null;
+  const playlistQueuesById = useMemo(() => new Map(catalogPlaylists.map((playlist) => [playlist.id, buildPlaylistQueue(playlist.tracks, favoriteTracks, readyUploadedTracks, profile.name)])), [catalogPlaylists, favoriteTracks, profile.name, readyUploadedTracks]);
+  const playlistTiles = useMemo(() => {
+    const artwork = playlistTrackArtworkLookup(favoriteTracks, catalogUploadedTracks);
+    return catalogPlaylists.map((playlist) => ({ id: playlist.id, name: playlist.name, artworkUrl: resolvePlaylistArtwork(playlist, artwork) }));
   }, [catalogPlaylists, catalogUploadedTracks, favoriteTracks]);
+  const playlistTileArtwork = playlistCategoryArtwork(playlistTiles);
   const listenLaterTileArtwork = useMemo(() => {
     const latest = listenLaterItems[0];
     if (latest?.artworkUrl) return musicArtworkThumbnail(latest.artworkUrl, latest.provider, 300) ?? latest.artworkUrl;
@@ -358,26 +352,30 @@ export function MusicCatalogScreen({
   const radioTileArtwork = favoriteRadios[0]?.avatarUrl ?? null;
   useEffect(() => {
     const activeTrack = globalAudio.activeTrack;
-    if (!activeTrack || !favoriteQueue.some((track) => track.id === activeTrack.id)) return;
+    if (selectedCategory || activeTab !== 'mine' || searchQuery.trim()) return;
+    if (!activeTrack || activeTrack.queueSource === 'device-downloads' || !favoriteQueue.some((track) => track.id === activeTrack.id)) return;
     const nextQueue = resolveFavoriteQueue(activeTrack);
     if (nextQueue.length) globalAudio.setActiveQueue(nextQueue, resolveFavoriteQueue);
-  }, [favoriteQueue, globalAudio.activeTrack?.id, globalAudio.setActiveQueue, resolveFavoriteQueue]);
+  }, [favoriteQueue, globalAudio.activeTrack?.id, globalAudio.setActiveQueue, resolveFavoriteQueue, selectedCategory, activeTab, searchQuery]);
   const loadListenLater = useCallback(async () => {
+    const request = ++listenLaterLoadRef.current;
     setIsListenLaterLoading(true);
     try {
       const response = await fetch(`${apiUrl}/my-music/listen-later`);
       if (!response.ok) throw new Error(await readApiError(response, 'Не удалось загрузить отложенные релизы'));
       const result = await response.json() as { items?: ListenLaterItem[] };
-      setListenLaterItems(Array.isArray(result.items) ? result.items : []);
+      if (request === listenLaterLoadRef.current) setListenLaterItems(Array.isArray(result.items) ? result.items : []);
     } catch (error) {
+      if (request !== listenLaterLoadRef.current) return;
       const message = error instanceof Error ? error.message : 'Не удалось загрузить отложенные релизы';
       onNotify(message, 'error');
     } finally {
-      setIsListenLaterLoading(false);
+      if (request === listenLaterLoadRef.current) setIsListenLaterLoading(false);
     }
   }, [onNotify]);
   const loadPlaylists = useCallback(async () => {
     setIsPlaylistsLoading(true);
+    setPlaylistsError(null);
     try {
       const response = await fetch(`${apiUrl}/my-music`);
       if (!response.ok) throw new Error(await readApiError(response, 'Не удалось загрузить плейлисты'));
@@ -385,7 +383,9 @@ export function MusicCatalogScreen({
       setCatalogPlaylists(Array.isArray(result.playlists) ? result.playlists : []);
       setCatalogUploadedTracks(Array.isArray(result.tracks) ? result.tracks : []);
     } catch (error) {
-      onNotify(error instanceof Error ? error.message : 'Не удалось загрузить плейлисты', 'error');
+      const message = error instanceof Error ? error.message : 'Не удалось загрузить плейлисты';
+      setPlaylistsError(message);
+      onNotify(message, 'error');
     } finally {
       setIsPlaylistsLoading(false);
       setHasLoadedPlaylists(true);
@@ -459,6 +459,14 @@ export function MusicCatalogScreen({
     entranceTimers.current.clear();
   }, []);
   useEffect(() => subscribeMusicLibraryChanged((change) => {
+    if (change.type === 'listen-later-reviewed') {
+      setListenLaterItems((items) => items.map((item) => item.id === change.itemId
+        ? { ...item, tracks: item.tracks.map((track) => track.id === change.trackId ? { ...track, reviewed: true } : track) }
+        : item));
+      // Invalidate any pre-acknowledgement read before it can erase the check.
+      void loadListenLater();
+      return;
+    }
     if (change.type === 'collection-track-added') {
       setCatalogFavoriteTracks((current) => {
         const duplicateIndex = current.findIndex((track) => track.id === change.track.id);
@@ -485,95 +493,12 @@ export function MusicCatalogScreen({
     void Promise.resolve(onRefreshProfile());
   }, [onRefreshProfile]);
 
-  const toggleExpandedPlaylist = (playlistId: string) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpandedPlaylistIds((current) => current.includes(playlistId)
-      ? current.filter((id) => id !== playlistId)
-      : [...current, playlistId]);
-  };
-  const renderPlaylistTrack = (trackKey: string, playlistQueue: GlobalTrackQueueItem[]) => {
-    if (trackKey.startsWith('profile:')) {
-      const match = /^profile:(apple|yandex|soundcloud|bandcamp|youtube):(.+)$/.exec(trackKey);
-      const track = match ? favoriteTracks.find((item) => item.provider === match[1] && item.id === match[2]) : null;
-      return track ? <ProfileMusicPlayerItem key={trackKey} profileQueue={playlistQueue} showGenres={false} track={track} /> : (
-        <Text key={trackKey} style={localStyles.playlistUnavailableTrack}>Трек больше недоступен</Text>
-      );
-    }
-    if (trackKey.startsWith('upload:')) {
-      const track = readyUploadedTracks.find((item) => item.id === trackKey.slice('upload:'.length));
-      return track?.publicUrl ? (
-        <TrackPlayerPill
-          artist={track.artist?.trim() || profile.name}
-          artworkUrl={track.artworkUrl}
-          clipDurationSeconds={track.durationSeconds}
-          externalUrl={null}
-          key={trackKey}
-          previewUrl={`${apiUrl}/my-music/stream/${encodeURIComponent(track.id)}`}
-          provider="volna"
-          queue={playlistQueue.length > 1 ? playlistQueue : undefined}
-          queueIndex={playlistQueue.findIndex((item) => item.id === uploadedTrackPlayerId(track.id))}
-          startSeconds={0}
-          title={track.title}
-          variant="card"
-        />
-      ) : <Text key={trackKey} style={localStyles.playlistUnavailableTrack}>Трек больше недоступен</Text>;
-    }
-    return <Text key={trackKey} style={localStyles.playlistUnavailableTrack}>Трек больше недоступен</Text>;
-  };
-
   useEffect(() => {
-    const query = searchQuery.trim();
-    if (query.length < 2) {
-      setSearchResults([]);
-      setSearchTotal(0);
-      setIsSearchLoading(false);
-      return;
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      setIsSearchLoading(true);
-      void fetch(`${apiUrl}/my-music/catalog/search?q=${encodeURIComponent(query)}&limit=3`, { signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok) throw new Error(await readApiError(response, 'Не удалось выполнить поиск'));
-          return response.json() as Promise<{ tracks: CatalogSearchTrack[]; total: number }>;
-        })
-        .then((result) => {
-          setSearchResults(result.tracks);
-          setSearchTotal(result.total);
-        })
-        .catch((error) => {
-          if (controller.signal.aborted) return;
-          setSearchResults([]);
-          setSearchTotal(0);
-          onNotify(error instanceof Error ? error.message : 'Не удалось выполнить поиск', 'error');
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setIsSearchLoading(false);
-        });
-    }, remoteSearchDebounceMs);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [onNotify, searchQuery]);
+    // A successful fresh read may show that the playlist was deleted in its editor.
+    if (selectedPlaylistId && hasLoadedPlaylists && !isPlaylistsLoading && !playlistsError && !selectedPlaylist) onBack();
+  }, [selectedPlaylistId, selectedPlaylist, hasLoadedPlaylists, isPlaylistsLoading, playlistsError, onBack]);
+  const renderPlaylistTrack = (trackKey: string, playlistQueue: GlobalTrackQueueItem[]) => playlistTrackPlayer(trackKey, playlistQueue, favoriteTracks, readyUploadedTracks, profile.name);
 
-  const openAllSearchResults = async () => {
-    const query = searchQuery.trim();
-    if (query.length < 2) return;
-    setIsSearchLoading(true);
-    try {
-      const response = await fetch(`${apiUrl}/my-music/catalog/search?q=${encodeURIComponent(query)}&limit=50`);
-      if (!response.ok) throw new Error(await readApiError(response, 'Не удалось выполнить поиск'));
-      const result = await response.json() as { tracks: CatalogSearchTrack[]; total: number };
-      setSearchResults(result.tracks);
-      setSearchTotal(result.total);
-      setSelectedCategory('search');
-    } catch (error) {
-      onNotify(error instanceof Error ? error.message : 'Не удалось выполнить поиск', 'error');
-    } finally {
-      setIsSearchLoading(false);
-    }
-  };
   const refreshCatalog = useCallback(async () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
@@ -583,39 +508,15 @@ export function MusicCatalogScreen({
         loadListenLater(),
         loadPlaylists(),
         loadFavoriteRadios(),
-        selectedCategory === 'search' && searchQuery.trim().length >= 2 ? openAllSearchResults() : Promise.resolve(),
       ]);
     } finally {
       setIsRefreshing(false);
     }
-  }, [isRefreshing, loadFavoriteRadios, loadListenLater, loadPlaylists, onRefreshProfile, searchQuery, selectedCategory]);
+  }, [isRefreshing, loadFavoriteRadios, loadListenLater, loadPlaylists, onRefreshProfile]);
   const refreshControl = <AppRefreshControl refreshing={isRefreshing} tintColor="#111" onRefresh={() => void refreshCatalog()} />;
 
-  const renderCatalogTrack = (track: CatalogSearchTrack) => {
-    const queueItem = catalogTrackQueueItem(track);
-    return <TrackPlayerPill
-      artist={track.artist}
-      artworkUrl={track.artworkUrl}
-      clipDurationSeconds={track.clipDurationSeconds ?? undefined}
-      collectionId={track.collectionId}
-      collectionTitle={track.collectionTitle}
-      externalUrl={track.externalUrl}
-      key={`${track.provider}:${track.id}`}
-      labelName={track.labelName}
-      labelUsername={track.labelUsername}
-      previewUrl={track.previewUrl}
-      provider={track.provider}
-      queue={catalogSearchQueue.length > 1 ? catalogSearchQueue : undefined}
-      queueIndex={catalogSearchQueue.findIndex((item) => item.id === queueItem.id)}
-      queueWindowResolver={resolveCatalogSearchQueue}
-      releaseId={track.releaseId}
-      startSeconds={track.startSeconds}
-      title={track.title}
-      variant="card"
-    />;
-  };
-  const renderListenLaterItem = (item: ListenLaterItem) => {
-    const itemQueue = item.tracks.map((track) => listenLaterQueueItem(item, track));
+  const renderListenLaterItem = ({ item, tracks, reviewed }: (typeof listenLaterGroups)[number]) => {
+    const itemQueue = tracks.map((track) => listenLaterQueueItem(item, track));
     const first = itemQueue[0];
     if (!first) return null;
     const activeTrack = globalAudio.activeTrack;
@@ -625,8 +526,12 @@ export function MusicCatalogScreen({
       || Boolean(track.releaseId && track.releaseId === activeTrack.releaseId)
     )));
     return (
-      <View key={item.id} style={localStyles.listenLaterCard}>
+      <View key={`${item.id}:${reviewed ? 'reviewed' : 'fresh'}`} style={localStyles.listenLaterCard}>
         <TrackPlayerPill
+          playerTrackId={first.id}
+          listenLaterItemId={item.id}
+          listenLaterTrackId={first.listenLaterTrackId}
+          reviewed={first.reviewed}
           artist={first.artist || item.artist}
           artworkUrl={first.artworkUrl}
           clipDurationSeconds={first.clipDurationSeconds}
@@ -645,8 +550,12 @@ export function MusicCatalogScreen({
         />
         {itemQueue.length > 1 ? (
           <ExpandableReleaseTrackList expanded={isReleaseActive} itemCount={itemQueue.length - 1}>
-            {itemQueue.slice(1).map((track, index) => (
+            {itemQueue.slice(1).map((track) => (
               <TrackPlayerPill
+                playerTrackId={track.id}
+                listenLaterItemId={item.id}
+                listenLaterTrackId={track.listenLaterTrackId}
+                reviewed={track.reviewed}
                 artist={track.artist}
                 artworkUrl={track.artworkUrl}
                 clipDurationSeconds={track.clipDurationSeconds}
@@ -654,7 +563,7 @@ export function MusicCatalogScreen({
                 collectionTitle={item.title}
                 externalUrl={track.externalUrl ?? null}
                 key={track.id}
-                leadingLabel={`${index + 2}`}
+                leadingLabel={`${item.tracks.findIndex((source) => source.id === track.listenLaterTrackId) + 1}`}
                 previewUrl={track.previewUrl}
                 provider={track.provider}
                 queue={listenLaterQueue}
@@ -675,60 +584,52 @@ export function MusicCatalogScreen({
   return (
     <View style={localStyles.catalogScreen}>
       <ScreenTopBar title="Музыка" onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} />
-      {selectedCategory ? (
-        <>
-          <CatalogInnerHeader
-            backLabel="Назад к категориям музыки"
-            onBack={() => setSelectedCategory(null)}
-            title={selectedCategory === 'recommendations' ? 'Лента рекомендаций' : selectedCategory === 'playlists' ? 'Мои плейлисты' : selectedCategory === 'radios' ? 'Мои радиостанции' : selectedCategory === 'search' ? 'Результаты поиска' : 'Отложенные релизы'}
-            trailingAction={selectedCategory === 'playlists' ? (
+      {!selectedCategory ? <>
+        <View style={searchFieldStyles.toolbar}>
+          <SearchField placeholder="Поиск музыки" value={searchQuery} onChangeText={setSearchQuery} onClear={() => setSearchQuery('')} maxLength={100} returnKeyType="search" />
+        </View>
+        <CatalogTabs tabs={[{ value: 'mine', label: 'Моя музыка' }, { value: 'browse', label: 'Обзор' }]} value={activeTab} onChange={setActiveTab} />
+      </> : null}
+      {!selectedCategory && (activeTab === 'browse' || searchQuery.trim()) ? <MusicDiscovery query={searchQuery} personalItems={personalSearchItems} genres={searchGenres} onChangeGenres={setSearchGenres} /> : selectedCategory ? (
+        <CatalogBackArea routeKey={`${selectedCategory}:${selectedPlaylistId ?? ''}`} enabled={!isListenLaterInfoVisible && !isPlaylistCreateVisible} onBack={onBack}>
+          {selectedCategory !== 'downloads' ? <CatalogInnerHeader
+            backLabel={selectedPlaylistId ? 'Назад к плейлистам' : 'Назад к категориям музыки'}
+            onBack={onBack}
+            title={selectedPlaylistId ? selectedPlaylist?.name ?? 'Плейлист' : selectedCategory === 'playlists' ? 'Мои плейлисты' : selectedCategory === 'radios' ? 'Мои радиостанции' : 'Отложенные релизы'}
+            subtitle={selectedPlaylist ? `${selectedPlaylist.tracks.length} тр.` : undefined}
+            trailingAction={selectedPlaylist ? (
+              <Pressable accessibilityLabel={`Редактировать плейлист ${selectedPlaylist.name}`} accessibilityRole="button" onPress={() => onEditPlaylist(selectedPlaylist.id)} style={localStyles.catalogHeaderAction}>
+                <Pencil color="#111" size={21} strokeWidth={1.8} />
+              </Pressable>
+            ) : selectedCategory === 'playlists' && !selectedPlaylistId ? (
               <Pressable accessibilityLabel="Создать плейлист" accessibilityRole="button" disabled={catalogPlaylists.length >= 20} onPress={openPlaylistCreate} style={[localStyles.catalogHeaderAction, catalogPlaylists.length >= 20 && localStyles.disabled]}>
                 <Plus color="#111" size={23} strokeWidth={1.9} />
               </Pressable>
+            ) : selectedCategory === 'listen' ? (
+              <Pressable accessibilityLabel="Как работают отложенные релизы" accessibilityRole="button" onPress={() => setIsListenLaterInfoVisible(true)} style={localStyles.catalogHeaderAction}>
+                <Info color="#6f7b86" size={21} strokeWidth={1.8} />
+              </Pressable>
             ) : undefined}
-          />
-          {selectedCategory === 'search' ? (
-            <ScrollView alwaysBounceVertical contentContainerStyle={localStyles.allSearchResults} refreshControl={refreshControl} showsVerticalScrollIndicator={false}>
-              <Text style={localStyles.allSearchSummary}>{searchTotal ? `Найдено: ${searchTotal}` : 'Ничего не найдено'}</Text>
-              <View style={localStyles.searchTrackList}>{searchResults.map(renderCatalogTrack)}</View>
-            </ScrollView>
-          ) : selectedCategory === 'listen' ? (
+          /> : null}
+          {selectedCategory === 'downloads' ? <DownloadedMusic onBack={onBack} /> : selectedCategory === 'listen' ? (
             <ScrollView alwaysBounceVertical contentContainerStyle={localStyles.listenLaterContent} refreshControl={refreshControl} showsVerticalScrollIndicator={false}>
-              {isListenLaterLoading && !listenLaterItems.length ? <ActivityIndicator color="#6f7b86" /> : null}
-              {listenLaterItems.map(renderListenLaterItem)}
+              {isListenLaterLoading && !listenLaterItems.length ? <LoadingIndicator /> : null}
+              {listenLaterGroups.map(renderListenLaterItem)}
               {!isListenLaterLoading && !listenLaterItems.length ? <Text style={localStyles.catalogEmptyTitle}>Здесь пока ничего нет</Text> : null}
             </ScrollView>
           ) : selectedCategory === 'playlists' ? (
-            <ScrollView alwaysBounceVertical contentContainerStyle={localStyles.catalogPlaylistContent} refreshControl={refreshControl} showsVerticalScrollIndicator={false}>
-              {isPlaylistsLoading && !catalogPlaylists.length ? <ActivityIndicator color="#6f7b86" /> : null}
-              {catalogPlaylists.map((playlist) => (
-                <View key={playlist.id} style={localStyles.catalogPlaylistBlock}>
-                  <View style={localStyles.catalogPlaylistRow}>
-                    {playlist.artworkThumbnailUrl || playlist.artworkUrl ? <Image source={{ uri: playlist.artworkThumbnailUrl ?? playlist.artworkUrl! }} style={localStyles.catalogPlaylistArtwork} /> : <View style={localStyles.catalogPlaylistArtworkFallback}><ListMusic color="#6f7b86" size={20} /></View>}
-                    <View style={localStyles.catalogPlaylistCopy}>
-                      <Text numberOfLines={1} style={localStyles.catalogPlaylistTitle}>{playlist.name}</Text>
-                      <Text style={localStyles.catalogPlaylistMeta}>{playlist.tracks.length} тр.</Text>
-                    </View>
-                    <Pressable accessibilityLabel={`Редактировать плейлист ${playlist.name}`} accessibilityRole="button" onPress={() => onEditPlaylist(playlist.id)} style={localStyles.catalogPlaylistAction}>
-                      <Pencil color="#6f7b86" size={18} strokeWidth={1.8} />
-                    </Pressable>
-                    <Pressable accessibilityLabel={expandedPlaylistIds.includes(playlist.id) ? `Свернуть плейлист ${playlist.name}` : `Развернуть плейлист ${playlist.name}`} accessibilityRole="button" onPress={() => toggleExpandedPlaylist(playlist.id)} style={localStyles.catalogPlaylistAction}>
-                      <ChevronDown color="#6f7b86" size={21} strokeWidth={1.8} style={{ transform: [{ rotate: expandedPlaylistIds.includes(playlist.id) ? '180deg' : '0deg' }] }} />
-                    </Pressable>
-                  </View>
-                  {expandedPlaylistIds.includes(playlist.id) ? (
-                    <View style={localStyles.catalogPlaylistTracks}>
-                      {playlist.tracks.map((trackKey) => renderPlaylistTrack(trackKey, playlistQueuesById.get(playlist.id) ?? []))}
-                      {!playlist.tracks.length ? <Text style={localStyles.playlistUnavailableTrack}>В плейлисте пока нет треков</Text> : null}
-                    </View>
-                  ) : null}
-                </View>
-              ))}
-              {!isPlaylistsLoading && !catalogPlaylists.length ? <Text style={localStyles.catalogEmptyTitle}>Здесь пока ничего нет</Text> : null}
+            <ScrollView key={selectedPlaylistId ?? 'playlists'} alwaysBounceVertical contentContainerStyle={localStyles.catalogPlaylistContent} refreshControl={refreshControl} showsVerticalScrollIndicator={false}>
+              {isPlaylistsLoading && !catalogPlaylists.length ? <LoadingIndicator /> : null}
+              {playlistsError ? <View><Text style={localStyles.catalogEmptyTitle}>{playlistsError}</Text><Pressable accessibilityRole="button" onPress={() => void loadPlaylists()} style={localStyles.catalogRetryButton}><Text style={localStyles.catalogPlaylistTitle}>Попробовать снова</Text></Pressable></View> : null}
+              {selectedPlaylist ? <>
+                {selectedPlaylist.tracks.map((trackKey) => renderPlaylistTrack(trackKey, playlistQueuesById.get(selectedPlaylist.id) ?? []))}
+                {!selectedPlaylist.tracks.length ? <Text style={localStyles.catalogEmptyTitle}>В плейлисте пока нет треков</Text> : null}
+              </> : !selectedPlaylistId ? <PlaylistGrid playlists={playlistTiles} onOpen={(playlistId) => onOpenDestination({ category: 'playlists', playlistId })} /> : null}
+              {!isPlaylistsLoading && !playlistsError && !selectedPlaylistId && !catalogPlaylists.length ? <Text style={localStyles.catalogEmptyTitle}>Здесь пока ничего нет</Text> : null}
             </ScrollView>
           ) : selectedCategory === 'radios' ? (
             <ScrollView alwaysBounceVertical contentContainerStyle={localStyles.favoriteRadiosContent} refreshControl={refreshControl} showsVerticalScrollIndicator={false}>
-              {isRadiosLoading && !favoriteRadios.length ? <ActivityIndicator color="#6f7b86" /> : null}
+              {isRadiosLoading && !favoriteRadios.length ? <LoadingIndicator /> : null}
               {favoriteRadios.map((station) => (
                 <TrackPlayerPill
                   artist="Радиостанция · Прямой эфир"
@@ -755,93 +656,31 @@ export function MusicCatalogScreen({
               ))}
               {!isRadiosLoading && !favoriteRadios.length ? <Text style={localStyles.catalogEmptyTitle}>{radiosError ?? 'Здесь пока ничего нет'}</Text> : null}
             </ScrollView>
-          ) : <ScrollView alwaysBounceVertical contentContainerStyle={localStyles.catalogEmpty} refreshControl={refreshControl} showsVerticalScrollIndicator={false}><Text style={localStyles.catalogEmptyTitle}>Здесь пока ничего нет</Text></ScrollView>}
-        </>
+          ) : null}
+        </CatalogBackArea>
       ) : (
         <ScrollView alwaysBounceVertical contentContainerStyle={localStyles.catalogContent} refreshControl={refreshControl} showsVerticalScrollIndicator={false}>
-          <View style={localStyles.catalogSearch}>
-            <Search color="#7d8894" size={19} strokeWidth={1.8} />
-            <TextInput
-              accessibilityLabel="Поиск музыки"
-              autoCapitalize="none"
-              autoCorrect={false}
-              onChangeText={setSearchQuery}
-              placeholder="Поиск музыки"
-              placeholderTextColor="#98a3ae"
-              returnKeyType="search"
-              style={localStyles.catalogSearchInput}
-              value={searchQuery}
-            />
-            {isSearchLoading ? <ActivityIndicator color="#6f7b86" size="small" /> : null}
-            {searchQuery.length ? (
-              <Pressable
-                accessibilityLabel="Очистить поиск"
-                accessibilityRole="button"
-                hitSlop={8}
-                onPress={() => setSearchQuery('')}
-                style={localStyles.catalogSearchClear}
-              >
-                <X color="#6f7b86" size={18} strokeWidth={1.8} />
-              </Pressable>
-            ) : null}
-          </View>
-          {searchQuery.trim().length >= 2 ? (
-            <View style={localStyles.searchDropdown}>
-              {searchResults.map(renderCatalogTrack)}
-              {!isSearchLoading && !searchResults.length ? <Text style={[localStyles.searchDropdownState, localStyles.searchDropdownEmptyState]}>Ничего не найдено</Text> : null}
-              {searchTotal > 3 ? <Pressable accessibilityRole="button" onPress={() => void openAllSearchResults()} style={localStyles.searchAllButton}><Text style={localStyles.searchAllButtonText}>Смотреть все</Text></Pressable> : null}
+          <View accessibilityLabel="Разделы моей музыки" style={musicCategoryStyles.row}>
+            <View style={musicCategoryStyles.slot}>
+              <MusicCategoryTile artworkUrl={playlistTileArtwork} label="Мои плейлисты" onPress={() => onOpenDestination({ category: 'playlists' })} />
             </View>
-          ) : null}
-          <View style={localStyles.catalogSectionHeader}>
-            <Text style={localStyles.catalogSectionTitle}>Лента рекомендаций</Text>
-            <Pressable accessibilityLabel="Слушать поток рекомендаций" accessibilityRole="button" onPress={() => setSelectedCategory('recommendations')} style={localStyles.catalogStreamButton}>
-              <Play color="#111" fill="#111" size={14} strokeWidth={1.8} />
-              <Text style={localStyles.catalogStreamButtonText}>Слушать поток</Text>
-            </Pressable>
-          </View>
-          <View accessibilityLabel="Лента рекомендаций" style={localStyles.recommendationRow}>
-            {[0, 1, 2].map((item) => <Pressable accessibilityLabel={`Рекомендация ${item + 1}`} accessibilityRole="button" key={item} onPress={() => setSelectedCategory('recommendations')} style={localStyles.recommendationTile} />)}
+            <View style={musicCategoryStyles.slot}>
+              <MusicCategoryTile artworkUrl={listenLaterTileArtwork} label="Отложенные релизы" onPress={() => onOpenDestination({ category: 'listen' })} />
+            </View>
+            <View style={musicCategoryStyles.slot}>
+              <MusicCategoryTile artworkUrl={radioTileArtwork} label="Мои радиостанции" onPress={() => onOpenDestination({ category: 'radios' })} />
+            </View>
           </View>
 
-          <View style={[localStyles.catalogSectionHeader, localStyles.myMusicTitle]}>
-            <Text style={localStyles.catalogSectionTitle}>Мои треки</Text>
-            {hasLoadedPlaylists && !catalogPlaylists.length ? (
-              <Pressable accessibilityLabel="Создать плейлист" accessibilityRole="button" onPress={openPlaylistCreate} style={localStyles.catalogStreamButton}>
-                <Plus color="#111" size={15} strokeWidth={1.9} />
-                <Text style={localStyles.catalogStreamButtonText}>Создать плейлист</Text>
-              </Pressable>
-            ) : null}
-          </View>
-          {catalogPlaylists.length || listenLaterItems.length || favoriteRadios.length ? (
-            <View accessibilityLabel="Разделы моей музыки" style={localStyles.musicCategoryRow}>
-              <View style={localStyles.musicCategorySlot}>
-                {catalogPlaylists.length ? (
-                  <MusicCategoryTile artworkUrl={playlistTileArtwork} label="Мои плейлисты" onPress={() => setSelectedCategory('playlists')} />
-                ) : null}
-              </View>
-              <View style={localStyles.musicCategorySlot}>
-                {listenLaterItems.length ? (
-                  <MusicCategoryTile artworkUrl={listenLaterTileArtwork} label="Отложенные релизы" onPress={() => setSelectedCategory('listen')} />
-                ) : null}
-              </View>
-              <View style={localStyles.musicCategorySlot}>
-                {favoriteRadios.length ? (
-                  <MusicCategoryTile artworkUrl={radioTileArtwork} label="Мои радиостанции" onPress={() => setSelectedCategory('radios')} />
-                ) : null}
-              </View>
-            </View>
-          ) : null}
-
-          <AnimatedSegmentedControl
-            accessibilityLabel="Раздел сохранённой музыки"
-            containerStyle={localStyles.trackSectionTabs}
-            onChange={setTrackSection}
-            options={[
-              { value: 'tracks', label: 'Все треки' },
-              { value: 'fragments', label: 'Фрагменты' },
-            ]}
-            value={trackSection}
-          />
+          <Pressable accessibilityRole="button" onPress={onOpenMyMusic} style={localStyles.uploadButton}>
+            <Plus color="#111" size={20} />
+            <Text style={localStyles.uploadButtonText}>Загрузить релиз</Text>
+          </Pressable>
+          {supportsDeviceDownloads() && downloads.items.length > 0 ? <Pressable accessibilityRole="button" accessibilityLabel="Скачанное на это устройство" onPress={() => onOpenDestination({ category: 'downloads' })} style={[localStyles.catalogPlaylistRow, localStyles.downloadsEntry]}>
+            <View style={localStyles.catalogPlaylistArtworkFallback}><Download color="#111" size={22} /></View>
+            <View style={localStyles.catalogPlaylistCopy}><Text style={localStyles.catalogPlaylistTitle}>Скачанное</Text><Text style={localStyles.catalogPlaylistMeta}>На этом устройстве</Text></View>
+            <ChevronLeft color="#6f7b86" size={20} style={{ transform: [{ rotate: '180deg' }] }} />
+          </Pressable> : null}
           <View style={localStyles.favoriteTrackList}>
             {visibleMusicEntries.map((entry) => entry.kind === 'upload'
               ? <UploadedMusicPlayerCard key={`upload:${entry.track.id}`} ownerName={profile.name} queue={favoriteQueue} queueWindowResolver={resolveFavoriteQueue} track={entry.track} />
@@ -855,10 +694,23 @@ export function MusicCatalogScreen({
                   <ProfileMusicPlayerItem profileQueue={favoriteQueue} queueWindowResolver={resolveFavoriteQueue} showGenres={false} track={entry.track} />
                 </AnimatedMusicLibraryRow>
               ))}
-            {!visibleFavoriteTracks.length && (trackSection === 'fragments' || !readyUploadedTracks.length) ? <Text style={localStyles.favoriteTracksEmpty}>{trackSection === 'fragments' ? 'Сохранённых фрагментов пока нет' : 'Сохранённых треков пока нет'}</Text> : null}
+            {!favoriteTracks.length && !readyUploadedTracks.length ? <Text style={localStyles.favoriteTracksEmpty}>Сохранённых треков пока нет</Text> : null}
           </View>
         </ScrollView>
       )}
+      <AppSheetModal
+        isVisible={isListenLaterInfoVisible}
+        onClose={() => setIsListenLaterInfoVisible(false)}
+        title="Отложенные релизы"
+        scroll
+        contentContainerStyle={localStyles.listenLaterInfoContent}
+        footer={<Pressable accessibilityRole="button" onPress={() => setIsListenLaterInfoVisible(false)} style={localStyles.playlistCreateButton}><Text style={localStyles.playlistCreateButtonText}>Понятно</Text></Pressable>}
+      >
+        <Text style={localStyles.listenLaterInfoText}>Сохраняйте сюда релизы, которые хотите послушать позже — например, новинки лейблов и артистов, на которых вы подписаны. Для этого нажмите «Слушать позже» в плеере.</Text>
+        <Text style={localStyles.listenLaterInfoText}>Когда появится время, включите любой непрослушанный трек. Дальше по очереди будут играть остальные отложенные треки.</Text>
+        <Text style={localStyles.listenLaterInfoText}>Понравилось — добавьте трек или весь релиз в «Мою музыку». Добавленное исчезнет из отложенных. Если не понравилось, просто слушайте дальше.</Text>
+        <Text style={localStyles.listenLaterInfoText}>После окончания трека или перехода к другому он отмечается как прослушанный. Такие треки остаются в списке с галочкой, но больше не попадают в очередь. Их можно включить отдельно. Пауза не меняет статус.</Text>
+      </AppSheetModal>
       <AppSheetModal isVisible={isPlaylistCreateVisible} onClose={closePlaylistCreate} title="Новый плейлист">
         <TextInput
           accessibilityLabel="Название нового плейлиста"
@@ -873,7 +725,7 @@ export function MusicCatalogScreen({
           value={newPlaylistName}
         />
         <Pressable accessibilityRole="button" disabled={isPlaylistCreating || !newPlaylistName.trim()} onPress={() => void createPlaylist()} style={[localStyles.playlistCreateButton, (isPlaylistCreating || !newPlaylistName.trim()) && localStyles.disabled]}>
-          {isPlaylistCreating ? <ActivityIndicator color="#fff" size="small" /> : <Text style={localStyles.playlistCreateButtonText}>Создать</Text>}
+          {isPlaylistCreating ? <LoadingIndicator tone="inverse" size="small" /> : <Text style={localStyles.playlistCreateButtonText}>Создать</Text>}
         </Pressable>
       </AppSheetModal>
     </View>
@@ -881,6 +733,8 @@ export function MusicCatalogScreen({
 }
 
 export function MyMusicScreen({
+  onPlaylistEditorVisibilityChange,
+  playlistPlayer,
   authToken,
   initialPlaylistId,
   onBack,
@@ -891,6 +745,8 @@ export function MyMusicScreen({
   profile,
 }: {
   authToken: string;
+  onPlaylistEditorVisibilityChange?: (visible: boolean) => void;
+  playlistPlayer?: ReactNode;
   initialPlaylistId?: string | null;
   onBack: () => void;
   onInitialPlaylistOpened?: () => void;
@@ -911,6 +767,15 @@ export function MyMusicScreen({
   const [isUploadEditSaving, setIsUploadEditSaving] = useState(false);
   const [playlists, setPlaylists] = useState<MusicPlaylist[]>([]);
   const [playlistDraft, setPlaylistDraft] = useState<MusicPlaylist | null>(null);
+  const [playlistEditorError, setPlaylistEditorError] = useState<string | null>(null);
+  const [isPlaylistDeleteVisible, setIsPlaylistDeleteVisible] = useState(false);
+  const playlistSaveInFlight = useRef(false);
+  const playlistEditorVisible = Boolean(playlistDraft);
+  useEffect(() => {
+    onPlaylistEditorVisibilityChange?.(playlistEditorVisible);
+    return () => onPlaylistEditorVisibilityChange?.(false);
+  }, [playlistEditorVisible, onPlaylistEditorVisibilityChange]);
+  useEffect(() => { setPlaylistEditorError(null); setIsPlaylistDeleteVisible(false); }, [playlistDraft?.id]);
   const [returnToCatalogAfterPlaylistEditor, setReturnToCatalogAfterPlaylistEditor] = useState(false);
   const [playlistArtworkCropAsset, setPlaylistArtworkCropAsset] = useState<AvatarCropAsset | null>(null);
   const [arePlaylistsSaving, setArePlaylistsSaving] = useState(false);
@@ -918,7 +783,14 @@ export function MyMusicScreen({
   const [externalReleaseUrl, setExternalReleaseUrl] = useState('');
   const [externalReleaseGenres, setExternalReleaseGenres] = useState<string[]>([]);
   const [externalReleaseSelf, setExternalReleaseSelf] = useState(false);
-  const [externalReleaseDate, setExternalReleaseDate] = useState('');
+  const [externalDateDraft, dispatchExternalDate] = useReducer(releaseDateDraftReducer, emptyReleaseDateDraft);
+  const externalReleaseDate = externalDateDraft.value;
+  const setExternalReleaseDate = (value: string) => dispatchExternalDate({ type: 'manual', value });
+  const changeExternalReleaseUrl = (url: string) => {
+    dispatchExternalDate({ type: 'url', url });
+    setExternalReleaseUrl(url);
+    setExternalReleasePreview(null);
+  };
   const [isExternalReleaseSaving, setIsExternalReleaseSaving] = useState(false);
   const [externalReleasePreview, setExternalReleasePreview] = useState<ExternalReleasePreview | null>(null);
   const [externalReleaseResolveError, setExternalReleaseResolveError] = useState<string | null>(null);
@@ -935,6 +807,8 @@ export function MyMusicScreen({
     provider: 'volna' as const,
     startSeconds: 0,
     clipDurationSeconds: track.durationSeconds,
+    genres: track.genres,
+    releaseDate: track.releaseDate,
   }] : []), [library?.tracks, profile.name]);
   const loadLibrary = useCallback(async () => {
     try {
@@ -983,6 +857,7 @@ export function MyMusicScreen({
         .then((preview) => {
           if (!isCurrent) return;
           setExternalReleasePreview(preview);
+          dispatchExternalDate({ type: 'resolved', url: releaseUrl, releaseDate: preview.metadata.releaseDate });
           setExternalReleaseResolveError(null);
         })
         .catch((error: unknown) => {
@@ -1012,6 +887,9 @@ export function MyMusicScreen({
   }, [initialPlaylistId, library, onInitialPlaylistOpened, playlists]);
 
   const normalizedTracks = tracks;
+  const playlistArtworkLookup = useMemo(() => playlistTrackArtworkLookup(normalizedTracks, library?.tracks ?? []), [normalizedTracks, library?.tracks]);
+  const playlistDraftArtwork = playlistDraft ? resolvePlaylistArtwork(playlistDraft, playlistArtworkLookup) : null;
+  const hasCustomPlaylistArtwork = Boolean(playlistDraft && !playlistDraft.removeArtwork && (playlistDraft.artworkLocalUri || playlistDraft.artworkThumbnailUrl || playlistDraft.artworkUrl));
   const playlistTrackOptions = useMemo(() => [
     ...normalizedTracks.map((track) => ({ key: `profile:${track.provider}:${track.id}`, title: track.title, meta: track.artist || (track.provider === 'bandcamp' ? 'Bandcamp' : track.provider === 'soundcloud' ? 'SoundCloud' : '') })),
     ...(library?.tracks ?? []).filter((track) => track.status === 'READY').map((track) => ({ key: `upload:${track.id}`, title: track.title, meta: `${track.artist?.trim() || profile.name} · ${minutes(track.durationSeconds)}` })),
@@ -1019,10 +897,15 @@ export function MyMusicScreen({
   const playlistDraftTracks = useMemo(() => {
     if (!playlistDraft) return [];
     const optionsByKey = new Map(playlistTrackOptions.map((track) => [track.key, track]));
-    return playlistDraft.tracks.map((key) => optionsByKey.get(key)).filter((track): track is (typeof playlistTrackOptions)[number] => Boolean(track));
-  }, [playlistDraft, playlistTrackOptions]);
+    const readyUploads = (library?.tracks ?? []).filter(track => track.status === 'READY');
+    const queue = buildPlaylistQueue(playlistDraft.tracks, normalizedTracks, readyUploads, profile.name);
+    return playlistDraft.tracks.map(key => ({ key, title: optionsByKey.get(key)?.title ?? 'Недоступный трек', player: playlistTrackPlayer(key, queue, normalizedTracks, readyUploads, profile.name) }));
+  }, [playlistDraft, playlistTrackOptions, normalizedTracks, library?.tracks, profile.name]);
 
   const savePlaylists = async (next: MusicPlaylist[]) => {
+    if (playlistSaveInFlight.current) return;
+    playlistSaveInFlight.current = true;
+    setPlaylistEditorError(null);
     const shouldReturnToCatalog = returnToCatalogAfterPlaylistEditor;
     setArePlaylistsSaving(true);
     try {
@@ -1037,8 +920,9 @@ export function MyMusicScreen({
       onNotify('Плейлисты сохранены');
       if (shouldReturnToCatalog) onBack();
     } catch (error) {
-      onNotify(error instanceof Error ? error.message : 'Не удалось сохранить плейлисты', 'error');
+      setPlaylistEditorError(error instanceof Error ? error.message : 'Не удалось сохранить плейлисты');
     } finally {
+      playlistSaveInFlight.current = false;
       setArePlaylistsSaving(false);
     }
   };
@@ -1135,6 +1019,7 @@ export function MyMusicScreen({
   };
 
   const closePlaylistEditor = () => {
+    if (arePlaylistsSaving) return;
     const pendingArtworkKey = playlistDraft?.artworkUploadKey;
     const shouldReturnToCatalog = returnToCatalogAfterPlaylistEditor;
     setPlaylistDraft(null);
@@ -1149,17 +1034,7 @@ export function MyMusicScreen({
     if (pendingArtworkKey) void discardMusicArtworkAsset(pendingArtworkKey, authToken).catch(() => undefined);
   };
 
-  const confirmDeletePlaylist = (playlist: MusicPlaylist) => {
-    const performDelete = () => void savePlaylists(playlists.filter((item) => item.id !== playlist.id));
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm(`Удалить плейлист «${playlist.name}»? Сами треки останутся в медиатеке.`)) performDelete();
-      return;
-    }
-    Alert.alert('Удалить плейлист?', `Плейлист «${playlist.name}» и его обложка будут удалены. Сами треки останутся в медиатеке.`, [
-      { text: 'Отмена', style: 'cancel' },
-      { text: 'Удалить', style: 'destructive', onPress: performDelete },
-    ]);
-  };
+  const confirmDeletePlaylist = () => { setPlaylistEditorError(null); setIsPlaylistDeleteVisible(true); };
 
   const closeUploadModal = async () => {
     const draft = uploadDraft;
@@ -1234,7 +1109,7 @@ export function MyMusicScreen({
           externalUrl: externalReleaseUrl.trim(),
           genres: externalReleaseGenres,
           includeSelfAsParticipant: externalReleaseSelf,
-          releaseDate: releaseDateInputToIso(externalReleaseDate),
+          releaseDate: releaseDateInputToIso(externalReleaseDate) ?? (externalDateDraft.edited ? null : undefined),
         }),
       });
       if (!response.ok) throw new Error(await readApiError(response, 'Не удалось добавить релиз'));
@@ -1247,10 +1122,9 @@ export function MyMusicScreen({
         next[duplicateIndex] = result.track;
         return next;
       });
-      setExternalReleaseUrl('');
+      changeExternalReleaseUrl('');
       setExternalReleaseGenres([]);
       setExternalReleaseSelf(false);
-      setExternalReleaseDate('');
       setExternalReleasePreview(null);
       setExternalReleaseResolveError(null);
       emitMusicLibraryChanged();
@@ -1343,12 +1217,7 @@ export function MyMusicScreen({
 
   return (
     <View style={localStyles.shell}>
-      <View style={localStyles.header}>
-        <Pressable accessibilityLabel="Назад" onPress={onBack} style={localStyles.iconButton}>
-          <ChevronLeft color="#111" size={29} strokeWidth={2.1} />
-        </Pressable>
-        <Text style={localStyles.headerTitle}>Мои треки</Text>
-      </View>
+      <ScreenTopBar onBack={onBack} title="Мои треки" />
       <ScrollView contentContainerStyle={localStyles.content} showsVerticalScrollIndicator={false}>
         <View style={localStyles.card}>
           <View style={localStyles.sectionHeader}>
@@ -1363,7 +1232,7 @@ export function MyMusicScreen({
           <AnimatedSegmentedControl accessibilityLabel="Качество хранения" containerStyle={localStyles.segment} onChange={setQuality} options={[{ value: 'AAC_128', label: 'AAC · 128 кбит/с' }, { value: 'AAC_256', label: 'AAC · 256 кбит/с' }]} value={quality} />
           <Text style={localStyles.hint}>Файл не перекодируется повторно, если он уже в выбранном кодеке и его битрейт такой же или ниже.</Text>
           <Pressable disabled={isUploading} onPress={() => void pickAndUpload()} style={localStyles.uploadButton}>
-            {isUploading ? <ActivityIndicator color="#111" /> : <><Plus color="#111" size={20} /><Text style={localStyles.uploadButtonText}>Загрузить трек</Text></>}
+            {isUploading ? <LoadingIndicator /> : <><Plus color="#111" size={20} /><Text style={localStyles.uploadButtonText}>Загрузить трек</Text></>}
           </Pressable>
 
           {uploadProgress ? (
@@ -1402,7 +1271,7 @@ export function MyMusicScreen({
             </View>
           ) : null}
 
-          {isLoading ? <ActivityIndicator color="#111" style={{ marginTop: 18 }} /> : null}
+          {isLoading ? <LoadingIndicator style={{ marginTop: 18 }} /> : null}
           {library?.tracks.map((track) => {
             const playerTrackId = uploadedTrackPlayerId(track.id);
             const queueIndex = uploadedQueue.findIndex((item) => item.id === playerTrackId);
@@ -1422,6 +1291,8 @@ export function MyMusicScreen({
                 provider: 'volna',
                 startSeconds: 0,
                 clipDurationSeconds: track.durationSeconds,
+                genres: track.genres,
+                releaseDate: track.releaseDate,
                 queue: uploadedQueue.length > 1 ? uploadedQueue : undefined,
                 queueIndex: queueIndex >= 0 ? queueIndex : undefined,
               });
@@ -1462,7 +1333,7 @@ export function MyMusicScreen({
               error={externalReleaseResolveError}
               hint="Поддерживаются ссылки SoundCloud и Bandcamp."
               isResolving={isExternalReleaseResolving}
-              onChangeText={setExternalReleaseUrl}
+              onChangeText={changeExternalReleaseUrl}
               onResolve={() => setExternalReleaseResolveRevision((current) => current + 1)}
               preview={externalReleasePreview}
               surface="outlined"
@@ -1514,7 +1385,7 @@ export function MyMusicScreen({
               (isExternalReleaseSaving || !externalReleasePreview || !externalReleaseGenres.length || !externalReleaseGenres.every(isMusicSubgenreValue)) && localStyles.disabled,
             ]}
           >
-            {isExternalReleaseSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={localStyles.releaseAddButtonText}>Добавить релиз</Text>}
+            {isExternalReleaseSaving ? <LoadingIndicator tone="inverse" size="small" /> : <Text style={localStyles.releaseAddButtonText}>Добавить релиз</Text>}
           </Pressable>
         </View>
       </ScrollView>
@@ -1592,7 +1463,7 @@ export function MyMusicScreen({
             onPress={() => void saveUploadedTrack()}
             style={[localStyles.primaryButton, localStyles.editUploadSaveButton, (isUploadEditSaving || !uploadEditDraft.title.trim() || !uploadEditDraft.genres.length || !uploadEditDraft.genres.every(isMusicSubgenreValue)) && localStyles.disabled]}
           >
-            {isUploadEditSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={localStyles.primaryButtonText}>Сохранить</Text>}
+            {isUploadEditSaving ? <LoadingIndicator tone="inverse" size="small" /> : <Text style={localStyles.primaryButtonText}>Сохранить</Text>}
           </Pressable>
         ) : undefined}
         isVisible={Boolean(uploadEditDraft)}
@@ -1672,24 +1543,25 @@ export function MyMusicScreen({
         title="Дата релиза"
       />
       <Modal animationType="slide" onRequestClose={closePlaylistEditor} presentationStyle="fullScreen" visible={Boolean(playlistDraft)}>
-        <View style={[localStyles.playlistEditorScreen, { paddingTop: safeAreaInsets.top, paddingBottom: safeAreaInsets.bottom }]}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={localStyles.playlistEditorKeyboardView}>
-            <View style={localStyles.playlistEditorHeader}>
-              <Pressable accessibilityRole="button" onPress={closePlaylistEditor} style={localStyles.playlistEditorCancel}><Text style={localStyles.playlistEditorCancelText}>Отмена</Text></Pressable>
-              <Text numberOfLines={1} style={localStyles.playlistEditorTitle}>{playlistDraft?.name ? 'Редактировать плейлист' : 'Новый плейлист'}</Text>
-              <Pressable accessibilityRole="button" disabled={arePlaylistsSaving || !playlistDraft?.name.trim()} onPress={() => playlistDraft && void savePlaylists([...playlists.filter((playlist) => playlist.id !== playlistDraft.id), { ...playlistDraft, name: playlistDraft.name.trim() }])} style={[localStyles.playlistEditorSave, (arePlaylistsSaving || !playlistDraft?.name.trim()) && localStyles.disabled]}>{arePlaylistsSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={localStyles.playlistEditorSaveText}>Сохранить</Text>}</Pressable>
-            </View>
-            {playlistDraft ? <ScrollView contentContainerStyle={localStyles.playlistEditorContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              <View style={localStyles.playlistEditorIdentity}>
-                <View style={localStyles.playlistArtworkEditor}><Pressable accessibilityLabel={playlistDraft.artworkUrl || playlistDraft.artworkLocalUri ? 'Заменить обложку плейлиста' : 'Добавить обложку плейлиста'} accessibilityRole="button" disabled={arePlaylistsSaving} onPress={() => void choosePlaylistArtwork()}>{playlistDraft.artworkLocalUri || (playlistDraft.artworkUrl && !playlistDraft.removeArtwork) ? <Image source={{ uri: playlistDraft.artworkLocalUri || playlistDraft.artworkUrl! }} style={localStyles.playlistArtworkPreview} /> : <View style={localStyles.playlistArtworkPlaceholder}><ListMusic color="#6f7b86" size={28} /></View>}</Pressable>{playlistDraft.artworkUrl || playlistDraft.artworkLocalUri ? <Pressable accessibilityLabel="Удалить обложку плейлиста" accessibilityRole="button" onPress={removePlaylistArtwork} style={localStyles.playlistArtworkRemoveButton}><Trash2 color="#e53935" size={18} /></Pressable> : null}</View>
-                <TextInput autoFocus maxLength={60} onChangeText={(name) => setPlaylistDraft((current) => current ? { ...current, name } : current)} placeholder="Название плейлиста" placeholderTextColor="#8e99a4" style={[localStyles.playlistNameInput, localStyles.playlistEditorNameInput]} value={playlistDraft.name} />
-              </View>
-              <Text style={localStyles.playlistTracksTitle}>Треки</Text>
-              {playlistDraftTracks.map((track) => <Pressable accessibilityLabel={`Убрать ${track.title} из плейлиста`} accessibilityRole="button" key={track.key} onPress={() => setPlaylistDraft((current) => current ? { ...current, tracks: current.tracks.filter((key) => key !== track.key) } : current)} style={localStyles.playlistTrackOption}><View style={localStyles.trackCopy}><Text numberOfLines={1} style={localStyles.trackTitle}>{track.title}</Text><Text numberOfLines={1} style={localStyles.trackMeta}>{track.meta}</Text></View><Trash2 color="#6f7b86" size={18} /></Pressable>)}
-              {!playlistDraftTracks.length ? <Text style={localStyles.empty}>В плейлисте пока нет треков</Text> : null}
-              {playlists.some((playlist) => playlist.id === playlistDraft.id) ? <Pressable accessibilityRole="button" onPress={() => { const target = playlists.find((playlist) => playlist.id === playlistDraft.id); if (target) confirmDeletePlaylist(target); }} style={localStyles.deletePlaylistButton}><Trash2 color="#e53935" size={18} /><Text style={localStyles.removeArtworkText}>Удалить плейлист</Text></Pressable> : null}
-            </ScrollView> : null}
-          </KeyboardAvoidingView>
+        <View style={{ flex: 1, paddingTop: safeAreaInsets.top, backgroundColor: '#fff' }}>
+          {playlistDraft ? <PlaylistEditorSurface
+            name={playlistDraft.name} artworkUrl={playlistDraftArtwork} hasCustomArtwork={hasCustomPlaylistArtwork}
+            tracks={playlistDraftTracks} saving={arePlaylistsSaving} error={playlistEditorError}
+            bottomInset={safeAreaInsets.bottom} footer={globalAudio.activeTrack ? playlistPlayer : undefined}
+            onCancel={closePlaylistEditor}
+            onSave={() => void savePlaylists(playlists.map(playlist => playlist.id === playlistDraft.id ? { ...playlistDraft, name: playlistDraft.name.trim() } : playlist))}
+            onChangeName={name => setPlaylistDraft(current => current ? { ...current, name } : current)}
+            onChooseArtwork={() => void choosePlaylistArtwork()} onRemoveArtwork={removePlaylistArtwork}
+            onRemoveTrack={key => setPlaylistDraft(current => current ? { ...current, tracks: current.tracks.filter(value => value !== key) } : current)}
+            onDelete={playlists.some(playlist => playlist.id === playlistDraft.id) ? confirmDeletePlaylist : undefined}
+          /> : null}
+          <AppSheetModal isVisible={isPlaylistDeleteVisible && Boolean(playlistDraft)} onClose={() => { if (!arePlaylistsSaving) setIsPlaylistDeleteVisible(false); }} title="Удалить плейлист?" subtitle="Плейлист и его обложка будут удалены. Треки останутся в медиатеке."
+            footer={<View style={styles.eventFilterActions}>
+              <Pressable accessibilityRole="button" disabled={arePlaylistsSaving} onPress={() => setIsPlaylistDeleteVisible(false)} style={styles.eventFilterReset}><Text style={styles.eventFilterResetText}>Отмена</Text></Pressable>
+              <Pressable accessibilityRole="button" disabled={arePlaylistsSaving} onPress={() => playlistDraft && void savePlaylists(playlists.filter(playlist => playlist.id !== playlistDraft.id))} style={[styles.eventFilterApply, arePlaylistsSaving && styles.disabledButton]}>{arePlaylistsSaving ? <LoadingIndicator tone="inverse" /> : <Text style={styles.eventFilterApplyText}>Удалить</Text>}</Pressable>
+            </View>}>
+            {playlistEditorError ? <Text accessibilityRole="alert" style={styles.settingsError}>{playlistEditorError}</Text> : null}
+          </AppSheetModal>
         </View>
       </Modal>
       <AvatarCropModal asset={playlistArtworkCropAsset} cropShape="square" label="обложку плейлиста" onApply={(uri) => { void applyPlaylistArtwork(uri); }} onClose={() => setPlaylistArtworkCropAsset(null)} />
@@ -1698,61 +1570,31 @@ export function MyMusicScreen({
 }
 
 const localStyles = StyleSheet.create({
+  listenLaterInfoContent: { gap: 14 },
+  listenLaterInfoText: { color: '#323a43', fontSize: 15, lineHeight: 22 },
   catalogScreen: { flex: 1, backgroundColor: '#fff' },
   catalogContent: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 36 },
   catalogHeaderAction: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  catalogSearch: { height: 44, marginBottom: 18, paddingHorizontal: 16, borderRadius: 22, flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: '#f3f5f7' },
-  catalogSearchInput: { flex: 1, minWidth: 0, height: 44, paddingVertical: 0, color: '#111', fontSize: 16 },
-  catalogSearchClear: { width: 24, height: 32, marginRight: -4, alignItems: 'center', justifyContent: 'center' },
-  searchDropdown: { marginTop: -10, marginBottom: 18, padding: 8, borderWidth: 1, borderColor: '#d7dee5', borderRadius: 8, gap: 3, backgroundColor: '#fff' },
-  searchDropdownState: { width: '100%', minHeight: 54, paddingHorizontal: 10, color: '#6f7b86', fontSize: 13, lineHeight: 18, textAlign: 'center', textAlignVertical: 'center' },
-  searchDropdownEmptyState: { lineHeight: 54 },
-  searchDropdownError: { color: '#c62828' },
-  searchAllButton: { minHeight: 44, marginTop: 3, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#d7dee5', alignItems: 'center', justifyContent: 'center' },
-  searchAllButtonText: { color: '#111', fontSize: 14, lineHeight: 19, fontWeight: '600' },
-  allSearchResults: { paddingHorizontal: 18, paddingBottom: 36 },
-  allSearchSummary: { marginBottom: 10, color: '#6f7b86', fontSize: 13, lineHeight: 18 },
-  searchTrackList: { gap: 4 },
-  catalogSectionHeader: { minHeight: 31, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
-  catalogSectionTitle: { color: '#111', fontSize: 16, lineHeight: 23, fontWeight: '500' },
-  catalogStreamButton: { minHeight: 31, marginTop: -4, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
-  catalogStreamButtonText: { color: '#111', fontSize: 14, lineHeight: 19, fontWeight: '500' },
-  recommendationRow: { flexDirection: 'row', gap: 10 },
-  recommendationTile: { flex: 1, aspectRatio: 1, borderRadius: 6, backgroundColor: '#f3f5f7' },
-  myMusicTitle: { marginTop: 24 },
-  musicCategoryRow: { marginTop: 0, flexDirection: 'row', gap: 14 },
-  musicCategorySlot: { flex: 1, aspectRatio: 1.08 },
-  musicCategoryTile: { width: '100%', height: '100%', borderRadius: 6, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, backgroundColor: '#f3f5f7', overflow: 'hidden' },
-  musicCategoryArtwork: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
-  musicCategoryArtworkShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.32)' },
-  musicCategoryTitle: { color: '#111', fontSize: 14, lineHeight: 20, fontWeight: '500', textAlign: 'center' },
-  musicCategoryTitleOnArtwork: { color: '#fff', fontWeight: '600', textShadowColor: 'rgba(0, 0, 0, 0.55)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
-  trackSectionTabs: { marginTop: 16, marginBottom: 6 },
+  downloadsEntry: { marginTop: 16 },
   favoriteTrackList: { marginTop: 12, gap: 4 },
   favoriteTracksEmpty: { minHeight: 80, color: '#6f7b86', fontSize: 14, lineHeight: 20, textAlign: 'center', textAlignVertical: 'center' },
-  catalogEmpty: { minHeight: 176, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
   catalogEmptyTitle: { color: '#6f7b86', fontSize: 14, lineHeight: 20, textAlign: 'center' },
   listenLaterContent: { minHeight: 176, paddingHorizontal: 18, paddingTop: 8, paddingBottom: 36, gap: 4 },
   listenLaterCard: {},
-  catalogPlaylistContent: { minHeight: 176, paddingHorizontal: 18, paddingTop: 8, paddingBottom: 36, gap: 3 },
-  catalogPlaylistBlock: {},
+  catalogPlaylistContent: { minHeight: 176, paddingHorizontal: 18, paddingTop: 16, paddingBottom: 36, gap: 8 },
+  catalogRetryButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   catalogPlaylistRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 5 },
-  catalogPlaylistArtwork: { width: 46, height: 46, borderRadius: 4, backgroundColor: '#f3f5f7' },
   catalogPlaylistArtworkFallback: { width: 46, height: 46, borderRadius: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f3f5f7' },
   catalogPlaylistCopy: { flex: 1, minWidth: 0 },
   catalogPlaylistTitle: { color: '#111', fontSize: 14, lineHeight: 19, fontWeight: '600' },
   catalogPlaylistMeta: { marginTop: 1, color: '#6f7b86', fontSize: 12, lineHeight: 17 },
-  catalogPlaylistAction: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
-  catalogPlaylistTracks: { paddingBottom: 9 },
   playlistUnavailableTrack: { paddingVertical: 10, color: '#7d8894', fontSize: 13, lineHeight: 18 },
   favoriteRadiosContent: { minHeight: 176, paddingHorizontal: 18, paddingTop: 12, paddingBottom: 36, gap: 4 },
   playlistCreateInput: { minHeight: 50, borderWidth: 1, borderColor: '#d7dee5', borderRadius: 8, paddingHorizontal: 14, color: '#111', fontSize: 16, backgroundColor: '#fff' },
   playlistCreateButton: { minHeight: 48, marginTop: 16, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111' },
   playlistCreateButtonText: { color: '#fff', fontSize: 14, lineHeight: 20, fontWeight: '600' },
   shell: { flex: 1, backgroundColor: '#f3f5f7' },
-  header: { height: 52, paddingHorizontal: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: 'rgb(215, 222, 229)', flexDirection: 'row', alignItems: 'center' },
   iconButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '600', marginLeft: 4, color: '#111' },
   content: { padding: 16, gap: 14, paddingBottom: 36 },
   card: { backgroundColor: '#fff', borderRadius: 8, padding: 16 },
   playlistHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
@@ -1761,25 +1603,8 @@ const localStyles = StyleSheet.create({
   playlistRow: { minHeight: 62, marginTop: 10, paddingHorizontal: 10, borderRadius: 8, backgroundColor: '#f3f5f7', flexDirection: 'row', alignItems: 'center' },
   playlistIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
   playlistArtwork: { width: 42, height: 42, borderRadius: 7, backgroundColor: '#d7dee5' },
-  playlistArtworkEditor: { alignSelf: 'flex-start', position: 'relative' },
-  playlistArtworkPreview: { width: 92, height: 92, borderRadius: 10, backgroundColor: '#d7dee5' },
-  playlistArtworkPlaceholder: { width: 92, height: 92, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#e2e7ec' },
-  playlistArtworkRemoveButton: { position: 'absolute', right: -12, top: -12, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
-  playlistEditorScreen: { flex: 1, backgroundColor: '#fff' },
-  playlistEditorKeyboardView: { flex: 1 },
-  playlistEditorHeader: { minHeight: 62, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#d7dee5' },
-  playlistEditorCancel: { minHeight: 44, justifyContent: 'center' },
-  playlistEditorCancelText: { fontSize: 16, lineHeight: 22, fontWeight: '500', color: '#111' },
-  playlistEditorTitle: { flex: 1, minWidth: 0, textAlign: 'center', fontSize: 16, lineHeight: 22, fontWeight: '600', color: '#111' },
-  playlistEditorSave: { minWidth: 96, height: 42, borderRadius: 8, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111' },
-  playlistEditorSaveText: { color: '#fff', fontSize: 13, lineHeight: 18, fontWeight: '600' },
-  playlistEditorContent: { padding: 20, paddingBottom: 40, gap: 12 },
-  playlistEditorIdentity: { flexDirection: 'row', alignItems: 'center', gap: 18 },
-  playlistEditorNameInput: { flex: 1, minWidth: 0, backgroundColor: '#f3f5f7' },
   removeArtworkText: { color: '#e53935', fontSize: 13, fontWeight: '400' },
-  deletePlaylistButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
   playlistNameInput: { minHeight: 44, borderWidth: 1, borderColor: '#d7dee5', borderRadius: 8, paddingHorizontal: 18, backgroundColor: '#fff', color: '#111', fontSize: 16 },
-  playlistTracksTitle: { marginTop: 4, color: '#111', fontSize: 15, fontWeight: '600' },
   playlistTrackOption: { minHeight: 58, paddingHorizontal: 16, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff' },
   playlistTrackOptionSelected: { backgroundColor: '#111' },
   playlistTrackTextSelected: { color: '#fff' },

@@ -717,7 +717,7 @@ test('stale pre-server activation is abandoned and recreated from fresh key pack
   };
   const legacyState = {
     threadId: 'thread_stale_activation',
-    encryptionMode: 'LEGACY_PLAINTEXT',
+    encryptionMode: 'E2EE_PENDING',
     groupId: null,
     epoch: '0',
     ready: false,

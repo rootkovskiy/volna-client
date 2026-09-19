@@ -67,12 +67,15 @@ test('native YouTube control sends validated data without constructing JavaScrip
   assert.match(source, /\^\[A-Za-z0-9_\-\]\{11\}\$/);
 });
 
-test('public E2EE claims distinguish MLS threads from server-readable legacy chats', async () => {
+test('public claims retain release gates and explicitly retire plaintext messaging', async () => {
   const architecture = await readFile(path.join(releaseRoot, 'ARCHITECTURE.md'), 'utf8');
   const security = await readFile(path.join(releaseRoot, 'SECURITY.md'), 'utf8');
 
   for (const document of [architecture, security]) {
-    assert.match(document, /legacy (?:conversation|chat)s? remain server-readable/i);
+    assert.match(document, /messaging is encrypted-only/i);
+    assert.match(document, /(?:retired plaintext chats|legacy plaintext message)/i);
+    assert.match(document, /(?:never a fallback|no legacy plaintext fallback|no plaintext fallback)/i);
+    assert.match(document, /(?:hard-disabled|remains disabled)/i);
   }
   assert.doesNotMatch(architecture, /^The API never receives message plaintext/m);
 });

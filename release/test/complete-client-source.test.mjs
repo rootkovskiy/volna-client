@@ -26,8 +26,10 @@ test('the public boundary contains every first-party source selected for the cli
       'packages/content-policy',
       'packages/music-taxonomy',
       'packages/volna-messaging-client',
+      'packages/volna-matrix-native',
       'packages/volna-key-directory-witness',
       'packages/volna-key-transparency-log',
+      'matrix',
       'public',
     ]),
   );

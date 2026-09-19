@@ -2,14 +2,12 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { recordApiDuration, recordClientGetCacheRequest } from '../monitoring/clientTelemetry';
 import { isSameOriginUrl } from '../security/externalUrls.mjs';
+import { resolveApiEndpoint } from './apiEndpoint.mjs';
 
-const configuredApiUrl = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, '');
-const localWebHostname =
-  Platform.OS === 'web' && typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
-    ? window.location.hostname
-    : null;
-
-export const apiUrl = localWebHostname ? `http://${localWebHostname}:43101` : configuredApiUrl || 'http://localhost:43101';
+export const apiUrl = resolveApiEndpoint({
+  webHostname: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.hostname : null,
+  configuredUrl: process.env.EXPO_PUBLIC_API_URL,
+});
 export const remoteSearchDebounceMs = 1_000;
 const rawFetch = globalThis.fetch.bind(globalThis);
 const sessionTokenStorageKey = 'volna.sessionToken';
@@ -212,7 +210,9 @@ async function performApiFetch(input: RequestInfo | URL, init: RequestInit = {})
   else if (Array.isArray(init.headers)) init.headers.forEach(([key, value]) => appendHeader(key, value));
   else Object.entries(init.headers ?? {}).forEach(([key, value]) => appendHeader(key, String(value)));
   const timeoutOverride = Number(headers.get('x-volna-timeout-ms') || 0);
+  const suppressErrorReport = headers.get('x-volna-suppress-error-report') === '1';
   headers.delete('x-volna-timeout-ms');
+  headers.delete('x-volna-suppress-error-report');
   headers.set('x-client-platform', Platform.OS);
   headers.set('x-volna-client', clientInstanceId);
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -224,12 +224,16 @@ async function performApiFetch(input: RequestInfo | URL, init: RequestInit = {})
   }
   if (headers.get('Authorization')?.trim().toLowerCase() === 'bearer') headers.delete('Authorization');
   const timeoutController = new AbortController();
-  const upstreamSignal = init.signal;
+  const upstreamSignal = init.signal === undefined ? (input instanceof Request ? input.signal : undefined) : init.signal;
+  let didTimeout = false;
   const abortFromUpstream = () => timeoutController.abort();
   if (upstreamSignal?.aborted) abortFromUpstream();
   else upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true });
   const timeoutId = setTimeout(
-    () => timeoutController.abort(),
+    () => {
+      didTimeout = true;
+      timeoutController.abort();
+    },
     Number.isFinite(timeoutOverride) && timeoutOverride >= 1_000 ? Math.min(timeoutOverride, 10 * 60_000) : 15_000,
   );
   let response: Response;
@@ -241,10 +245,15 @@ async function performApiFetch(input: RequestInfo | URL, init: RequestInit = {})
       signal: timeoutController.signal,
     });
   } catch (error) {
-    const normalized = error instanceof Error && error.name === 'AbortError'
+    // URL replacement, retry and unmount intentionally cancel the old request.
+    // Preserve that signal for callers instead of reporting a server failure.
+    if (upstreamSignal?.aborted && !didTimeout) {
+      throw Object.assign(new Error('Запрос отменён'), { name: 'AbortError' });
+    }
+    const normalized = didTimeout
       ? new Error('Сервер не ответил вовремя. Попробуйте ещё раз')
       : localizedFetchError(error);
-    if (normalized instanceof Error) reportApiError(normalized.message);
+    if (!suppressErrorReport && normalized instanceof Error) reportApiError(normalized.message);
     throw normalized;
   } finally {
     clearTimeout(timeoutId);
@@ -257,7 +266,7 @@ async function performApiFetch(input: RequestInfo | URL, init: RequestInit = {})
   recordApiDuration(url, performance.now() - startedAt, response.status, response.headers.get('x-volna-route'), init.method ?? (input instanceof Request ? input.method : 'GET'));
   if (response.status === 503 && response.headers.get('x-volna-maintenance') === '1') maintenanceHandler?.();
   if (response.status === 401 && !isAuthenticationAttempt && !isSessionRestoreProbe) triggerApiUnauthorized();
-  if (!response.ok && !isSessionRestoreProbe && !(response.status === 503 && response.headers.get('x-volna-maintenance') === '1')) {
+  if (!response.ok && !suppressErrorReport && !isSessionRestoreProbe && !(response.status === 503 && response.headers.get('x-volna-maintenance') === '1')) {
     void response.clone().json()
       .then((payload: { message?: string | string[] }) => {
         const message = Array.isArray(payload?.message) ? payload.message[0] : payload?.message;

@@ -1381,7 +1381,7 @@ export class SecureMessagingClient {
       return state;
     }
 
-    if (state.encryptionMode === 'LEGACY_PLAINTEXT' && typeof body.previousGroupId !== 'string') {
+    if (state.encryptionMode === 'E2EE_PENDING' && typeof body.previousGroupId !== 'string') {
       this.discardInitialGroupCandidate(threadId, body.groupId, false);
       await this.persist();
       return this.activateThread(threadId);
@@ -1480,7 +1480,7 @@ export class SecureMessagingClient {
       } catch (error) {
         if (error?.status !== 409 || this.applicationState.pendingActivations[threadId] !== undefined) throw error;
         const state = await this.transport.getThreadState(threadId);
-        if (state.encryptionMode === 'LEGACY_PLAINTEXT') await this.activateThread(threadId);
+        if (state.encryptionMode === 'E2EE_PENDING') await this.activateThread(threadId);
         else if (state.initialActivationRecoveryAllowed === true) await this.recoverExpiredActivation(threadId, state);
         else throw error;
       }
@@ -1772,6 +1772,9 @@ export class SecureMessagingClient {
       kind: 'APPLICATION',
       epoch: encrypted.epoch,
       ciphertext: encrypted.ciphertext,
+      // Content-free push routing, separate from ciphertext/AAD. Persist with the
+      // original send so retries cannot derive a different notification target.
+      notificationMessageId: event.kind === 'message.create' ? event.logicalMessageId : null,
     };
     this.applicationState.pendingOutbox[clientEnvelopeId] = { threadId, body, event };
     await this.persist();

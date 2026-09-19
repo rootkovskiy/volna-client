@@ -67,11 +67,11 @@ function recordRequestBurst(method: string, route: string) {
     current.startedAt = now;
   }
   current.count += 1;
-  const elapsedSeconds = Math.max(1, (now - current.startedAt) / 1_000);
   const threshold = method.toUpperCase() === 'GET' ? 8 : 4;
   if (current.count >= threshold && now - current.reportedAt >= anomalyCooldownMs) {
-    const callsPerTenSeconds = current.count / elapsedSeconds * 10;
-    recordClientMetric({ name: 'REQUEST_BURST', value: callsPerTenSeconds, rating: callsPerTenSeconds >= threshold * 2 ? 'poor' : 'needs-improvement', route: key });
+    // Report observed calls in this (at most) ten-second window. Extrapolating
+    // a partial second made four simultaneous calls look like forty requests.
+    recordClientMetric({ name: 'REQUEST_BURST', value: current.count, rating: current.count >= threshold * 2 ? 'poor' : 'needs-improvement', route: key });
     current.reportedAt = now;
   }
   requestWindows.set(key, current);

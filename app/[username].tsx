@@ -18,7 +18,7 @@ export default function UsernameRoute() {
   const normalizedValue = value?.trim().toLowerCase();
   const initialTab = normalizedValue ? ROUTE_TABS[normalizedValue] : undefined;
   const sectionValue = Array.isArray(section) ? section[0] : section;
-  const profileSections: Record<string, ProfileMode> = { edit: 'edit', settings: 'settings', security: 'security', subscription: 'subscription', notifications: 'notifications', moderation: 'moderation', music: 'myMusic', communities: 'myCommunities' };
+  const profileSections: Record<string, ProfileMode> = { edit: 'edit', settings: 'settings', security: 'security', 'message-security': 'messageSecurity', subscription: 'subscription', notifications: 'notifications', moderation: 'moderation', music: 'myMusic', communities: 'myCommunities' };
   const createValue = Array.isArray(create) ? create[0] : create;
   const profileMode = normalizedValue === 'profile' && sectionValue ? profileSections[sectionValue] : normalizedValue === 'events' && createValue === '1' ? 'createEvent' : normalizedValue === 'community' && createValue === '1' ? 'createCommunity' : undefined;
   const isInternalRoute = Boolean(initialTab || profileMode);

@@ -6,8 +6,8 @@ checkpoint publication, POSIX durable storage, and fail-closed external
 witnessing. It is never bundled into Expo and it never receives chat content,
 account ids, usernames, or device-directory leaves.
 
-The build pins Go `1.26.5` plus patched OpenTelemetry `1.41.0` and
-`golang.org/x/crypto` `0.52.0`; release CI must fail on any fixable
+The build pins Go `1.26.8` plus patched OpenTelemetry `1.41.0`,
+`golang.org/x/crypto` `0.55.0` and `golang.org/x/mod` `0.40.0`; release CI must fail on any fixable
 HIGH/CRITICAL container finding.
 
 Public endpoints are `GET /about`, `GET /checkpoint`, `GET /tile/...`, and `GET /entries/...`.

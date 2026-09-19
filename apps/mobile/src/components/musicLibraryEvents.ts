@@ -1,6 +1,7 @@
 import type { ProfileMusicTrack } from '../types';
 
 export type MusicLibraryChange =
+  | { type: 'listen-later-reviewed'; itemId: string; trackId: string }
   | { type: 'collection-track-added'; track: ProfileMusicTrack }
   | { type: 'collection-track-removed'; track: ProfileMusicTrack }
   | { type: 'refresh' };

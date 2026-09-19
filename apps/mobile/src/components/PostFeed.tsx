@@ -1,11 +1,12 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { Check, ChevronDown, Circle, CornerUpLeft, EllipsisVertical, ExternalLink, FileText, Flag, Headphones, Heart, ImagePlus, ListChecks, MessageCircle, Music2, Paperclip, Pause, Play, Plus, Repeat2, Send, Settings, Square, Trash2, Video, X } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { Alert, Animated, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppImage as Image } from './AppImage';
-import { apiFetch, apiUrl, remoteSearchDebounceMs, reportApiError } from '../api/client';
+import { apiFetch, apiUrl, readApiError, remoteSearchDebounceMs, reportApiError } from '../api/client';
 import { getAvatarInitial, postImageThumbnail, uploadPostImageAsset } from '../domain';
 import type { AppPost, PostComment as PostCommentItem, PostMusicAttachment, PublicPage, PublicPageAudioRelease, QuotedPost } from '../types';
 import { styles } from '../styles';
@@ -207,6 +208,8 @@ export function PostFeed({
   const isLoadingMoreRef = useRef(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const publishingRef = useRef(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
   const composerViewport = useWebVisualViewport(isComposerOpen);
   const [repostTarget, setRepostTarget] = useState<AppPost | null>(null);
@@ -515,15 +518,29 @@ export function PostFeed({
   };
 
   const publish = async () => {
-    if (!canPublish) return;
+    if (!canPublish || publishingRef.current) return;
+    publishingRef.current = true;
     setIsSaving(true);
+    setPublishError(null);
     try {
+      const destinationType = repostTarget ? repostDestination.type : authorType;
+      const destinationUsername = repostTarget ? repostDestination.type === 'community' ? repostDestination.username : undefined : username;
+      const query = new URLSearchParams({ authorType: destinationType });
+      if (destinationUsername) query.set('authorUsername', destinationUsername);
+      // Check the author before uploading images; commit repeats this check
+      // under the server lock to handle simultaneous publishers.
+      const statusResponse = await apiFetch(`${apiUrl}/posts/publication-status?${query}`, {
+        cache: 'no-store', headers: { 'x-volna-suppress-error-report': '1' },
+      });
+      if (!statusResponse.ok) throw new Error(await readApiError(statusResponse, 'Не удалось проверить возможность публикации'));
+      const availability = await statusResponse.json() as { canPublish: boolean; message?: string };
+      if (!availability.canPublish) throw new Error(availability.message || 'Публикация пока недоступна. Попробуйте позже.');
       const primaryMusic = music[0];
       const uploaded = [] as Array<{ imageKey: string; imageUrl: string }>;
       for (const uri of images) uploaded.push(await uploadPostImageAsset(uri, authToken));
       const response = await apiFetch(`${apiUrl}/posts`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-volna-suppress-error-report': '1' },
       body: JSON.stringify({ authorType: repostTarget ? repostDestination.type : authorType, authorUsername: repostTarget ? repostDestination.type === 'community' ? repostDestination.username : undefined : username, eventId: repostTarget ? undefined : eventId, text: text.trim(), interactionAudience, musicAttachments: music, audioReleaseId: audioRelease && !audioRelease.id.startsWith('external:') ? audioRelease.id : undefined, trackId: primaryMusic?.kind === 'track' ? primaryMusic.track.id : undefined, trackProvider: primaryMusic?.kind === 'track' ? primaryMusic.track.provider : undefined, uploadedTrackId: primaryMusic?.kind === 'uploaded' ? primaryMusic.trackId : undefined, trackStartSeconds: primaryMusic?.kind === 'track' ? primaryMusic.startSeconds : undefined, trackClipDurationSeconds: primaryMusic?.kind === 'track' ? primaryMusic.clipDurationSeconds : undefined, soundcloudMusicUrl: primaryMusic?.kind === 'soundcloud' ? primaryMusic.url : undefined, bandcampMusicUrl: audioRelease?.id.startsWith('external:') ? audioRelease.releaseUrl : primaryMusic?.kind === 'bandcamp' ? primaryMusic.url : undefined, youtubeUrl: youtube?.url, imageKeys: uploaded.map((item) => item.imageKey), originalPostId: repostTarget?.id, poll: hasValidPoll ? { question: pollQuestion.trim(), options: pollOptions.map((option) => option.trim()), isAnonymous: pollAnonymous, allowsMultiple: pollMultiple } : undefined }),
       });
       if (!response.ok) {
@@ -548,11 +565,12 @@ export function PostFeed({
       setIsComposerOpen(false);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : 'Не удалось опубликовать запись';
-      notifyOperationalError(message);
-    } finally { setIsSaving(false); }
+      setPublishError(message);
+    } finally { publishingRef.current = false; setIsSaving(false); }
   };
 
   const closeComposer = () => {
+    setPublishError(null);
     setIsComposerOpen(false);
     setRepostTarget(null);
     setRepostDestination({ type: 'account' });
@@ -802,8 +820,9 @@ export function PostFeed({
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.postComposeKeyboardView}>
             <View style={styles.postComposeHeader}>
               <Pressable accessibilityRole="button" onPress={closeComposer} style={styles.postComposeCancel}><Text style={styles.postComposeCancelText}>Отмена</Text></Pressable>
-              <Pressable accessibilityRole="button" disabled={isSaving || !canPublish} onPress={() => void publish()} style={[styles.postComposePublish, (isSaving || !canPublish) && styles.postComposePublishDisabled]}>{isSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.postComposePublishText}>Опубликовать</Text>}</Pressable>
+              <Pressable accessibilityRole="button" disabled={isSaving || !canPublish} onPress={() => void publish()} style={[styles.postComposePublish, (isSaving || !canPublish) && styles.postComposePublishDisabled]}>{isSaving ? <LoadingIndicator tone="inverse" size="small" /> : <Text style={styles.postComposePublishText}>Опубликовать</Text>}</Pressable>
             </View>
+            {publishError ? <View style={styles.postComposeFeedback}><Text accessibilityRole="alert" style={styles.postError}>{publishError}</Text></View> : null}
             <ScrollView contentContainerStyle={[styles.postComposeContent, Platform.OS === 'web' && { paddingBottom: 90 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
               {repostTarget && ownedPages.length ? <View style={styles.postRepostDestination}>
                 <Text style={styles.postRepostDestinationLabel}>Куда репостнуть</Text>
@@ -872,7 +891,7 @@ export function PostFeed({
                 style={styles.youtubePickerInput}
                 value={youtubeInput}
               />
-              <Pressable accessibilityLabel={youtubeValidation.status === 'checking' ? 'Проверяем видео' : 'Прикрепить видео'} accessibilityRole="button" accessibilityState={{ disabled: youtubeValidation.status !== 'valid', busy: youtubeValidation.status === 'checking' }} disabled={youtubeValidation.status !== 'valid'} onPress={attachYoutube} style={[styles.youtubePickerSubmit, youtubeValidation.status !== 'valid' && styles.youtubePickerSubmitDisabled]}>{youtubeValidation.status === 'checking' ? <ActivityIndicator color="#fff" size="small" /> : <Check color="#fff" size={21} strokeWidth={2.2} />}</Pressable>
+              <Pressable accessibilityLabel={youtubeValidation.status === 'checking' ? 'Проверяем видео' : 'Прикрепить видео'} accessibilityRole="button" accessibilityState={{ disabled: youtubeValidation.status !== 'valid', busy: youtubeValidation.status === 'checking' }} disabled={youtubeValidation.status !== 'valid'} onPress={attachYoutube} style={[styles.youtubePickerSubmit, youtubeValidation.status !== 'valid' && styles.youtubePickerSubmitDisabled]}>{youtubeValidation.status === 'checking' ? <LoadingIndicator tone="inverse" size="small" /> : <Check color="#fff" size={21} strokeWidth={2.2} />}</Pressable>
             </View>
             {youtubeError || youtubeValidation.error ? <Text style={styles.youtubePickerError}>{youtubeError || youtubeValidation.error}</Text> : null}
           </AppSheetModal>
@@ -899,8 +918,8 @@ export function PostFeed({
         </View>
       </Modal> : null}
       {posts.slice(0, maxItems).map((post, index, visiblePosts) => <PostCard compact={feed} key={post.id} onComment={() => { if (!focusPostId) void onOpenPost?.(post); }} onLike={() => void toggleLike(post.id)} onOpenActions={(anchor) => { setPostActionsAnchor(anchor); setReportTarget(post); }} onOpenPost={onOpenPost} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onPollVote={(optionId) => void votePoll(post, optionId)} onRepost={() => { if (!post.canRepost) { Alert.alert('Репост недоступен', 'Автор разрешил репосты только подписчикам.'); return; } setRepostTarget(post); setIsComposerOpen(true); }} onSend={() => setDirectShareTarget(post)} post={post} separated={feed && index < visiblePosts.length - 1} thread={threadLayout} />)}
-      {isLoading ? <View style={styles.loadingRow}><ActivityIndicator color="#111" /></View> : null}
-      {isLoadingMore ? <View style={styles.loadingRow}><ActivityIndicator color="#111" /></View> : null}
+      {isLoading ? <View style={styles.loadingRow}><LoadingIndicator /></View> : null}
+      {isLoadingMore ? <View style={styles.loadingRow}><LoadingIndicator /></View> : null}
       {focusPostId && !isLoading ? <View style={styles.postDiscussion}>
         <View style={styles.postDiscussionHeader}>
           <View style={styles.postCommentSortWrap}>
@@ -916,7 +935,7 @@ export function PostFeed({
         </View>
         {comments.length ? <View style={styles.postCommentList}>{comments.map((comment) => <PostCommentCard comment={comment} key={comment.id} onDelete={() => void deleteComment(comment)} onLike={() => void toggleCommentLike(comment.id)} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onReply={() => { setReplyTarget(comment); }} />)}</View> : !isCommentsLoading ? <Text style={styles.postDiscussionEmpty}>Начните обсуждение первым</Text> : null}
         {commentCursor ? <Pressable accessibilityRole="button" disabled={isCommentsLoading} onPress={() => void loadMoreComments()} style={styles.postCommentsMore}><Text style={styles.postCommentsMoreText}>Показать ещё ответы</Text></Pressable> : null}
-        {isCommentsLoading ? <View style={styles.loadingRow}><ActivityIndicator color="#111" /></View> : null}
+        {isCommentsLoading ? <View style={styles.loadingRow}><LoadingIndicator /></View> : null}
       </View> : null}
       </View>
       </FeedBody>
@@ -931,7 +950,7 @@ export function PostFeed({
             </Pressable>
             <TextInput accessibilityLabel="Комментарий" maxLength={280} onChangeText={setCommentText} placeholder="Комментарий" placeholderTextColor="#7d8894" style={styles.postCommentInput} value={commentText} />
             <Pressable accessibilityLabel="Прикрепить вложение" onPress={() => setIsCommentAttachmentOpen(true)} style={styles.postCommentIconButton}><Paperclip color="#7d8894" size={21} strokeWidth={1.9} /></Pressable>
-            <Pressable accessibilityLabel="Отправить ответ" accessibilityRole="button" disabled={(!commentText.trim() && !commentImageUri && !commentYoutube && !commentMusic.length) || isCommentSaving} onPress={() => void publishComment()} style={[styles.postCommentSend, ((!commentText.trim() && !commentImageUri && !commentYoutube && !commentMusic.length) || isCommentSaving) && styles.postCommentSendDisabled]}>{isCommentSaving ? <ActivityIndicator color="#111" size="small" /> : <Send color="#111" size={21} strokeWidth={2} />}</Pressable>
+            <Pressable accessibilityLabel="Отправить ответ" accessibilityRole="button" disabled={(!commentText.trim() && !commentImageUri && !commentYoutube && !commentMusic.length) || isCommentSaving} onPress={() => void publishComment()} style={[styles.postCommentSend, ((!commentText.trim() && !commentImageUri && !commentYoutube && !commentMusic.length) || isCommentSaving) && styles.postCommentSendDisabled]}>{isCommentSaving ? <LoadingIndicator size="small" /> : <Send color="#111" size={21} strokeWidth={2} />}</Pressable>
           </View>
         </View> : null}
       <AppSheetModal contentContainerStyle={styles.postCommentAuthorSheetContent} isVisible={isCommentDestinationOpen && commentPages.length > 0} onClose={() => setIsCommentDestinationOpen(false)} title="От чьего имени">
@@ -944,7 +963,7 @@ export function PostFeed({
         <Pressable disabled={commentMusic.length >= 3} onPress={() => { setIsCommentAttachmentOpen(false); setIsCommentMusicOpen(true); }} style={[styles.safetyAction, styles.eventShareAction, commentMusic.length >= 3 && styles.postComposeToolDisabled]}><Music2 color={commentMusic.length >= 3 ? '#98a3ae' : '#111'} size={21} /><Text style={styles.safetyActionText}>Музыка · {commentMusic.length}/3</Text></Pressable>
       </AppSheetModal>
       <AppSheetModal isVisible={isCommentYoutubeOpen} onClose={() => setIsCommentYoutubeOpen(false)} title="Добавить видео">
-        <View style={styles.youtubePickerInputRow}><TextInput autoCapitalize="none" autoCorrect={false} keyboardType="url" onChangeText={setCommentYoutubeInput} onSubmitEditing={() => { if (commentYoutubeValidation.status === 'valid') attachCommentYoutube(); }} placeholder="youtube.com или youtu.be" placeholderTextColor="#8e99a4" style={styles.youtubePickerInput} value={commentYoutubeInput} /><Pressable accessibilityLabel={commentYoutubeValidation.status === 'checking' ? 'Проверяем видео' : 'Прикрепить видео'} accessibilityState={{ disabled: commentYoutubeValidation.status !== 'valid', busy: commentYoutubeValidation.status === 'checking' }} disabled={commentYoutubeValidation.status !== 'valid'} onPress={attachCommentYoutube} style={[styles.youtubePickerSubmit, commentYoutubeValidation.status !== 'valid' && styles.youtubePickerSubmitDisabled]}>{commentYoutubeValidation.status === 'checking' ? <ActivityIndicator color="#fff" size="small" /> : <Check color="#fff" size={21} />}</Pressable></View>
+        <View style={styles.youtubePickerInputRow}><TextInput autoCapitalize="none" autoCorrect={false} keyboardType="url" onChangeText={setCommentYoutubeInput} onSubmitEditing={() => { if (commentYoutubeValidation.status === 'valid') attachCommentYoutube(); }} placeholder="youtube.com или youtu.be" placeholderTextColor="#8e99a4" style={styles.youtubePickerInput} value={commentYoutubeInput} /><Pressable accessibilityLabel={commentYoutubeValidation.status === 'checking' ? 'Проверяем видео' : 'Прикрепить видео'} accessibilityState={{ disabled: commentYoutubeValidation.status !== 'valid', busy: commentYoutubeValidation.status === 'checking' }} disabled={commentYoutubeValidation.status !== 'valid'} onPress={attachCommentYoutube} style={[styles.youtubePickerSubmit, commentYoutubeValidation.status !== 'valid' && styles.youtubePickerSubmitDisabled]}>{commentYoutubeValidation.status === 'checking' ? <LoadingIndicator tone="inverse" size="small" /> : <Check color="#fff" size={21} />}</Pressable></View>
         {commentYoutubeValidation.error ? <Text style={styles.youtubePickerError}>{commentYoutubeValidation.error}</Text> : null}
       </AppSheetModal>
       <MusicPickerModal isVisible={isCommentMusicOpen} onClose={() => setIsCommentMusicOpen(false)} onSelect={(selected) => { setCommentImageUri(null); setCommentYoutube(null); setCommentMusic((current) => [...current, selected].slice(0, 3)); setIsCommentMusicOpen(false); }} />
@@ -955,7 +974,7 @@ export function PostFeed({
   );
 }
 
-function PostCard({ post, compact = false, separated = false, thread = false, onComment, onLike, onOpenActions, onOpenPost, onOpenProfile, onOpenPublicPage, onPollVote, onRepost, onSend }: { post: AppPost; compact?: boolean; separated?: boolean; thread?: boolean; onComment: () => void; onLike: () => void; onOpenActions: (anchor: { x: number; y: number }) => void; onOpenPost?: (post: AppPost | QuotedPost) => Promise<void>; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void>; onPollVote: (optionId: string) => void; onRepost: () => void; onSend: () => void }) {
+export function PostCard({ post, compact = false, separated = false, thread = false, onComment, onLike, onOpenActions, onOpenPost, onOpenProfile, onOpenPublicPage, onPollVote, onRepost, onSend }: { post: AppPost; compact?: boolean; separated?: boolean; thread?: boolean; onComment: () => void; onLike: () => void; onOpenActions: (anchor: { x: number; y: number }) => void; onOpenPost?: (post: AppPost | QuotedPost) => Promise<void>; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void>; onPollVote: (optionId: string) => void; onRepost: () => void; onSend: () => void }) {
   const openAuthor = () => post.author.entityType === 'community'
     ? onOpenPublicPage(post.author.username)
     : onOpenProfile(post.author.username);
@@ -988,7 +1007,7 @@ function PostCard({ post, compact = false, separated = false, thread = false, on
   </View>;
 }
 
-function PostCommentCard({ comment, onDelete, onLike, onOpenProfile, onOpenPublicPage, onReply }: { comment: PostCommentItem; onDelete: () => void; onLike: () => void; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void>; onReply: () => void }) {
+export function PostCommentCard({ comment, onDelete, onLike, onOpenProfile, onOpenPublicPage, onReply }: { comment: PostCommentItem; onDelete: () => void; onLike: () => void; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void>; onReply: () => void }) {
   const openAuthor = () => comment.author.entityType === 'community'
     ? onOpenPublicPage(comment.author.username)
     : onOpenProfile(comment.author.username);
@@ -1045,7 +1064,7 @@ function PostImageCarousel({ images }: { images: Array<{ id: string; imageUrl: s
   </>;
 }
 
-function PostActionsPopover({ anchor, canDelete, isVisible, onClose, onDelete, onReport, onShowReasons, showReasons }: { anchor: { x: number; y: number }; canDelete: boolean; isVisible: boolean; onClose: () => void; onDelete: () => void; onReport: (reason: 'SPAM' | 'HARASSMENT' | 'IMPERSONATION' | 'ILLEGAL_CONTENT' | 'OTHER') => void; onShowReasons: () => void; showReasons: boolean }) {
+export function PostActionsPopover({ anchor, canDelete, isVisible, onClose, onDelete, onReport, onShowReasons, showReasons }: { anchor: { x: number; y: number }; canDelete: boolean; isVisible: boolean; onClose: () => void; onDelete: () => void; onReport: (reason: 'SPAM' | 'HARASSMENT' | 'IMPERSONATION' | 'ILLEGAL_CONTENT' | 'OTHER') => void; onShowReasons: () => void; showReasons: boolean }) {
   const viewport = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [isMounted, setIsMounted] = useState(isVisible);
@@ -1124,7 +1143,7 @@ function PostActionsPopover({ anchor, canDelete, isVisible, onClose, onDelete, o
   </Modal>;
 }
 
-function QuotedPostCard({ post, onOpenPost, onOpenProfile, onOpenPublicPage }: { post: QuotedPost | AppPost; onOpenPost?: (post: AppPost | QuotedPost) => Promise<void>; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void> }) {
+export function QuotedPostCard({ post, onOpenPost, onOpenProfile, onOpenPublicPage }: { post: QuotedPost | AppPost; onOpenPost?: (post: AppPost | QuotedPost) => Promise<void>; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void> }) {
   if (post.isDeleted) return <View style={[styles.quotedPostCard, styles.quotedPostDeleted]}><Text style={styles.quotedPostDeletedText}>Публикация удалена</Text></View>;
   return <Pressable accessibilityLabel={`Открыть публикацию ${post.author.name}`} accessibilityRole="button" disabled={!onOpenPost} onPress={() => void onOpenPost?.(post)} style={styles.quotedPostCard}>
     <View style={styles.quotedPostAuthorRow}>{post.author.avatarUrl ? <Image source={{ uri: post.author.avatarUrl }} style={styles.quotedPostAvatar} /> : <View style={styles.quotedPostAvatar}><Text style={styles.postAuthorAvatarText}>{getAvatarInitial(post.author.name)}</Text></View>}<View style={styles.postTrackCopy}><VerifiedName badgeGap={6} badgeSize={13} isVerified={post.author.isVerified} name={post.author.name} style={styles.postAuthorName} /><Text numberOfLines={1} style={styles.postAuthorUsername}>@{post.author.username} · {formatPostDate(post.createdAt)}</Text></View></View>
@@ -1214,7 +1233,7 @@ function formatPostDate(value: string) {
   }).format(date).replace(',', '');
 }
 
-function PostPollCard({ poll, onVote }: { poll: NonNullable<AppPost['poll']>; onVote?: (optionId: string) => void }) {
+export function PostPollCard({ poll, onVote }: { poll: NonNullable<AppPost['poll']>; onVote?: (optionId: string) => void }) {
   const totalVotes = poll.options.reduce((sum, option) => sum + option.votesCount, 0);
   return <View style={styles.postPollCard}>
     <Text style={styles.postPollQuestion}>{poll.question}</Text>
@@ -1352,7 +1371,7 @@ function ComposerMusicAttachment({
       <Text numberOfLines={1} style={styles.postTrackArtist}>{artist}</Text>
     </View>
     {playableTrack ? <Pressable accessibilityLabel={isPlaying ? `Поставить ${title} на паузу` : `Воспроизвести ${title}`} accessibilityRole="button" onPress={toggle} style={styles.postTrackPlayButton}>
-      {isPlaying ? <Pause color="#fff" size={13} /> : <Play color="#fff" fill="#fff" size={12} />}
+      {isPlaying ? <Pause color="#fff" fill="#fff" size={13} /> : <Play color="#fff" fill="#fff" size={12} />}
     </Pressable> : null}
     {onRemove ? <Pressable accessibilityLabel="Убрать музыку" accessibilityRole="button" hitSlop={6} onPress={onRemove} style={styles.postComposerRemoveButton}>
       <X color="#6f7b86" size={17} strokeWidth={1.9} />
@@ -1374,7 +1393,7 @@ function PostTrack({ post }: { post: AppPost | Exclude<QuotedPost, { isDeleted: 
   return <Pressable disabled={!resolvedPreviewUrl} onPress={() => void toggle()} style={styles.postTrack}>
     {post.trackArtworkUrl ? <Image source={{ uri: post.trackArtworkUrl }} style={styles.postTrackArtwork} /> : null}
     <View style={styles.postTrackCopy}><Text numberOfLines={1} style={styles.postTrackTitle}>{post.trackTitle}</Text><Text numberOfLines={1} style={styles.postTrackArtist}>{post.trackArtist}</Text></View>
-    {resolvedPreviewUrl ? <View style={styles.postTrackPlayButton}>{isPlaying ? <Pause color="#fff" size={13} /> : <Play color="#fff" fill="#fff" size={12} />}</View> : null}
+    {resolvedPreviewUrl ? <View style={styles.postTrackPlayButton}>{isPlaying ? <Pause color="#fff" fill="#fff" size={13} /> : <Play color="#fff" fill="#fff" size={12} />}</View> : null}
   </Pressable>;
 }
 

@@ -9,8 +9,10 @@
     "packages/content-policy",
     "packages/music-taxonomy",
     "packages/volna-messaging-client",
+    "packages/volna-matrix-native",
     "packages/volna-key-directory-witness",
     "packages/volna-key-transparency-log",
+    "matrix",
     "public"
   ],
   "rootRuntimeFiles": [
@@ -33,6 +35,7 @@
   "allowedWorkspaceImports": [
     "@volna/content-policy",
     "@volna/messaging-client",
+    "@volna/matrix-native",
     "@volna/music-taxonomy"
   ],
   "allowedClientEnvironmentVariables": [
@@ -60,6 +63,7 @@
     ,"VOLNA_ENV"
   ],
   "requiredArchiveRootFiles": [
+    ".dockerignore",
     ".gitattributes",
     ".gitignore",
     ".github/dependabot.yml",
@@ -71,7 +75,10 @@
     "LICENSE",
     "NOTICE",
     "patches/image-size@1.2.1.patch",
+    "patches/expo-camera@17.0.10.patch",
+    "patches/matrix-js-sdk@42.1.0.patch",
     "README.md",
+    "RELEASE.md",
     "SECURITY.md",
     "THREAT_MODEL.md",
     "package.json",

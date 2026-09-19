@@ -8,6 +8,10 @@ the package `files` list. `scripts/verify-public-boundary.mjs` fails if a source
 imports a parent/sibling application path, references local workspace paths, declares
 the package private, omits the expected license, or contains obvious secret-bearing
 filenames.
+The inspected `metro.cjs` adapter is included explicitly: it serves the pinned
+public Matrix WASM asset to Metro and contains no host configuration or secrets.
+`matrix-token-refresh.mjs` is source code for encrypted credential rotation, not a
+credential artifact; keep actual credential/secret filenames excluded.
 The standalone `pnpm-lock.yaml` prevents the public verification build from
 silently inheriting dependency resolution from the proprietary monorepo. Because
 npm tarballs hard-exclude that special filename, the publish archive carries a

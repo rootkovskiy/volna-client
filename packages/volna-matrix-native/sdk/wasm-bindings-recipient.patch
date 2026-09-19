@@ -1,0 +1,195 @@
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1323,7 +1323,6 @@
+ [[package]]
+ name = "matrix-sdk-base"
+ version = "0.18.0"
+-source = "git+https://github.com/matrix-org/matrix-rust-sdk#955837c4677cd7e92e79447169b69666c0debae6"
+ dependencies = [
+  "as_variant",
+  "async-trait",
+@@ -1349,7 +1348,6 @@
+ [[package]]
+ name = "matrix-sdk-common"
+ version = "0.18.0"
+-source = "git+https://github.com/matrix-org/matrix-rust-sdk#955837c4677cd7e92e79447169b69666c0debae6"
+ dependencies = [
+  "eyeball-im",
+  "futures-core",
+@@ -1372,7 +1370,6 @@
+ [[package]]
+ name = "matrix-sdk-crypto"
+ version = "0.18.0"
+-source = "git+https://github.com/matrix-org/matrix-rust-sdk#955837c4677cd7e92e79447169b69666c0debae6"
+ dependencies = [
+  "aes",
+  "as_variant",
+@@ -1447,7 +1444,6 @@
+ [[package]]
+ name = "matrix-sdk-indexeddb"
+ version = "0.18.0"
+-source = "git+https://github.com/matrix-org/matrix-rust-sdk#955837c4677cd7e92e79447169b69666c0debae6"
+ dependencies = [
+  "async-trait",
+  "base64 0.23.1",
+@@ -1479,7 +1475,6 @@
+ [[package]]
+ name = "matrix-sdk-qrcode"
+ version = "0.18.0"
+-source = "git+https://github.com/matrix-org/matrix-rust-sdk#955837c4677cd7e92e79447169b69666c0debae6"
+ dependencies = [
+  "byteorder",
+  "qrcode",
+@@ -1491,7 +1486,6 @@
+ [[package]]
+ name = "matrix-sdk-store-encryption"
+ version = "0.18.0"
+-source = "git+https://github.com/matrix-org/matrix-rust-sdk#955837c4677cd7e92e79447169b69666c0debae6"
+ dependencies = [
+  "base64 0.23.1",
+  "blake3",
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -85,10 +85,18 @@
+ 
+ [dependencies.matrix-sdk-crypto]
+ default-features = false
+-features = ["js", "automatic-room-key-forwarding", "experimental-encrypted-state-events", "experimental-push-secrets", "experimental-x509-identity-verification", "rust-x509-verifier-impl"]
++features = ["js", "automatic-room-key-forwarding", "experimental-encrypted-state-events", "experimental-push-secrets", "experimental-x509-identity-verification", "rust-x509-verifier-impl", "strict-room-key-recipients"]
+ git = "https://github.com/matrix-org/matrix-rust-sdk"
+ 
+ [lints.rust]
+ # Workaround for https://github.com/rustwasm/wasm-bindgen/issues/4283, while we work up the courage to upgrade
+ # wasm-bindgen
+ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(wasm_bindgen_unstable_test_coverage)'] }
++
++[patch."https://github.com/matrix-org/matrix-rust-sdk"]
++matrix-sdk-base = { path = "../matrix-rust-sdk-955837c/crates/matrix-sdk-base" }
++matrix-sdk-common = { path = "../matrix-rust-sdk-955837c/crates/matrix-sdk-common" }
++matrix-sdk-crypto = { path = "../matrix-rust-sdk-955837c/crates/matrix-sdk-crypto" }
++matrix-sdk-indexeddb = { path = "../matrix-rust-sdk-955837c/crates/matrix-sdk-indexeddb" }
++matrix-sdk-qrcode = { path = "../matrix-rust-sdk-955837c/crates/matrix-sdk-qrcode" }
++matrix-sdk-store-encryption = { path = "../matrix-rust-sdk-955837c/crates/matrix-sdk-store-encryption" }
+diff --git a/index.mjs b/index.mjs
+--- a/index.mjs
++++ b/index.mjs
+@@ -21,7 +21,9 @@
+ 
+ import * as bindings from "./pkg/matrix_sdk_crypto_wasm_bg.js";
+ 
+-const defaultURL = new URL("./pkg/matrix_sdk_crypto_wasm_bg.wasm", import.meta.url);
++// Metro loads classic-script lazy chunks. Keep the exact custom artifact on a
++// versioned same-origin route; do not evaluate import.meta in that environment.
++const defaultURL = "/matrix-assets/matrix-sdk-crypto-wasm/18.5.0-volna.2/matrix_sdk_crypto_wasm_bg.wasm";
+ 
+ // Although we could simply instantiate the WASM at import time with a top-level `await`,
+ // we avoid that, to make it easier for callers to delay loading the WASM (and instead
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+     "name": "@matrix-org/matrix-sdk-crypto-wasm",
+-    "version": "18.5.0",
++    "version": "18.5.0-volna.2",
+     "homepage": "https://github.com/matrix-org/matrix-sdk-crypto-wasm",
+     "description": "WebAssembly bindings of the matrix-sdk-crypto encryption library",
+     "license": "Apache-2.0",
+diff --git a/src/backup.rs b/src/backup.rs
+--- a/src/backup.rs
++++ b/src/backup.rs
+@@ -65,6 +65,13 @@
+         MegolmV1BackupKey { inner: public_key }
+     }
+ 
++    /// Verify a present MSC4048 MAC before v1 decryption. This does not grant
++    /// trust; the separate encrypted importer validates bound sender provenance.
++    #[wasm_bindgen(js_name = "decryptV1WithAuthentication")]
++    pub fn decrypt_v1_with_authentication(&self, data: String) -> Result<String, JsError> {
++        self.inner.decrypt_v1_with_authentication(&data).map_err(|e| e.into())
++    }
++
+     /// Try to decrypt a message that was encrypted using the public part of the
+     /// backup key.
+     #[wasm_bindgen(js_name = "decryptV1")]
+diff --git a/src/libolm_migration.rs b/src/libolm_migration.rs
+--- a/src/libolm_migration.rs
++++ b/src/libolm_migration.rs
+@@ -472,6 +472,8 @@
+             .inner,
+         imported: libolm_session.imported,
+         backed_up: libolm_session.backed_up,
++        // Legacy pickle import never proves MSC4048 backup provenance.
++        authenticated_backup: false,
+         history_visibility: None,
+         algorithm: EventEncryptionAlgorithm::MegolmV1AesSha2,
+         shared_history: false,
+diff --git a/src/machine.rs b/src/machine.rs
+--- a/src/machine.rs
++++ b/src/machine.rs
+@@ -77,6 +77,34 @@
+ 
+ #[wasm_bindgen]
+ impl OlmMachine {
++    /// The binary contains MSC4048 verification and sealed sender provenance.
++    #[wasm_bindgen(getter, js_name = "authenticatedBackupVersion")]
++    pub fn authenticated_backup_version(&self) -> u32 { 1 }
++
++    /// VOLNA's compiled exact-account room-key policy. Old binaries lack this capability.
++    #[wasm_bindgen(getter, js_name = "roomKeyRecipientPolicyVersion")]
++    pub fn room_key_recipient_policy_version(&self) -> u32 {
++        1
++    }
++
++    /// Bind a room to this account and the endpoint-authorized original peer.
++    /// Must precede room sharing; an existing binding cannot be replaced.
++    #[wasm_bindgen(js_name = "bindRoomKeyRecipients", unchecked_return_type = "Promise<void>")]
++    pub fn bind_room_key_recipients(
++        &self,
++        room_id: &identifiers::RoomId,
++        peer_id: &identifiers::UserId,
++    ) -> Promise {
++        let _guard = dispatcher::set_default(&self.tracing_subscriber);
++        let room = room_id.inner.clone();
++        let peer = peer_id.inner.clone();
++        let me = self.inner.clone();
++        future_to_promise(async move {
++            me.bind_room_key_recipients(&room, &peer).await?;
++            Ok(JsValue::UNDEFINED)
++        })
++    }
++
+     /// Constructor will always fail. To create a new `OlmMachine`, please use
+     /// the `initialize` method.
+     ///
+@@ -1362,6 +1390,28 @@
+                 })
+                 .await?
+                 .into();
++            Ok(result)
++        }))
++    }
++
++    /// Import bounded encrypted backup JSON. MSC4048 authentication and sender
++    /// provenance are verified in Rust, never from a caller's trust boolean.
++    #[wasm_bindgen(js_name = "importEncryptedRoomKeyBackup", unchecked_return_type = "Promise<RoomKeyImportResult>")]
++    pub fn import_encrypted_room_key_backup(
++        &self,
++        encrypted_json: String,
++        backup_version: String,
++    ) -> Result<Promise, JsValue> {
++        let _guard = dispatcher::set_default(&self.tracing_subscriber);
++        if encrypted_json.len() > 8 * 1024 * 1024 {
++            return Err(JsValue::from_str("Encrypted backup batch exceeds limit"));
++        }
++        let encrypted = serde_json::from_str(&encrypted_json)
++            .map_err(|_| JsValue::from_str("Invalid encrypted backup batch"))?;
++        let me = self.inner.clone();
++        Ok(future_to_promise(async move {
++            let result: RoomKeyImportResult = me.backup_machine()
++                .import_encrypted_room_keys(encrypted, &backup_version, |_, _| {}).await?.into();
+             Ok(result)
+         }))
+     }

@@ -1,5 +1,5 @@
 import { createElement, useCallback, useMemo, useRef, useState } from 'react';
-import { PanResponder, Platform, View } from 'react-native';
+import { PanResponder, Platform, View, type ViewProps } from 'react-native';
 import { styles } from '../styles';
 
 export function CompactTrackScrubber({
@@ -45,13 +45,16 @@ export function CompactTrackScrubber({
   }), [onChangeEnd, onInteractionStart, update]);
   const displayed = dragProgress ?? Math.max(0, Math.min(1, progress));
   latestProgressRef.current = displayed;
+  const nativeAccessibilityProps: ViewProps = Platform.OS === 'web' ? {} : {
+    accessibilityActions: [{ name: 'decrement', label: 'Раньше' }, { name: 'increment', label: 'Позже' }],
+    accessibilityLabel: 'Выбрать момент начала композиции',
+    accessibilityRole: 'adjustable',
+    accessibilityValue: { max: 100, min: 0, now: Math.round(displayed * 100), text: accessibilityValueText },
+    onAccessibilityAction: (event) => adjustFromKeyboard(event.nativeEvent.actionName === 'increment' ? 0.01 : -0.01),
+  };
   return <View
     {...(Platform.OS === 'web' ? {} : responder.panHandlers)}
-    accessibilityActions={[{ name: 'decrement', label: 'Раньше' }, { name: 'increment', label: 'Позже' }]}
-    accessibilityLabel="Выбрать момент начала композиции"
-    accessibilityRole="adjustable"
-    accessibilityValue={{ max: 100, min: 0, now: Math.round(displayed * 100), text: accessibilityValueText }}
-    onAccessibilityAction={(event) => adjustFromKeyboard(event.nativeEvent.actionName === 'increment' ? 0.01 : -0.01)}
+    {...nativeAccessibilityProps}
     onLayout={(event) => { widthRef.current = Math.max(1, event.nativeEvent.layout.width); }}
     style={styles.primaryTrackFragmentProgressHitbox}
   >

@@ -1,7 +1,8 @@
 import { Text } from 'react-native';
 import { styles } from '../styles';
 
-export type EditorAutosaveState = 'saved' | 'saving' | 'pending' | 'error';
+export type { AutosaveStatus as EditorAutosaveState } from './editorAutosave';
+import type { AutosaveStatus as EditorAutosaveState } from './editorAutosave';
 
 const autosaveLabels: Record<EditorAutosaveState, string> = {
   error: 'Ошибка сохранения',

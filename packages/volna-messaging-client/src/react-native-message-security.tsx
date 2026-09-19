@@ -1,9 +1,10 @@
+import { LoadingIndicator } from './loading';
+import { ScreenTopBar } from './screen-top-bar';
 import * as Clipboard from 'expo-clipboard';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import {
   Camera,
   Check,
-  ChevronLeft,
   Copy,
   KeyRound,
   Laptop,
@@ -14,7 +15,6 @@ import {
 } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -450,17 +450,10 @@ export function MessageSecurityScreen({
     );
   };
 
-  const header = (
-    <View style={localStyles.header}>
-      <Pressable accessibilityLabel="Назад" hitSlop={8} onPress={onBack} style={localStyles.iconButton}>
-        <ChevronLeft color="#111" size={29} strokeWidth={2.1} />
-      </Pressable>
-      <Text style={localStyles.headerTitle}>Защищённые сообщения</Text>
-    </View>
-  );
+  const header = <ScreenTopBar onBack={onBack} title="Защищённые сообщения" />;
 
   if (phase === 'loading') {
-    return <View style={localStyles.screen}>{header}<View style={localStyles.center}><ActivityIndicator color="#111" size="large" /></View></View>;
+    return <View style={localStyles.screen}>{header}<View style={localStyles.center}><LoadingIndicator size="large" /></View></View>;
   }
 
   if (phase === 'disabled') {
@@ -488,7 +481,7 @@ export function MessageSecurityScreen({
               <Text style={localStyles.heroText}>В чатах с E2EE VOLNA хранит только зашифрованные пакеты. Для первого устройства создайте ключ восстановления; для существующей защиты перенесите данные со старого устройства.</Text>
             </View>
             <Pressable disabled={isBusy} onPress={() => void setupDevice()} style={localStyles.primaryButton}>
-              {isBusy ? <ActivityIndicator color="#fff" /> : <Text style={localStyles.primaryButtonText}>Настроить первое устройство</Text>}
+              {isBusy ? <LoadingIndicator tone="inverse" /> : <Text style={localStyles.primaryButtonText}>Настроить первое устройство</Text>}
             </Pressable>
             <Pressable disabled={isBusy} onPress={() => void startIncoming()} style={localStyles.secondaryButton}>
               <QrCode color="#111" size={21} />
@@ -502,7 +495,7 @@ export function MessageSecurityScreen({
 
         {phase === 'transparency' ? (
           <View accessibilityLiveRegion="polite" style={localStyles.transferCard}>
-            <ActivityIndicator color="#111" size="large" />
+            <LoadingIndicator size="large" />
             <Text style={localStyles.heroTitle}>Подтверждаем устройство</Text>
             <Text style={localStyles.heroText}>Публикуем ключ в прозрачном журнале и ждём подписи минимум двух из трёх независимых witness‑операторов. Обычно это занимает несколько секунд.</Text>
             <Text style={localStyles.statusHint}>Если кворум временно недоступен, устройство не получит доступ к защищённым чатам. Уже активные устройства продолжат работать.</Text>
@@ -561,7 +554,7 @@ export function MessageSecurityScreen({
             </Pressable>
             <Text style={localStyles.clipboardWarning}>При копировании секрет переноса временно попадает в системный буфер. QR‑сканирование безопаснее.</Text>
             {verificationCode ? <View style={localStyles.codeCard}><Text style={localStyles.codeLabel}>Код проверки</Text><Text selectable style={localStyles.code}>{verificationCode}</Text></View> : null}
-            {transferStatus !== 'waiting-source' ? <ActivityIndicator color="#111" style={localStyles.progress} /> : null}
+            {transferStatus !== 'waiting-source' ? <LoadingIndicator style={localStyles.progress} /> : null}
             {transferStatus === 'waiting-source' || transferStatus === 'confirm-code' ? (
               <Pressable disabled={isBusy} onPress={() => void cancelIncoming()} style={localStyles.linkButton}><Text style={localStyles.dangerLink}>Отменить перенос</Text></Pressable>
             ) : null}
@@ -605,7 +598,7 @@ export function MessageSecurityScreen({
               <Text style={localStyles.toggleText}>Отключить старое устройство после успешного переноса</Text>
             </View>
             <Pressable disabled={!manualQrPayload.trim() || isBusy} onPress={() => void acceptQr(manualQrPayload)} style={[localStyles.primaryButton, (!manualQrPayload.trim() || isBusy) && localStyles.disabled]}>
-              {isBusy ? <ActivityIndicator color="#fff" /> : <Text style={localStyles.primaryButtonText}>Продолжить</Text>}
+              {isBusy ? <LoadingIndicator tone="inverse" /> : <Text style={localStyles.primaryButtonText}>Продолжить</Text>}
             </Pressable>
           </View>
         ) : null}
@@ -617,7 +610,7 @@ export function MessageSecurityScreen({
             <Text style={localStyles.heroText}>Код должен быть одинаковым на старом и новом устройствах. Если отличается — отмените перенос.</Text>
             <Text selectable style={localStyles.code}>{verificationCode}</Text>
             <Pressable disabled={isBusy} onPress={() => void approveSource()} style={localStyles.primaryButton}>
-              {isBusy ? <ActivityIndicator color="#fff" /> : <Text style={localStyles.primaryButtonText}>Коды совпадают</Text>}
+              {isBusy ? <LoadingIndicator tone="inverse" /> : <Text style={localStyles.primaryButtonText}>Коды совпадают</Text>}
             </Pressable>
             <Pressable disabled={isBusy} onPress={() => void cancelOutgoing()} style={localStyles.linkButton}><Text style={localStyles.dangerLink}>Отменить перенос</Text></Pressable>
           </View>
@@ -625,7 +618,7 @@ export function MessageSecurityScreen({
 
         {phase === 'source-progress' ? (
           <View style={localStyles.centerCopy}>
-            <ActivityIndicator color="#111" size="large" />
+            <LoadingIndicator size="large" />
             <Text style={localStyles.heroTitle}>Переносим зашифрованную историю</Text>
             <Text style={localStyles.heroText}>{statusText[transferStatus] ?? 'Новое устройство регистрирует собственные ключи…'}</Text>
           </View>
@@ -648,7 +641,7 @@ export function MessageSecurityScreen({
               value={recoveryInput}
             />
             <Pressable disabled={!recoveryInput.trim() || isBusy} onPress={() => void setupDevice(recoveryInput)} style={[localStyles.primaryButton, (!recoveryInput.trim() || isBusy) && localStyles.disabled]}>
-              {isBusy ? <ActivityIndicator color="#fff" /> : <Text style={localStyles.primaryButtonText}>Восстановить устройство</Text>}
+              {isBusy ? <LoadingIndicator tone="inverse" /> : <Text style={localStyles.primaryButtonText}>Восстановить устройство</Text>}
             </Pressable>
           </View>
         ) : null}
@@ -665,7 +658,7 @@ export function MessageSecurityScreen({
             </Pressable>
             <Text style={localStyles.clipboardWarning}>После сохранения очистите системный буфер обмена: этот ключ позволяет авторизовать новое устройство.</Text>
             <Pressable disabled={isBusy} onPress={() => void acknowledgeRecoverySecret()} style={[localStyles.primaryButton, isBusy && localStyles.disabled]}>
-              {isBusy ? <ActivityIndicator color="#fff" /> : <Text style={localStyles.primaryButtonText}>Я сохранил ключ</Text>}
+              {isBusy ? <LoadingIndicator tone="inverse" /> : <Text style={localStyles.primaryButtonText}>Я сохранил ключ</Text>}
             </Pressable>
           </View>
         ) : null}
@@ -685,9 +678,6 @@ export function MessageSecurityScreen({
 
 const localStyles = StyleSheet.create({
   screen: { backgroundColor: '#f3f5f7', flex: 1 },
-  header: { alignItems: 'center', backgroundColor: '#fff', borderBottomColor: '#d7dee5', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', minHeight: 52, paddingHorizontal: 8 },
-  iconButton: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 },
-  headerTitle: { color: '#111', fontSize: 16, fontWeight: '600' },
   content: { alignSelf: 'center', gap: 8, maxWidth: 620, padding: 16, paddingBottom: 48, width: '100%' },
   center: { alignItems: 'center', flex: 1, justifyContent: 'center' },
   centerCopy: { alignItems: 'center', gap: 12, justifyContent: 'center', minHeight: 360, paddingHorizontal: 22 },

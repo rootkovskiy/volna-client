@@ -79,23 +79,24 @@ self.addEventListener('push', (event) => {
       body: payload.body || '',
       icon: payload.icon || '/pwa/icon-192.png',
       badge: payload.badge || '/pwa/icon-192.png',
-      data: { url: payload.url || '/profile?section=notifications' },
+      data: { ...payload.data, url: payload.url || '/profile?section=notifications' },
   };
   if (payload.eventType) {
-    options.tag = `volna-${payload.eventType}`;
+    options.tag = payload.data?.type === 'chat' && payload.data.recipientId && payload.data.threadId && payload.data.messageId
+      ? `volna-chat-${payload.data.recipientId}-${payload.data.threadId}-${payload.data.messageId}`
+      : `volna-${payload.eventType}`;
     options.renotify = true;
   }
   const badgeCount = Number(payload.badgeCount);
   const updateBadge = Number.isFinite(badgeCount) && badgeCount > 0
     ? (typeof self.navigator?.setAppBadge === 'function' ? self.navigator.setAppBadge(badgeCount) : Promise.resolve())
     : (typeof self.navigator?.clearAppBadge === 'function' ? self.navigator.clearAppBadge() : Promise.resolve());
-  const notifyOpenClients = self.clients
+  const notifyOpenClients = () => self.clients
     .matchAll({ type: 'window', includeUncontrolled: true })
     .then((clients) => Promise.all(clients.map((client) => client.postMessage({ type: 'volna:notification', badgeCount }))));
   event.waitUntil(Promise.all([
-    self.registration.showNotification(title, options),
+    self.registration.showNotification(title, options).then(notifyOpenClients),
     updateBadge,
-    notifyOpenClients,
   ]));
 });
 

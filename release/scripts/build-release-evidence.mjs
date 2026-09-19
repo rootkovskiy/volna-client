@@ -5,7 +5,7 @@ import { canonicalJson, createDeterministicTarGzip, sha256 } from './determinist
 import { verifyPublicClientBoundary } from './verify-public-client-boundary.mjs';
 
 const releaseRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ignoredDirectoryNames = new Set(['coverage', 'dist', 'node_modules', 'target']);
+const ignoredDirectoryNames = new Set(['coverage', 'dist', 'node_modules', 'target', 'build', 'vendor', '.gradle', '.cxx']);
 const portable = (value) => value.replaceAll('\\', '/');
 
 async function collectFiles(target, output = []) {
@@ -36,7 +36,7 @@ function integrityHashes(integrity) {
   return digest.length === 0 ? undefined : [{ alg: algorithm, content: digest }];
 }
 
-function parsePnpmComponents(lockText) {
+export function parsePnpmComponents(lockText) {
   const lines = lockText.split(/\r?\n/);
   const packagesStart = lines.indexOf('packages:');
   const snapshotsStart = lines.indexOf('snapshots:');
@@ -50,12 +50,14 @@ function parsePnpmComponents(lockText) {
     const separator = key.lastIndexOf('@');
     if (separator <= 0) continue;
     const name = key.slice(0, separator);
-    const version = key.slice(separator + 1);
-    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) continue;
+    let version = key.slice(separator + 1);
+    const localArtifact = version.startsWith('file:');
     let integrity;
     for (let detail = index + 1; detail < snapshotsStart && !/^  \S/.test(lines[detail]); detail += 1) {
       integrity = /integrity:\s*([^,}\s]+)/.exec(lines[detail])?.[1] ?? integrity;
+      if (localArtifact) version = /^    version: (\S+)$/.exec(lines[detail])?.[1] ?? version;
     }
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) continue;
     const reference = npmPurl(name, version);
     components.set(reference, {
       type: 'library',
@@ -124,6 +126,20 @@ async function buildSbom(packageJson, lockText, sourceTreeHash, repositoryRoot) 
       purl: reference,
       licenses: [{ license: { id: componentPackage.license } }],
       properties: [{ name: 'volna:first-party-source', value: relative }],
+    });
+  }
+  const nativeSdk = JSON.parse(await readFile(path.join(repositoryRoot, 'packages/volna-matrix-native/sdk/manifest.json'), 'utf8'));
+  if (nativeSdk.android) {
+    const reference = 'pkg:generic/volna-matrix-rust-ffi-android@26.08.13-volna.1';
+    components.set(reference, {
+      type: 'library', 'bom-ref': reference, name: 'volna-matrix-rust-ffi-android', version: '26.08.13-volna.1', purl: reference,
+      licenses: [{ license: { id: 'Apache-2.0' } }],
+      hashes: [{ alg: 'SHA-256', content: nativeSdk.android.sha256 }],
+      properties: [
+        { name: 'volna:upstream-source-revision', value: nativeSdk.sources.android.revision },
+        { name: 'volna:source-patch-sha256', value: nativeSdk.sources.android.patchSha256 },
+        { name: 'volna:independently-reproduced', value: 'false' },
+      ],
     });
   }
   const goRoot = path.join(repositoryRoot, 'packages', 'volna-key-transparency-log');

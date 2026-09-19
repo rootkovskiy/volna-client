@@ -1,8 +1,11 @@
-import { Bell, CalendarDays, Check, ChevronLeft, Copy, Disc3, List, Sparkles, UsersRound, X } from 'lucide-react-native';
+import { OwnershipTransferNotification } from './OwnershipTransferNotification';
+import type { OwnershipTransfer } from './OwnershipTransferStatus';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { MotionDisclosure } from '@volna/messaging-client/ui-motion';
+import { Bell, CalendarDays, Copy, Disc3, List, Sparkles, UsersRound } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { ActivityIndicator, Animated, Easing, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppImage as Image } from './AppImage';
 import { styles } from '../styles';
@@ -12,127 +15,12 @@ import { getAvatarInitial } from '../domain';
 import { PostFeed } from './PostFeed';
 import type { AppPost } from '../types';
 import { AppRefreshControl } from './AppRefreshControl';
-import { markNotificationsRead, refreshNotificationBadge } from '../notifications/badgeStore';
+import { refreshNotificationBadge } from '../notifications/badgeStore';
+import { createNotificationRefresh, notificationSurfaceVisible, subscribeNotificationUpdates } from '../notifications/liveUpdates';
 import { ScreenTopBar } from './ScreenTopBar';
 export { ScreenTopBar } from './ScreenTopBar';
 
-export function TopToast({ onClose, toast }: { onClose: () => void; toast: ToastMessage | null }) {
-  return Platform.OS === 'web'
-    ? <WebTopToast onClose={onClose} toast={toast} />
-    : <NativeTopToast onClose={onClose} toast={toast} />;
-}
-
-function ToastCard({ toast }: { toast: ToastMessage }) {
-  return (
-    <View style={styles.topToastCard}>
-      <View style={[styles.topToastIcon, toast.type === 'error' && styles.topToastIconError]}>
-        {toast.type === 'error' ? (
-          <X color="#c62828" size={15} strokeWidth={2.8} />
-        ) : (
-          <Check color="#2fa84f" size={15} strokeWidth={2.8} />
-        )}
-      </View>
-      <Text style={styles.topToastText}>{toast.message}</Text>
-    </View>
-  );
-}
-
-function WebTopToast({ onClose, toast }: { onClose: () => void; toast: ToastMessage | null }) {
-  const [isVisible, setIsVisible] = useState(false);
-  const insets = useSafeAreaInsets();
-
-  useEffect(() => {
-    if (!toast || typeof window === 'undefined') return undefined;
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-    setIsVisible(false);
-    const frame = window.requestAnimationFrame(() => setIsVisible(true));
-    let closeTimer: ReturnType<typeof setTimeout> | undefined;
-    const exitTimer = setTimeout(() => {
-      setIsVisible(false);
-      closeTimer = setTimeout(onClose, reducedMotion ? 0 : 160);
-    }, 4000);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      clearTimeout(exitTimer);
-      if (closeTimer) clearTimeout(closeTimer);
-    };
-  }, [onClose, toast]);
-
-  if (!toast || typeof document === 'undefined') return null;
-  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-  const content = (
-    <View
-      pointerEvents="none"
-      style={[
-        styles.topToastLayer,
-        { paddingTop: insets.top },
-        {
-          opacity: isVisible ? 1 : 0,
-          transform: [{ translateY: isVisible ? 0 : -24 }],
-          transitionDuration: reducedMotion ? '0ms' : isVisible ? '180ms' : '150ms',
-          transitionProperty: 'opacity, transform',
-          transitionTimingFunction: isVisible ? 'cubic-bezier(0.22, 1, 0.36, 1)' : 'cubic-bezier(0.4, 0, 1, 1)',
-          willChange: 'opacity, transform',
-        } as never,
-      ]}
-    >
-      <ToastCard toast={toast} />
-    </View>
-  );
-  return createPortal(content, document.body);
-}
-
-function NativeTopToast({ onClose, toast }: { onClose: () => void; toast: ToastMessage | null }) {
-  const visibility = useRef(new Animated.Value(0)).current;
-  const insets = useSafeAreaInsets();
-
-  useEffect(() => {
-    if (!toast) {
-      return;
-    }
-
-    visibility.setValue(0);
-    Animated.timing(visibility, {
-      duration: 180,
-      easing: Easing.out(Easing.cubic),
-      toValue: 1,
-      useNativeDriver: true,
-    }).start();
-
-    const timeout = setTimeout(() => {
-      Animated.timing(visibility, {
-        duration: 150,
-        easing: Easing.in(Easing.cubic),
-        toValue: 0,
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) {
-          onClose();
-        }
-      });
-    }, 4000);
-
-    return () => clearTimeout(timeout);
-  }, [onClose, toast, visibility]);
-
-  if (!toast) {
-    return null;
-  }
-
-  const content = (
-    <Animated.View pointerEvents="none" style={[styles.topToastLayer, {
-      opacity: visibility,
-      paddingTop: insets.top,
-      transform: [{
-        translateY: visibility.interpolate({ inputRange: [0, 1], outputRange: [-24, 0] }),
-      }],
-    }]}>
-      <ToastCard toast={toast} />
-    </Animated.View>
-  );
-
-  return content;
-}
+export { TopToast } from './TopToast';
 
 
 export function PlaceholderScreen({
@@ -167,11 +55,13 @@ function formatNotificationDateTime(value: string) {
   }).format(date);
 }
 
-export function NotificationsScreen({ authToken, onBack, onNotify, onOpenChat, onOpenEditProfile, onOpenEvent, onOpenMenu, onOpenMessages, onOpenProfile, onOpenPublicPage }: { authToken: string; onBack: () => void; onNotify: (message: string, type?: ToastMessage['type']) => void; onOpenChat: (username: string) => Promise<void>; onOpenEditProfile: () => void; onOpenEvent: (eventId: string) => void; onOpenMenu: () => void; onOpenMessages: () => void; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void> }) {
+export function NotificationsScreen({ accountId, onOpenMessageSecurity, authToken, onBack, onNotify, onOpenChat, onOpenEditProfile, onOpenEvent, onOpenMenu, onOpenMessages, onOpenProfile, onOpenPublicPage }: { accountId: string; onOpenMessageSecurity: () => void; authToken: string; onBack: () => void; onNotify: (message: string, type?: ToastMessage['type']) => void; onOpenChat: (username: string) => Promise<void>; onOpenEditProfile: () => void; onOpenEvent: (eventId: string) => void; onOpenMenu: () => void; onOpenMessages: () => void; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void> }) {
   type FollowRequest = { id: string; createdAt: string; follower: { id: string; username: string; name: string; avatarUrl: string | null } };
   type MentionNotification = { id: string; postId: string; createdAt: string; mentionedPageName: string | null; post: AppPost };
   type NotificationSource = { username: string; name: string; avatarUrl: string | null };
-  type SystemNotification = { id: string; eventId: string | null; postId: string | null; eventType: string; type: string; title: string; body: string; codes: string[]; createdAt: string; sourceAccount: NotificationSource | null; sourceCommunity: NotificationSource | null };
+  type SystemNotification = { readAt: string | null; ownershipTransfer?: OwnershipTransfer | null; id: string; eventId: string | null; postId: string | null; eventType: string; type: string; title: string; body: string; codes: string[]; createdAt: string; sourceAccount: NotificationSource | null; sourceCommunity: NotificationSource | null };
+  const notificationScope = useRef(0);
+  useEffect(() => { notificationScope.current++; return () => { notificationScope.current++; }; }, [authToken]);
   const [requests, setRequests] = useState<FollowRequest[]>([]);
   const [mentions, setMentions] = useState<MentionNotification[]>([]);
   const [systemNotifications, setSystemNotifications] = useState<SystemNotification[]>([]);
@@ -180,39 +70,76 @@ export function NotificationsScreen({ authToken, onBack, onNotify, onOpenChat, o
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [leavingRequests, setLeavingRequests] = useState<string[]>([]);
   const [savingUsername, setSavingUsername] = useState<string | null>(null);
+  const retainedRequests = useRef(new Set<string>());
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const showingNotifications = useRef(true);
+  showingNotifications.current = activeTab === 'all' && !selectedPostId;
 
   useEffect(() => {
-    let active = true;
     setIsLoading(true);
     setLoadError(null);
     const headers = { Authorization: `Bearer ${authToken}` };
-    void Promise.all([apiFetch(`${apiUrl}/profiles/follow-requests`, { headers }), apiFetch(`${apiUrl}/posts/notifications/mentions`, { headers }), apiFetch(`${apiUrl}/notifications`, { headers })])
-      .then(async ([requestsResponse, mentionsResponse, systemResponse]) => {
+    const loader = createNotificationRefresh({
+      visible: notificationSurfaceVisible,
+      load: async signal => {
+        const [requestsResponse, mentionsResponse, systemResponse] = await Promise.all([
+          apiFetch(`${apiUrl}/profiles/follow-requests`, { headers, signal, cache: 'no-store' }),
+          apiFetch(`${apiUrl}/posts/notifications/mentions`, { headers, signal, cache: 'no-store' }),
+          apiFetch(`${apiUrl}/notifications`, { headers, signal, cache: 'no-store' }),
+        ]);
         if (!requestsResponse.ok || !mentionsResponse.ok || !systemResponse.ok) throw new Error('Не удалось загрузить уведомления');
-        const [nextRequests, nextMentions, nextSystem] = await Promise.all([requestsResponse.json() as Promise<FollowRequest[]>, mentionsResponse.json() as Promise<MentionNotification[]>, systemResponse.json() as Promise<SystemNotification[]>]);
-        if (active) {
-          setRequests(nextRequests);
-          setMentions(nextMentions);
-          setSystemNotifications(nextSystem);
-          markNotificationsRead();
-          void apiFetch(`${apiUrl}/notifications/read-all`, { method: 'POST', headers })
-            .then(() => refreshNotificationBadge({ force: true }));
+        return Promise.all([requestsResponse.json() as Promise<FollowRequest[]>, mentionsResponse.json() as Promise<MentionNotification[]>, systemResponse.json() as Promise<SystemNotification[]>]);
+      },
+      commit: async ([nextRequests, nextMentions, nextSystem], signal) => {
+        setRequests(current => [...nextRequests, ...current.filter(item => retainedRequests.current.has(item.follower.username) && !nextRequests.some(next => next.id === item.id))]);
+        setMentions(nextMentions); setSystemNotifications(nextSystem);
+        setIsLoading(false); setLoadError(null);
+        // Only acknowledge the authorized snapshot that this visible screen
+        // actually displayed. A concurrently arriving item stays unread.
+        const ids = showingNotifications.current ? nextSystem.filter(item => !item.readAt).map(item => item.id) : [];
+        if (ids.length && notificationSurfaceVisible()) {
+          const response = await apiFetch(`${apiUrl}/notifications/read`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, signal, body: JSON.stringify({ ids }) });
+          if (!response.ok) throw new Error('Не удалось отметить уведомления прочитанными');
+          if (!signal.aborted) void refreshNotificationBadge({ force: true });
         }
-      })
-      .catch((error: unknown) => { if (active) setLoadError(error instanceof Error ? error.message : 'Не удалось загрузить уведомления'); })
-      .finally(() => { if (active) setIsLoading(false); });
-    return () => { active = false; };
-  }, [authToken, reloadKey]);
+      },
+      onError: error => { setLoadError(error instanceof Error ? error.message : 'Не удалось загрузить уведомления'); setIsLoading(false); },
+    });
+    refreshRef.current = loader.refresh;
+    const unsubscribe = subscribeNotificationUpdates(accountId, () => { void loader.refresh(); });
+    return () => { unsubscribe(); loader.dispose(); };
+  }, [accountId, authToken]);
+
+  useEffect(() => { void refreshRef.current(); }, [accountId, authToken, reloadKey, activeTab, selectedPostId]);
+
+  const refreshSystemNotifications = async () => {
+    await refreshRef.current();
+  };
+  const hasPendingOwnership = systemNotifications.some(item => item.ownershipTransfer?.status === 'PENDING');
+  useEffect(() => {
+    if (!hasPendingOwnership) return;
+    const timer = setInterval(() => { void refreshRef.current(); }, 15_000);
+    return () => clearInterval(timer);
+  }, [authToken, hasPendingOwnership]);
 
   const resolveRequest = async (username: string, approve: boolean) => {
+    const scope = notificationScope.current;
+    retainedRequests.current.add(username);
     setSavingUsername(username);
     try {
       const response = await apiFetch(`${apiUrl}/profiles/follow-requests/${encodeURIComponent(username)}${approve ? '/approve' : ''}`, { method: approve ? 'POST' : 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
       if (!response.ok) throw new Error('Не удалось обработать заявку');
-      setRequests((current) => current.filter((request) => request.follower.username !== username));
+      if (scope !== notificationScope.current) return;
+      setLeavingRequests(current => [...current, username]);
+      void refreshRef.current();
+    } catch (error) {
+      retainedRequests.current.delete(username);
+      if (scope !== notificationScope.current) return;
+      onNotify(error instanceof Error ? error.message : 'Не удалось обработать заявку', 'error');
     } finally {
-      setSavingUsername(null);
+      if (scope === notificationScope.current) setSavingUsername(null);
     }
   };
 
@@ -225,7 +152,7 @@ export function NotificationsScreen({ authToken, onBack, onNotify, onOpenChat, o
     }
   };
 
-  if (selectedPostId) return <><View style={styles.topBar}><View style={styles.topBarLeft}><Pressable onPress={() => setSelectedPostId(null)} style={styles.topBarIconButton}><ChevronLeft size={29} color="#090909" strokeWidth={2.1} /></Pressable><Text style={styles.topBarTitle}>Публикация</Text></View></View><ScrollView><PostFeed authToken={authToken} authorType="account" canCreate={false} focusPostId={selectedPostId} onNotify={onNotify} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} username="" /></ScrollView></>;
+  if (selectedPostId) return <><ScreenTopBar onBack={() => setSelectedPostId(null)} title="Публикация" /><ScrollView><PostFeed authToken={authToken} authorType="account" canCreate={false} focusPostId={selectedPostId} onNotify={onNotify} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} username="" /></ScrollView></>;
 
   return (
     <>
@@ -247,7 +174,7 @@ export function NotificationsScreen({ authToken, onBack, onNotify, onOpenChat, o
             ))}
           </View>
         ) : null}
-        {isLoading ? <View style={styles.loadingRow}><ActivityIndicator color="#111" /></View> : null}
+        {isLoading ? <View style={styles.loadingRow}><LoadingIndicator /></View> : null}
         {!isLoading && loadError ? <View style={styles.emptyProfileTab}><Text style={styles.emptyProfileTabTitle}>{loadError}</Text><Pressable accessibilityRole="button" onPress={() => setReloadKey((value) => value + 1)} style={styles.notificationsRetryButton}><Text style={styles.notificationsRetryText}>Повторить</Text></Pressable></View> : null}
         {!isLoading && activeTab === 'all' ? systemNotifications.map((notification) => {
           const sourceAccount = notification.sourceAccount;
@@ -255,7 +182,7 @@ export function NotificationsScreen({ authToken, onBack, onNotify, onOpenChat, o
           const sourceUsername = source?.username ?? 'volna';
           const sourceName = source?.name ?? 'VOLNA Social';
           const openSource = () => sourceAccount ? onOpenProfile(sourceUsername) : onOpenPublicPage(sourceUsername);
-          const openNotification = notification.eventId
+          const openNotification = notification.ownershipTransfer ? () => void onOpenPublicPage(notification.ownershipTransfer!.community.username) : notification.type.startsWith('MATRIX_NEW_LOGIN_') ? onOpenMessageSecurity : notification.eventId
             ? () => onOpenEvent(notification.eventId!)
             : notification.postId
               ? () => setSelectedPostId(notification.postId)
@@ -271,6 +198,7 @@ export function NotificationsScreen({ authToken, onBack, onNotify, onOpenChat, o
                 <View style={styles.notificationSourceRow}><Text numberOfLines={1} style={styles.notificationTitle}>{sourceName}</Text><Pressable accessibilityRole="link" onPress={(event) => { event.stopPropagation(); void openSource(); }}><Text style={styles.notificationSourceLink}>@{sourceUsername}</Text></Pressable></View>
                 <Text style={styles.notificationTitle}>{notification.title}</Text>
                 <Text style={styles.notificationText}>{notification.body}</Text>
+                {notification.ownershipTransfer ? <OwnershipTransferNotification transfer={notification.ownershipTransfer} onChanged={() => { void refreshSystemNotifications().catch(() => undefined); }} /> : null}
                 {notification.eventType === 'CONNECT_LIKE' && sourceAccount ? (
                   <Pressable
                     accessibilityLabel={`Открыть профиль ${sourceName}`}
@@ -311,18 +239,19 @@ export function NotificationsScreen({ authToken, onBack, onNotify, onOpenChat, o
           </Pressable>
         )) : null}
         {!isLoading && requests.length ? requests.map((request) => (
-          <View key={request.id} style={styles.followRequestRow}>
+          <MotionDisclosure key={request.id} visible={!leavingRequests.includes(request.follower.username)} onClosed={() => { retainedRequests.current.delete(request.follower.username); setRequests(current => current.filter(item => item.id !== request.id)); setLeavingRequests(current => current.filter(username => username !== request.follower.username)); }}>
+          <View style={styles.followRequestRow}>
             {request.follower.avatarUrl ? <Image source={{ uri: request.follower.avatarUrl }} style={styles.followRequestAvatar} /> : <View style={styles.followRequestAvatar}><Text style={styles.followRequestAvatarText}>{getAvatarInitial(request.follower.name)}</Text></View>}
             <View style={styles.notificationCopy}>
               <Text style={styles.notificationTitle}>{request.follower.name}</Text>
               <Text style={styles.notificationText}>@{request.follower.username} хочет подписаться</Text>
               <Text style={styles.notificationTimestamp}>{formatNotificationDateTime(request.createdAt)}</Text>
               <View style={styles.followRequestActions}>
-                <Pressable disabled={savingUsername === request.follower.username} onPress={() => void resolveRequest(request.follower.username, true)} style={styles.followRequestApprove}><Text style={styles.notificationActionText}>Подтвердить</Text></Pressable>
-                <Pressable disabled={savingUsername === request.follower.username} onPress={() => void resolveRequest(request.follower.username, false)} style={styles.followRequestReject}><Text style={styles.followRequestRejectText}>Удалить</Text></Pressable>
+                <Pressable disabled={savingUsername !== null || leavingRequests.includes(request.follower.username)} onPress={() => void resolveRequest(request.follower.username, true)} style={styles.followRequestApprove}><Text style={styles.notificationActionText}>Подтвердить</Text></Pressable>
+                <Pressable disabled={savingUsername !== null || leavingRequests.includes(request.follower.username)} onPress={() => void resolveRequest(request.follower.username, false)} style={styles.followRequestReject}><Text style={styles.followRequestRejectText}>Удалить</Text></Pressable>
               </View>
             </View>
-          </View>
+          </View></MotionDisclosure>
         )) : null}
         {!isLoading && !loadError && !requests.length && !mentions.length && !systemNotifications.length ? <View style={styles.emptyProfileTab}><Bell color="#7d8894" size={28} /><Text style={styles.emptyProfileTabTitle}>Новых уведомлений нет</Text></View> : null}
       </ScrollView>

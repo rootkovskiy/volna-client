@@ -1,5 +1,6 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { createElement, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { styles } from '../styles';
 import { normalizeYouTubeVideoId } from '../security/externalUrls.mjs';
 
@@ -12,7 +13,7 @@ export function YouTubePostEmbed({ startSeconds = 0, videoId }: { startSeconds?:
   const playerScale = 0.8;
   const virtualSize = `${100 / playerScale}%`;
   return <View style={styles.youtubePostEmbed}>
-    {!isReady ? <View pointerEvents="none" style={styles.youtubePostLoading}><ActivityIndicator color="#6f7b86" /></View> : null}
+    {!isReady ? <View pointerEvents="none" style={styles.youtubePostLoading}><LoadingIndicator /></View> : null}
     {createElement('iframe', {
       allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share',
       allowFullScreen: true,

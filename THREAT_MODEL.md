@@ -35,6 +35,17 @@ matched to that source.
 
 ## Explicit non-guarantees
 
+Backup authenticity relies on the endpoint-held recovery secret and sealed SDK
+sender provenance. The custom Web/Android SDK applies the pinned MSC4048 v1 MAC
+proposal with an encrypted account/room/session context; a server-held public
+backup key cannot forge that MAC. Missing/invalid MACs and imported legacy keys
+cannot gain authenticated provenance. This does not prove backup completeness or
+freshness: a server can withhold or replay valid entries, and an attacker holding
+the recovery secret is inside this trust boundary. The extension remains subject
+to source publication, maintainer checks and publicly repeatable artifact comparison;
+runtime tests alone do not
+provide that assurance.
+
 - No endpoint security after malware, debugger, rooted-device, or malicious
   keyboard/screen-capture compromise.
 - No Web/PWA resistance to same-origin JavaScript replacement.
@@ -46,8 +57,18 @@ matched to that source.
 - Metadata such as accounts, devices, group membership, timing, ciphertext
   sizes, and delivery state remains visible to the service where the protocol
   requires it.
-- Legacy chats remain server-readable. The server-blind confidentiality model
-  applies only to a conversation explicitly activated as `MLS_V1`.
+- Personal messaging is encrypted-only. Legacy plaintext chat storage and routes
+  are retired; unavailable encrypted engines do not fall back to plaintext.
+- Development `MATRIX_V1` relies on Matrix device identity/cross-signing rather
+  than the MLS witness map. Web/PWA applies signed-device isolation, reports
+  cross-signing identity replacement, and verifies devices through Matrix
+  to-device QR/SAS. Exact session and account revocation plus direct-room removal
+  are implemented with durable retry. The remaining Matrix release risk is the
+  retained browser/Android lifecycle and history acceptance, authenticated backup
+  recovery, recipient-enforcement evidence and checkable release artifacts with
+  applicable signatures. External review/reproduction is voluntary, not a launch
+  prerequisite; absent evidence is still disclosed. Physical devices and native iOS/macOS/Xcode are excluded from the
+  September 18 release scope; an external witness is not a Matrix requirement.
 
 The protocol-level model is expanded in
 `packages/volna-messaging-client/THREAT_MODEL.md`.

@@ -36,6 +36,8 @@ test('the complete client source archive and SBOM are byte-reproducible and hone
       'packages/volna-messaging-client/src/mls-runtime.mjs',
       'public/service-worker.js',
       'release/public-client-boundary.json',
+      'release/scripts/finalize-web-export.mjs',
+      'release/scripts/web-artifact-evidence.mjs',
     ]) {
       assert.ok(sourcePaths.includes(required), `missing ${required}`);
     }

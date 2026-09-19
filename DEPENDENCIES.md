@@ -5,6 +5,41 @@ client-only pnpm lockfile. Workspace packages are included as source; proprietar
 server packages and their dependency graph are absent. `release-evidence.json` and
 the CycloneDX 1.6 SBOM describe the resolved graph used for review.
 
+The pinned Expo Camera 17.0.10 patch adds Android ML Kit's raw bytes as
+`extra.rawBytesBase64Url` (bounded to 2048 bytes). Matrix verification QR is binary;
+Unicode camera text cannot be used to reconstruct key bytes. Account and chat
+scanners consume the same public `matrixQrPayload` adapter, while the Matrix SDK
+still authenticates the payload. This additive patch does not request permissions
+or change other barcode fields; it is included and hash-pinned in the public build.
+
+The public messaging workspace pins Apache-2.0 `matrix-js-sdk` `42.1.0` for the
+development Web/PWA Matrix path. Its VOLNA-modified Rust/WASM crypto backend is loaded
+only from the messaging surface. The native export deliberately does not bundle
+this browser SDK; it uses the native Matrix Rust bindings instead.
+
+The custom WASM `18.5.0-volna.2`, upstream source revisions and exact recipient
+patches are retained in `packages/volna-matrix-native/sdk`. The JS facade patch
+is integrity-pinned by the release boundary verifier. This is not an official
+upstream binary or a production security acceptance. Current required platform
+acceptance is desktop browser plus Android emulator, with native iOS and
+physical-device checks excluded from this release's requirements.
+
+The Web and Android patches also implement the backwards-compatible v1 MAC from
+MSC4048, pinned to proposal revision `20b767f5f4ac616b10237c2fb23a1b4bfc8baa3f`.
+This is a proposal implementation, not an upstream standard or independent
+cryptographic review. HKDF/HMAC use the existing locked RustCrypto dependencies;
+backup encryption remains Vodozemac v1. An encrypted VOLNA context binds account,
+room, session and previously established SDK sender provenance. Runtime capability
+version 1 is mandatory. Legacy imports remain untrusted, including after re-backup.
+The SDK README describes the extension and non-destructive version migration.
+
+The September 19 release preparation raises both supported `js-yaml` lines to
+`3.15.2` / `4.3.2` in the application, complete public client and standalone
+messaging locks. These versions fix empty-source merge budget exhaustion in
+[GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh).
+No advisory exception was added; frozen install, boundary checks and the real
+production dependency audit must still pass.
+
 `pnpm-workspace.yaml` additionally overrides `postcss` to `8.5.26`. Expo's
 transitive ranges otherwise permitted `8.4.49`, which is affected by arbitrary
 file-read/source-map advisories
@@ -20,7 +55,8 @@ The override keeps the CommonJS `uuid.v4()` API used by that helper and is exerc
 by the isolated client verification/build flow.
 
 The release workspace also carries range-scoped patched floors for the transitive
-`brace-expansion`, `js-yaml`, `nanoid`, `socket.io-parser`, `tar`, and `undici`
+`brace-expansion`, `browserslist`, `decode-uri-component`, `js-yaml`, `nanoid`,
+`socket.io-parser`, `tar`, and `undici`
 families. These close the reviewed 2026 denial-of-service, parser, archive, and
 HTTP advisories without collapsing packages across incompatible major versions.
 The nanoid 3.x floor is `3.3.18`, which closes
@@ -30,6 +66,16 @@ The boundary verifier pins both each selector and every allowed resolution, so a
 future install cannot silently return to a vulnerable version or select an
 unreviewed major. `socket.io-parser` is repeated in the standalone messaging
 workspace because its content-free realtime client is part of that package too.
+
+The 2026-09-04 audit increment pins `browserslist` `4.28.7`,
+`decode-uri-component` `0.5.0`, and the two compatible `@xmldom/xmldom`
+branches to `0.8.15` and `0.9.12`. These close
+[GHSA-c83g-rgw3-j3cx](https://github.com/advisories/GHSA-c83g-rgw3-j3cx),
+[GHSA-73wf-gq98-2v4g](https://github.com/advisories/GHSA-73wf-gq98-2v4g),
+[GHSA-vcc3-ghjq-m6fr](https://github.com/advisories/GHSA-vcc3-ghjq-m6fr), and
+[GHSA-6gmq-8vp8-gcm6](https://github.com/advisories/GHSA-6gmq-8vp8-gcm6)
+without collapsing the two pre-1.0 XML parser branches into one incompatible
+line. Both complete-client and standalone boundary verifiers retain these floors.
 
 The relevant overrides and exact resolutions are enforced inside the standalone
 `packages/volna-messaging-client` workspace and both of its byte-identical lockfile
@@ -77,14 +123,29 @@ PostgreSQL compare-and-swap race against an isolated PostgreSQL 17 service, buil
 the image, and fails on fixed high or critical container findings reported by the
 pinned Trivy action.
 
+The runtime also pins Debian Security `libpcre2-8-0=10.42-1+deb12u1`, fixing
+CVE-2026-86145, CVE-2026-89157 and CVE-2026-89161 in the base image. The frozen
+pnpm 11 deployment temporarily carries the exact local Matrix WASM tarball at
+its root-relative resolution path; that build input is removed after installation.
+The dependency graph and integrity checks are retained. The public `.dockerignore`
+excludes host dependencies, build output, environment files and private Git data.
+
 The independently deployable key-transparency log pins Tessera `v1.0.4` and its
 complete Go module graph in `packages/volna-key-transparency-log/go.sum`. The
 release SBOM includes those Go modules in addition to the client npm lock. Its
-multi-stage container uses digest-pinned Go `1.26.5` and distroless non-root
+multi-stage container uses digest-pinned Go `1.26.8` and distroless non-root
 images, while explicitly selecting OpenTelemetry `1.41.0` and
-`golang.org/x/crypto` `0.52.0` over older vulnerable transitive resolutions. CI
+`golang.org/x/crypto` `0.55.0` and `golang.org/x/mod` `0.40.0` over older vulnerable resolutions. CI
 builds and scans the final static image and must report zero fixable HIGH/CRITICAL
 findings.
+
+Expo Camera `17.0.10` carries the pinned `expo-camera@17.0.10.patch`, which adds
+bounded `extra.rawBytesBase64Url` to Android barcode results and preserves the Web
+worker's `binaryData` in `raw` for lossless Matrix verification QR. Decoded Unicode
+text alone cannot carry arbitrary identity-key bytes. The app's `expo.autolinking.android.buildFromSource` must include
+`expo-camera`; a precompiled AAR omits the patch. The release boundary verifier
+checks the patch digest, workspace/lockfile pins and source-build setting. See
+[Expo's precompiled-module guidance](https://docs.expo.dev/guides/prebuilt-expo-modules/).
 
 An audit result is time-scoped evidence, not a permanent guarantee. New advisories
 must be evaluated against the locked graph before publishing another artifact.
