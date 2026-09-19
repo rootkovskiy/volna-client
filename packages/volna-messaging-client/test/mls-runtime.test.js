@@ -146,14 +146,29 @@ test('MLS runtime creates a verified two-device group and exchanges opaque messa
   });
   assert.equal(received.event.text, 'секрет');
 
-  await assert.rejects(
+  assert.deepEqual(await
     bob.process({
       threadId: 'thread_secure_1',
       aad,
       epoch: '1',
       ciphertext: encrypted.ciphertext,
     }),
+    { rejected: true, rejectionReason: 'invalid_ciphertext', stateChanged: false },
   );
+  assert.deepEqual(await bob.process({ threadId: 'thread_secure_1', aad, epoch: '1', ciphertext: 'AA' }),
+    { rejected: true, rejectionReason: 'invalid_ciphertext', stateChanged: false });
+  for (let index = 0; index < 8; index++) {
+    await bob.process({ threadId: 'thread_secure_1', aad, epoch: '1', ciphertext: 'AA' });
+    assert.equal(bob.requireGroup('thread_secure_1').retainedStateBuffers.length, 1);
+  }
+  for (const kind of ['APPLICATION', 'COMMIT']) {
+    const unavailableAad = contract.canonicalEnvelopeAad({
+      protocolVersion: 1, threadId: 'thread_secure_1', senderAccountId: 'account_alice', senderDeviceId: 'device_alice',
+      clientEnvelopeId: 'envelope_future', kind, epoch: '2',
+      ...(kind === 'COMMIT' ? { operationId: 'operation_future', rosterHash: 'a'.repeat(64) } : {}),
+    });
+    await assert.rejects(bob.process({ threadId: 'thread_secure_1', aad: unavailableAad, epoch: '2', ciphertext: 'AA' }));
+  }
   const secondAad = contract.canonicalEnvelopeAad({
     protocolVersion: 1,
     threadId: 'thread_secure_1',

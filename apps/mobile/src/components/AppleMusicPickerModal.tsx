@@ -1,6 +1,7 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { Check, Disc3, Link2, Plus, Search } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { AppImage as Image } from './AppImage';
 import { apiFetch as fetch, apiUrl, readApiError, remoteSearchDebounceMs, reportApiError } from '../api/client';
 import { musicArtworkThumbnail } from '../domain';
@@ -174,16 +175,16 @@ export function MusicPickerModal({
           onChangeText={(next) => { setUrl(next); setError(null); }}
           onSubmitEditing={() => { if (isLink) void resolveUrl(); }}
           placeholder="Ссылка или название трека"
-          placeholderTextColor="#8e99a499f"
+          placeholderTextColor="#8e99a4"
           returnKeyType="done"
           style={styles.postMusicLinkInput}
           value={url}
         />
         <Pressable accessibilityLabel="Добавить трек по ссылке" accessibilityRole="button" disabled={!isLink || isResolving} onPress={() => void resolveUrl()} style={[styles.postMusicLinkAdd, (!isLink || isResolving) && styles.postMusicLinkAddDisabled]}>
-          {isResolving ? <ActivityIndicator color="#fff" size="small" /> : <Plus color="#fff" size={20} strokeWidth={2.2} />}
+          {isResolving ? <LoadingIndicator tone="inverse" size="small" /> : <Plus color="#fff" size={20} strokeWidth={2.2} />}
         </Pressable>
       </View>
-      {isSearching ? <ActivityIndicator color="#111" style={styles.postMusicSearchLoader} /> : null}
+      {isSearching ? <LoadingIndicator style={styles.postMusicSearchLoader} /> : null}
       {searchResults.length ? <View style={styles.postMusicSearchResults}>{searchResults.map((track) => <Pressable accessibilityLabel={`Прикрепить ${track.title}`} accessibilityRole="button" key={`${track.provider}:${track.id}`} onPress={() => chooseSearchResult(track)} style={styles.postMusicSearchResultRow}>
         {track.artworkUrl ? <Image source={{ uri: musicArtworkThumbnail(track.artworkUrl, track.provider) ?? track.artworkUrl }} style={styles.postMusicLibraryArtwork} /> : <View style={[styles.postMusicLibraryArtwork, styles.appleMusicArtworkPlaceholder]}><Disc3 color="#6f7b86" size={20} strokeWidth={1.9} /></View>}
         <View style={styles.appleMusicResultCopy}><Text numberOfLines={1} style={styles.appleMusicResultTitle}>{track.title}</Text><Text numberOfLines={1} style={styles.appleMusicResultArtist}>{track.artist} · {track.provider === 'apple' ? 'Apple Music' : 'Яндекс Музыка'}</Text></View>
@@ -196,7 +197,7 @@ export function MusicPickerModal({
         <Text style={styles.postMusicLibraryTitle}>Мои треки</Text>
         <Text style={styles.postMusicLibraryCount}>{tracks.length}</Text>
       </View>
-      {isLoadingTracks ? <ActivityIndicator color="#111" style={styles.appleMusicSearchState} /> : null}
+      {isLoadingTracks ? <LoadingIndicator style={styles.appleMusicSearchState} /> : null}
       {!isLoadingTracks && !tracks.length ? <Text style={styles.postMusicLibraryEmpty}>Добавленные в профиль треки появятся здесь.</Text> : null}
       {tracks.length ? <View style={styles.postMusicLibraryList}>{tracks.map((track) => {
         const selected = isSelected(value, track);

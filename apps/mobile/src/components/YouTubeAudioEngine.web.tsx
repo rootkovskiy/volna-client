@@ -43,19 +43,22 @@ function loadApi() {
 export const YouTubeAudioEngine = forwardRef<YouTubeAudioEngineHandle, YouTubeAudioEngineProps>(function YouTubeAudioEngine({ onEnded, onError, onStateChange }, ref) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<YouTubePlayer | null>(null);
+  // YT.Player exists before the iframe installs its transport methods.
   const readyRef = useRef(false);
   const videoIdRef = useRef('');
   const snapshotRef = useRef<YouTubeAudioSnapshot>({ duration: 0, loading: false, playing: false, position: 0 });
   const pendingRef = useRef<{ autoplay: boolean; start: number; videoId: string } | null>(null);
+  const callbacksRef = useRef({ onEnded, onError, onStateChange });
+  callbacksRef.current = { onEnded, onError, onStateChange };
   const emit = (patch: Partial<YouTubeAudioSnapshot>) => {
     snapshotRef.current = { ...snapshotRef.current, ...patch };
-    onStateChange?.(snapshotRef.current);
+    callbacksRef.current.onStateChange?.(snapshotRef.current);
   };
   const applyLoad = (request: { autoplay: boolean; start: number; videoId: string }) => {
     const player = playerRef.current;
-    if (!readyRef.current || !player) { pendingRef.current = request; return; }
     videoIdRef.current = request.videoId;
     emit({ duration: 0, loading: request.autoplay, playing: false, position: request.start });
+    if (!readyRef.current || !player) { pendingRef.current = request; return; }
     if (request.autoplay) player.loadVideoById({ videoId: request.videoId, startSeconds: request.start });
     else player.cueVideoById({ videoId: request.videoId, startSeconds: request.start });
   };
@@ -67,17 +70,36 @@ export const YouTubeAudioEngine = forwardRef<YouTubeAudioEngineHandle, YouTubeAu
       const safeStartSeconds = Number.isFinite(startSeconds) ? Math.min(86_400, Math.max(0, startSeconds)) : 0;
       applyLoad({ autoplay, start: safeStartSeconds, videoId: safeVideoId });
     },
-    pause: () => playerRef.current?.pauseVideo(),
-    play: () => { emit({ loading: true }); playerRef.current?.playVideo(); },
+    pause: () => {
+      if (pendingRef.current) pendingRef.current.autoplay = false;
+      if (readyRef.current) playerRef.current?.pauseVideo();
+      emit({ loading: false, playing: false });
+    },
+    play: () => {
+      if (!videoIdRef.current) return;
+      if (pendingRef.current) pendingRef.current.autoplay = true;
+      emit({ loading: true });
+      if (readyRef.current) playerRef.current?.playVideo();
+    },
     seek: (seconds, resume = false) => {
-      const player = playerRef.current;
-      if (!player) return;
-      const target = Math.max(0, seconds);
+      if (!videoIdRef.current) return;
+      const target = Number.isFinite(seconds) ? Math.min(86_400, Math.max(0, seconds)) : 0;
       emit({ loading: resume, position: target });
+      if (pendingRef.current) {
+        pendingRef.current.start = target;
+        pendingRef.current.autoplay = resume;
+      }
+      const player = playerRef.current;
+      if (!readyRef.current || !player) return;
       player.seekTo(target, true);
       if (resume) player.playVideo();
     },
-    stop: () => { playerRef.current?.stopVideo(); emit({ duration: 0, loading: false, playing: false, position: 0 }); },
+    stop: () => {
+      pendingRef.current = null;
+      videoIdRef.current = '';
+      if (readyRef.current) playerRef.current?.stopVideo();
+      emit({ duration: 0, loading: false, playing: false, position: 0 });
+    },
   }));
 
   useEffect(() => {
@@ -92,27 +114,31 @@ export const YouTubeAudioEngine = forwardRef<YouTubeAudioEngineHandle, YouTubeAu
         height: '200', width: '200', playerVars: { autoplay: 0, controls: 0, disablekb: 1, playsinline: 1, rel: 0, origin: window.location.origin },
         events: {
           onReady: (event: { target: YouTubePlayer }) => {
+            if (!active || event.target !== playerRef.current) return;
             readyRef.current = true;
-            emit({ duration: event.target.getDuration() || 0 });
             const pending = pendingRef.current; pendingRef.current = null;
             if (pending) applyLoad(pending);
           },
           onStateChange: (event: { data: PlayerState; target: YouTubePlayer }) => {
+            if (!active || !readyRef.current || event.target !== playerRef.current || !videoIdRef.current) return;
             const playing = event.data === 1;
             emit({ duration: event.target.getDuration() || snapshotRef.current.duration, loading: event.data === 3, playing, position: event.target.getCurrentTime() || snapshotRef.current.position });
-            if (event.data === 0) onEnded?.();
+            if (event.data === 0) callbacksRef.current.onEnded?.();
           },
-          onError: (event: { data: number }) => { emit({ loading: false, playing: false }); onError?.(`YouTube вернул ошибку ${event.data}`); },
+          onError: (event: { data: number }) => { if (!active) return; emit({ loading: false, playing: false }); callbacksRef.current.onError?.(`YouTube вернул ошибку ${event.data}`); },
         },
       });
       timer = window.setInterval(() => {
         const player = playerRef.current;
-        if (!player || !readyRef.current) return;
+        if (!player || !readyRef.current || !videoIdRef.current) return;
         emit({ duration: player.getDuration() || snapshotRef.current.duration, position: player.getCurrentTime() || 0 });
       }, 250);
-    }).catch(() => onError?.('Не удалось загрузить YouTube IFrame API'));
+    }).catch(() => { if (active) callbacksRef.current.onError?.('Не удалось загрузить YouTube IFrame API'); });
     return () => {
       active = false;
+      readyRef.current = false;
+      pendingRef.current = null;
+      videoIdRef.current = '';
       if (timer) window.clearInterval(timer);
       playerRef.current?.destroy();
       playerRef.current = null;

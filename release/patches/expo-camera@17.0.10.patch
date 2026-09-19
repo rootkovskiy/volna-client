@@ -1,0 +1,38 @@
+diff --git a/android/src/main/java/expo/modules/camera/analyzers/BarcodeScannerResultSerializer.kt b/android/src/main/java/expo/modules/camera/analyzers/BarcodeScannerResultSerializer.kt
+--- a/android/src/main/java/expo/modules/camera/analyzers/BarcodeScannerResultSerializer.kt
++++ b/android/src/main/java/expo/modules/camera/analyzers/BarcodeScannerResultSerializer.kt
+@@ -57,5 +57,12 @@ object BarCodeScannerResultSerializer {
+ 
+   fun parseExtraDate(barcode: Barcode): Bundle {
+     val result = Bundle()
++    // Matrix verification QR carries binary keys. String decoding can replace
++    // arbitrary bytes; preserve ML Kit's exact payload for endpoint validation.
++    barcode.rawBytes?.takeIf { it.size <= 2048 }?.let {
++      result.putString("rawBytesBase64Url", android.util.Base64.encodeToString(
++        it, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
++      ))
++    }
+ 
+     when (barcode.valueType) {
+diff --git a/src/web/useWebQRScanner.ts b/src/web/useWebQRScanner.ts
+--- a/src/web/useWebQRScanner.ts
++++ b/src/web/useWebQRScanner.ts
+@@ -16,10 +16,16 @@
+     parsed = decoded;
+   }
+ 
+-  if (parsed?.data) {
++  // Preserve QR byte segments: decoded text can be empty or lossy for Matrix keys.
++  const binary = parsed?.binaryData;
++  const raw = Array.isArray(binary) && binary.length <= 2048 &&
++    binary.every((byte: unknown) => Number.isInteger(byte) && Number(byte) >= 0 && Number(byte) <= 255)
++    ? String.fromCharCode(...binary) : undefined;
++  if (parsed?.data || raw) {
+     const nativeEvent: BarcodeScanningResult = {
+       type: 'qr',
+-      data: parsed.data,
++      data: parsed.data || raw!,
++      raw,
+       cornerPoints: [],
+       bounds: { origin: { x: 0, y: 0 }, size: { width: 0, height: 0 } },
+     };

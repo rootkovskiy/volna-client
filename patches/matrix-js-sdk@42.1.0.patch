@@ -1,0 +1,651 @@
+diff --git a/lib/crypto-api/index.d.ts b/lib/crypto-api/index.d.ts
+--- a/lib/crypto-api/index.d.ts
++++ b/lib/crypto-api/index.d.ts
+@@ -51,6 +51,11 @@
+  * Public interface to the cryptography parts of the js-sdk
+  */
+ export interface CryptoApi {
++    /** VOLNA custom SDK capability; zero means the strict core is unavailable. */
++    getAuthenticatedBackupVersion(): number;
++    getRoomKeyRecipientPolicyVersion(): number;
++    /** Immutable endpoint-selected own/peer binding, enforced inside Rust. */
++    bindRoomKeyRecipients(roomId: string, peerId: string): Promise<void>;
+     /**
+      * Global override for whether the client should ever send encrypted
+      * messages to unverified devices. This provides the default for rooms which
+@@ -1187,4 +1192,4 @@
+ export * from "./key-passphrase.ts";
+ export * from "./CryptoEvent.ts";
+ export type * from "./CryptoEventHandlerMap.ts";
+-//# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=index.d.ts.map
+diff --git a/lib/rust-crypto/backup.d.ts b/lib/rust-crypto/backup.d.ts
+--- a/lib/rust-crypto/backup.d.ts
++++ b/lib/rust-crypto/backup.d.ts
+@@ -111,6 +111,7 @@
+      * Implementation of {@link CryptoBackend#importBackedUpRoomKeys}.
+      */
+     importBackedUpRoomKeys(keys: IMegolmSessionData[], backupVersion: string, opts?: ImportRoomKeysOpts): Promise<void>;
++    private upgradeAuthenticatedBackup;
+     private keyBackupCheckInProgress;
+     /** Helper to check the key backup status, and enable/disable it as appropriate
+      *
+diff --git a/lib/rust-crypto/backup.js b/lib/rust-crypto/backup.js
+--- a/lib/rust-crypto/backup.js
++++ b/lib/rust-crypto/backup.js
+@@ -16,6 +16,8 @@
+ */
+ 
+ import * as RustSdkCryptoJs from "@matrix-org/matrix-sdk-crypto-wasm";
++import * as anotherjson from "another-json";
++const encryptedBackupEntries = new WeakMap();
+ import { ClientPrefix, MatrixError, Method } from "../http-api/index.js";
+ import { TypedEventEmitter } from "../models/typed-event-emitter.js";
+ import { encodeUri, logDuration } from "../utils.js";
+@@ -187,10 +189,13 @@
+     return false;
+   }
+   async saveBackupDecryptionKey(backupDecryptionKey, version) {
+-    await this.olmMachine.saveBackupDecryptionKey(backupDecryptionKey, version);
+-    // Emit an event that we have a new backup decryption key, so that the sdk can start
+-    // importing keys from backup if needed.
+-    this.emit(CryptoEvent.KeyBackupDecryptionKeyCached, version);
++      await this.olmMachine.saveBackupDecryptionKey(backupDecryptionKey, version);
++      // The strict uploader waits for this key rather than acknowledging an
++      // unauthenticated first upload. Resume after persistence completes.
++      void this.backupKeysLoop();
++      // Emit an event that we have a new backup decryption key, so that the sdk can start
++      // importing keys from backup if needed.
++      this.emit(CryptoEvent.KeyBackupDecryptionKeyCached, version);
+   }
+ 
+   /**
+@@ -228,70 +233,127 @@
+    * Implementation of {@link CryptoBackend#importBackedUpRoomKeys}.
+    */
+   async importBackedUpRoomKeys(keys, backupVersion, opts) {
+-    const keysByRoom = new Map();
+-    for (const key of keys) {
+-      const roomId = new RustSdkCryptoJs.RoomId(key.room_id);
+-      if (!keysByRoom.has(roomId)) {
+-        keysByRoom.set(roomId, new Map());
+-      }
+-      keysByRoom.get(roomId).set(key.session_id, key);
+-    }
+-    await this.olmMachine.importBackedUpRoomKeys(keysByRoom, (progress, total, failures) => {
+-      const importOpt = {
+-        total: Number(total),
+-        successes: Number(progress),
+-        stage: ImportRoomKeyStage.LoadKeys,
+-        failures: Number(failures)
+-      };
+-      opts?.progressCallback?.(importOpt);
+-    }, backupVersion);
++      const encrypted = Object.create(null);
++      const legacy = [];
++      for (const key of keys) {
++          const ciphertext = encryptedBackupEntries.get(key);
++          if (ciphertext === undefined) {
++              legacy.push(key);
++              continue;
++          }
++          (encrypted[key.room_id] ??= Object.create(null))[key.session_id] = ciphertext;
++      }
++      if (Object.keys(encrypted).length) {
++          const result = await this.olmMachine.importEncryptedRoomKeyBackup(JSON.stringify(encrypted), backupVersion);
++          opts?.progressCallback?.({ total: keys.length, successes: Number(result.importedCount),
++              stage: ImportRoomKeyStage.LoadKeys, failures: 0 });
++      }
++      if (!legacy.length)
++          return;
++      const keysByRoom = new Map();
++      for (const key of legacy) {
++          const roomId = new RustSdkCryptoJs.RoomId(key.room_id);
++          if (!keysByRoom.has(roomId)) {
++              keysByRoom.set(roomId, new Map());
++          }
++          keysByRoom.get(roomId).set(key.session_id, key);
++      }
++      await this.olmMachine.importBackedUpRoomKeys(keysByRoom, (progress, total, failures) => {
++          const importOpt = {
++              total: Number(total),
++              successes: Number(progress),
++              stage: ImportRoomKeyStage.LoadKeys,
++              failures: Number(failures),
++          };
++          opts?.progressCallback?.(importOpt);
++      }, backupVersion);
+   }
+   /** Helper to check the key backup status, and enable/disable it as appropriate
+    *
+    * A KeyBackupInfo can be passed if it was fetched recently, to avoid trying to
+    * re-fetch it from the server.
+    */
++  async upgradeAuthenticatedBackup(info) {
++      const metadata = info.auth_data;
++      if (metadata["social.volna.authenticated_backup"] === 1)
++          return info;
++      const keys = await this.olmMachine.getBackupKeys();
++      const secret = keys.decryptionKey;
++      if (!secret || !this.backupInfoMatchesBackupDecryptionKey(info, secret))
++          return info;
++      // Never delete an old version or rotate SSSS/cross-signing for migration.
++      // Retain its exact id so a new endpoint can recover through an interrupted
++      // re-upload. Imported legacy keys remain unauthenticated inside Rust.
++      const decryptor = this.createBackupDecryptor(secret);
++      try {
++          await this.importKeyBackup(await this.downloadKeyBackup(info.version), info.version, decryptor);
++      }
++      finally {
++          decryptor.free();
++      }
++      const authData = { public_key: metadata.public_key,
++          "social.volna.authenticated_backup": 1,
++          "social.volna.backup_parent_version": info.version };
++      const signatures = await this.olmMachine.sign(anotherjson.stringify(authData));
++      const signedAuthData = { ...authData, signatures: JSON.parse(signatures.asJSON()) };
++      signatures.free();
++      const response = await this.http.authedRequest(Method.Post, "/room_keys/version", undefined, { algorithm: info.algorithm, auth_data: signedAuthData }, { prefix: ClientPrefix.V3 });
++      // The decryptor above owns its WASM key object. Reload the same durable
++      // secret rather than using a freed handle.
++      const saved = await this.olmMachine.getBackupKeys();
++      if (!saved.decryptionKey || !this.backupInfoMatchesBackupDecryptionKey(info, saved.decryptionKey)) {
++          throw new Error("Backup recovery key changed during migration");
++      }
++      await this.saveBackupDecryptionKey(saved.decryptionKey, response.version);
++      return { algorithm: info.algorithm, auth_data: signedAuthData,
++          version: response.version, count: 0, etag: "" };
++  }
++
+   async doCheckKeyBackup(backupInfo) {
+-    this.logger.debug("Checking key backup status...");
+-    try {
++      this.logger.debug("Checking key backup status...");
++      try {
++          if (!backupInfo) {
++              backupInfo = await this.requestKeyBackupVersion();
++          }
++      }
++      catch (e) {
++          this.logger.warn("Error checking for active key backup", e);
++          this.serverBackupInfo = undefined;
++          return null;
++      }
++      this.checkedForBackup = true;
++      this.serverBackupInfo = backupInfo;
++      const activeVersion = await this.getActiveBackupVersion();
+       if (!backupInfo) {
+-        backupInfo = await this.requestKeyBackupVersion();
+-      }
+-    } catch (e) {
+-      this.logger.warn("Error checking for active key backup", e);
+-      this.serverBackupInfo = undefined;
+-      return null;
+-    }
+-    this.checkedForBackup = true;
+-    this.serverBackupInfo = backupInfo;
+-    const activeVersion = await this.getActiveBackupVersion();
+-    if (!backupInfo) {
+-      if (activeVersion !== null) {
+-        this.logger.debug("No key backup present on server: disabling key backup");
+-        await this.disableKeyBackup();
+-      } else {
+-        this.logger.debug("No key backup present on server: not enabling key backup");
+-      }
+-      return null;
+-    }
+-    const trustInfo = await this.isKeyBackupTrusted(backupInfo);
+-
+-    // Per the spec, we should enable key upload if either (a) the backup is signed by a trusted key, or
+-    // (b) the public key matches the private decryption key that we have received from 4S.
+-    if (!trustInfo.matchesDecryptionKey && !trustInfo.trusted) {
+-      if (activeVersion !== null) {
+-        this.logger.debug("Key backup present on server but not trusted: disabling key backup");
+-        await this.disableKeyBackup();
+-      } else {
+-        this.logger.debug("Key backup present on server but not trusted: not enabling key backup");
+-      }
+-    } else {
+-      await this.enableOrSwitchKeyBackup(backupInfo, activeVersion);
+-    }
+-    return {
+-      backupInfo,
+-      trustInfo
+-    };
++          if (activeVersion !== null) {
++              this.logger.debug("No key backup present on server: disabling key backup");
++              await this.disableKeyBackup();
++          }
++          else {
++              this.logger.debug("No key backup present on server: not enabling key backup");
++          }
++          return null;
++      }
++      const trustInfo = await this.isKeyBackupTrusted(backupInfo);
++      // Per the spec, we should enable key upload if either (a) the backup is signed by a trusted key, or
++      // (b) the public key matches the private decryption key that we have received from 4S.
++      if (!trustInfo.matchesDecryptionKey && !trustInfo.trusted) {
++          if (activeVersion !== null) {
++              this.logger.debug("Key backup present on server but not trusted: disabling key backup");
++              await this.disableKeyBackup();
++          }
++          else {
++              this.logger.debug("Key backup present on server but not trusted: not enabling key backup");
++          }
++      }
++      else {
++          if (trustInfo.matchesDecryptionKey) {
++              backupInfo = await this.upgradeAuthenticatedBackup(backupInfo);
++              this.serverBackupInfo = backupInfo;
++          }
++          await this.enableOrSwitchKeyBackup(backupInfo, activeVersion);
++      }
++      return { backupInfo, trustInfo };
+   }
+ 
+   /**
+@@ -503,49 +565,44 @@
+    * @returns a KeyBackupCreationInfo - All information related to the backup.
+    */
+   async setupKeyBackup(signObject) {
+-    // Wait for any active call to `checkKeyBackupAndEnable` to complete, to avoid racing with it
+-    if (this.keyBackupCheckInProgress) {
+-      await this.keyBackupCheckInProgress;
+-    }
+-
+-    // Clean up any existing backup
+-    await this.deleteAllKeyBackupVersions();
+-    const randomKey = RustSdkCryptoJs.BackupDecryptionKey.createRandomKey();
+-    const pubKey = randomKey.megolmV1PublicKey;
+-    const authData = {
+-      public_key: pubKey.publicKeyBase64
+-    };
+-    await signObject(authData);
+-    const backupData = {
+-      algorithm: pubKey.algorithm,
+-      auth_data: authData
+-    };
+-    const res = await this.http.authedRequest(Method.Post, "/room_keys/version", undefined, backupData, {
+-      prefix: ClientPrefix.V3
+-    });
+-
+-    // This backup was just created and signed locally, so use the creation response to make up a full
+-    // `KeyBackupInfo` struct representing the new backup, instead of doing another discovery/trust check.
+-    const backupInfo = {
+-      algorithm: pubKey.algorithm,
+-      auth_data: authData,
+-      version: res.version,
+-      count: 0,
+-      etag: "" // we never actually use the etag, so we can just make up a value
+-    };
+-
+-    // saveBackupDecryptionKey emits KeyBackupDecryptionKeyCached. Cache and
+-    // enable the created backup first so listeners observe the new version.
+-    this.serverBackupInfo = backupInfo;
+-    this.checkedForBackup = true;
+-    await this.enableOrSwitchKeyBackup(backupInfo, await this.getActiveBackupVersion());
+-    await this.saveBackupDecryptionKey(randomKey, res.version);
+-    return {
+-      version: res.version,
+-      algorithm: pubKey.algorithm,
+-      authData: authData,
+-      decryptionKey: randomKey
+-    };
++      // Wait for any active call to `checkKeyBackupAndEnable` to complete, to avoid racing with it
++      if (this.keyBackupCheckInProgress) {
++          await this.keyBackupCheckInProgress;
++      }
++      // Clean up any existing backup
++      await this.deleteAllKeyBackupVersions();
++      const randomKey = RustSdkCryptoJs.BackupDecryptionKey.createRandomKey();
++      const pubKey = randomKey.megolmV1PublicKey;
++      const authData = { public_key: pubKey.publicKeyBase64, "social.volna.authenticated_backup": 1 };
++      await signObject(authData);
++      const backupData = {
++          algorithm: pubKey.algorithm,
++          auth_data: authData,
++      };
++      const res = await this.http.authedRequest(Method.Post, "/room_keys/version", undefined, backupData, {
++          prefix: ClientPrefix.V3,
++      });
++      // This backup was just created and signed locally, so use the creation response to make up a full
++      // `KeyBackupInfo` struct representing the new backup, instead of doing another discovery/trust check.
++      const backupInfo = {
++          algorithm: pubKey.algorithm,
++          auth_data: authData,
++          version: res.version,
++          count: 0,
++          etag: "", // we never actually use the etag, so we can just make up a value
++      };
++      // saveBackupDecryptionKey emits KeyBackupDecryptionKeyCached. Cache and
++      // enable the created backup first so listeners observe the new version.
++      this.serverBackupInfo = backupInfo;
++      this.checkedForBackup = true;
++      await this.enableOrSwitchKeyBackup(backupInfo, await this.getActiveBackupVersion());
++      await this.saveBackupDecryptionKey(randomKey, res.version);
++      return {
++          version: res.version,
++          algorithm: pubKey.algorithm,
++          authData: authData,
++          decryptionKey: randomKey,
++      };
+   }
+ 
+   /**
+@@ -601,8 +658,20 @@
+    * @returns The total number of keys and the total imported.
+    */
+   async restoreKeyBackup(backupVersion, backupDecryptor, opts) {
+-    const keyBackup = await this.downloadKeyBackup(backupVersion);
+-    return this.importKeyBackup(keyBackup, backupVersion, backupDecryptor, opts);
++      const info = await this.requestKeyBackupVersion(backupVersion);
++      const metadata = info?.auth_data;
++      const parent = metadata?.["social.volna.backup_parent_version"];
++      if (metadata?.["social.volna.authenticated_backup"] === 1 && typeof parent === "string"
++          && parent.length > 0 && parent.length <= 128 && parent !== backupVersion) {
++          const previous = await this.requestKeyBackupVersion(parent);
++          if (previous?.algorithm === info?.algorithm &&
++              previous?.auth_data?.public_key === metadata.public_key) {
++              // One level only: no server-controlled recursive version traversal.
++              await this.importKeyBackup(await this.downloadKeyBackup(parent), parent, backupDecryptor);
++          }
++      }
++      const keyBackup = await this.downloadKeyBackup(backupVersion);
++      return this.importKeyBackup(keyBackup, backupVersion, backupDecryptor, opts);
+   }
+ 
+   /**
+@@ -795,17 +864,19 @@
+    * Implements {@link BackupDecryptor#decryptSessions}
+    */
+   async decryptSessions(ciphertexts) {
+-    const keys = [];
+-    for (const [sessionId, sessionData] of Object.entries(ciphertexts)) {
+-      try {
+-        const decrypted = JSON.parse(this.decryptionKey.decryptV1(sessionData.session_data.ephemeral, sessionData.session_data.mac, sessionData.session_data.ciphertext));
+-        decrypted.session_id = sessionId;
+-        keys.push(decrypted);
+-      } catch (e) {
+-        this.logger.debug("Failed to decrypt megolm session from backup", e, sessionData);
+-      }
+-    }
+-    return keys;
++      const keys = [];
++      for (const [sessionId, sessionData] of Object.entries(ciphertexts)) {
++          try {
++              const decrypted = JSON.parse(this.decryptionKey.decryptV1WithAuthentication(JSON.stringify(sessionData.session_data)));
++              decrypted.session_id = sessionId;
++              encryptedBackupEntries.set(decrypted, sessionData.session_data);
++              keys.push(decrypted);
++          }
++          catch (e) {
++              this.logger.debug("Failed to decrypt megolm session from backup");
++          }
++      }
++      return keys;
+   }
+ 
+   /**
+diff --git a/lib/rust-crypto/rust-crypto.d.ts b/lib/rust-crypto/rust-crypto.d.ts
+--- a/lib/rust-crypto/rust-crypto.d.ts
++++ b/lib/rust-crypto/rust-crypto.d.ts
+@@ -22,6 +22,9 @@
+  * @internal
+  */
+ export declare class RustCrypto extends TypedEventEmitter<RustCryptoEvents, CryptoEventHandlerMap> implements CryptoBackend {
++    getAuthenticatedBackupVersion(): number;
++    getRoomKeyRecipientPolicyVersion(): number;
++    bindRoomKeyRecipients(roomId: string, peerId: string): Promise<void>;
+     private readonly logger;
+     /** The `OlmMachine` from the underlying rust crypto sdk. */
+     private readonly olmMachine;
+@@ -606,4 +609,4 @@
+ type CryptoEvents = (typeof CryptoEvent)[keyof typeof CryptoEvent];
+ type RustCryptoEvents = Exclude<CryptoEvents, CryptoEvent.LegacyCryptoStoreMigrationProgress>;
+ export {};
+-//# sourceMappingURL=rust-crypto.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=rust-crypto.d.ts.map
+diff --git a/lib/rust-crypto/rust-crypto.js b/lib/rust-crypto/rust-crypto.js
+--- a/lib/rust-crypto/rust-crypto.js
++++ b/lib/rust-crypto/rust-crypto.js
+@@ -305,6 +305,26 @@
+   /**
+    * Implementation of {@link CryptoApi#getOwnDeviceKeys}.
+    */
++  getAuthenticatedBackupVersion() {
++    return this.olmMachine.authenticatedBackupVersion === 1 ? 1 : 0;
++  }
++  getRoomKeyRecipientPolicyVersion() {
++    return this.olmMachine.roomKeyRecipientPolicyVersion === 1 ? 1 : 0;
++  }
++  async bindRoomKeyRecipients(roomId, peerId) {
++    if (this.getRoomKeyRecipientPolicyVersion() !== 1) {
++      throw new Error("Strict room-key recipient core is unavailable");
++    }
++    const room = new RustSdkCryptoJs.RoomId(roomId);
++    let peer;
++    try {
++      peer = new RustSdkCryptoJs.UserId(peerId);
++      await this.olmMachine.bindRoomKeyRecipients(room, peer);
++    } finally {
++      peer?.free();
++      room.free();
++    }
++  }
+   async getOwnDeviceKeys() {
+     const keys = this.olmMachine.identityKeys;
+     return {
+@@ -2129,4 +2149,4 @@
+ function isRoomKeyBundleMessage(message) {
+   return (message.type === "io.element.msc4268.room_key_bundle" || message.type === "m.room_key_bundle") && typeof message.content.room_id === "string";
+ }
+-//# sourceMappingURL=rust-crypto.js.map
+\ No newline at end of file
++//# sourceMappingURL=rust-crypto.js.map
+diff --git a/src/crypto-api/index.ts b/src/crypto-api/index.ts
+--- a/src/crypto-api/index.ts
++++ b/src/crypto-api/index.ts
+@@ -76,6 +76,12 @@
+  * Public interface to the cryptography parts of the js-sdk
+  */
+ export interface CryptoApi {
++    /** MSC4048 backup authentication and sealed sender provenance in the binary. */
++    getAuthenticatedBackupVersion(): number;
++    /** VOLNA custom SDK capability; zero means the strict core is unavailable. */
++    getRoomKeyRecipientPolicyVersion(): number;
++    /** Immutable endpoint-selected own/peer binding, enforced inside Rust. */
++    bindRoomKeyRecipients(roomId: string, peerId: string): Promise<void>;
+     /**
+      * Global override for whether the client should ever send encrypted
+      * messages to unverified devices. This provides the default for rooms which
+diff --git a/src/rust-crypto/backup.ts b/src/rust-crypto/backup.ts
+--- a/src/rust-crypto/backup.ts
++++ b/src/rust-crypto/backup.ts
+@@ -16,6 +16,7 @@
+ 
+ import { type OlmMachine, type SignatureVerification } from "@matrix-org/matrix-sdk-crypto-wasm";
+ import * as RustSdkCryptoJs from "@matrix-org/matrix-sdk-crypto-wasm";
++import * as anotherjson from "another-json";
+ 
+ import {
+     type BackupTrustInfo,
+@@ -47,6 +48,10 @@
+ 
+ /** Authentification of the backup info, depends on algorithm */
+ type AuthData = KeyBackupInfo["auth_data"];
++// Ciphertext stays attached only to actual decryptor results. The Rust importer
++// re-verifies it against its stored recovery key; ordinary JSON imports cannot
++// claim authenticated provenance by setting a field.
++const encryptedBackupEntries = new WeakMap<IMegolmSessionData, unknown>();
+ 
+ /**
+  * Holds information of a created keybackup.
+@@ -240,6 +245,9 @@
+         version: string,
+     ): Promise<void> {
+         await this.olmMachine.saveBackupDecryptionKey(backupDecryptionKey, version);
++        // The strict uploader waits for this key rather than acknowledging an
++        // unauthenticated first upload. Resume after persistence completes.
++        void this.backupKeysLoop();
+         // Emit an event that we have a new backup decryption key, so that the sdk can start
+         // importing keys from backup if needed.
+         this.emit(CryptoEvent.KeyBackupDecryptionKeyCached, version);
+@@ -284,8 +292,21 @@
+         backupVersion: string,
+         opts?: ImportRoomKeysOpts,
+     ): Promise<void> {
++        const encrypted: Record<string, Record<string, unknown>> = Object.create(null);
++        const legacy: IMegolmSessionData[] = [];
++        for (const key of keys) {
++            const ciphertext = encryptedBackupEntries.get(key);
++            if (ciphertext === undefined) { legacy.push(key); continue; }
++            (encrypted[key.room_id] ??= Object.create(null))[key.session_id] = ciphertext;
++        }
++        if (Object.keys(encrypted).length) {
++            const result = await this.olmMachine.importEncryptedRoomKeyBackup(JSON.stringify(encrypted), backupVersion);
++            opts?.progressCallback?.({ total: keys.length, successes: Number(result.importedCount),
++                stage: ImportRoomKeyStage.LoadKeys, failures: 0 });
++        }
++        if (!legacy.length) return;
+         const keysByRoom: Map<RustSdkCryptoJs.RoomId, Map<string, IMegolmSessionData>> = new Map();
+-        for (const key of keys) {
++        for (const key of legacy) {
+             const roomId = new RustSdkCryptoJs.RoomId(key.room_id);
+             if (!keysByRoom.has(roomId)) {
+                 keysByRoom.set(roomId, new Map());
+@@ -307,6 +328,39 @@
+         );
+     }
+ 
++    private async upgradeAuthenticatedBackup(info: KeyBackupInfo): Promise<KeyBackupInfo> {
++        const metadata = info.auth_data as unknown as Record<string, unknown>;
++        if (metadata["social.volna.authenticated_backup"] === 1) return info;
++        const keys = await this.olmMachine.getBackupKeys();
++        const secret = keys.decryptionKey;
++        if (!secret || !this.backupInfoMatchesBackupDecryptionKey(info, secret)) return info;
++        // Never delete an old version or rotate SSSS/cross-signing for migration.
++        // Retain its exact id so a new endpoint can recover through an interrupted
++        // re-upload. Imported legacy keys remain unauthenticated inside Rust.
++        const decryptor = this.createBackupDecryptor(secret);
++        try {
++            await this.importKeyBackup(await this.downloadKeyBackup(info.version!), info.version!, decryptor);
++        } finally { decryptor.free(); }
++        const authData = { public_key: metadata.public_key,
++            "social.volna.authenticated_backup": 1,
++            "social.volna.backup_parent_version": info.version };
++        const signatures = await this.olmMachine.sign(anotherjson.stringify(authData));
++        const signedAuthData = { ...authData, signatures: JSON.parse(signatures.asJSON()) } as AuthData;
++        signatures.free();
++        const response = await this.http.authedRequest<{version: string}>(Method.Post,
++            "/room_keys/version", undefined, {algorithm: info.algorithm, auth_data: signedAuthData},
++            {prefix: ClientPrefix.V3});
++        // The decryptor above owns its WASM key object. Reload the same durable
++        // secret rather than using a freed handle.
++        const saved = await this.olmMachine.getBackupKeys();
++        if (!saved.decryptionKey || !this.backupInfoMatchesBackupDecryptionKey(info, saved.decryptionKey)) {
++            throw new Error("Backup recovery key changed during migration");
++        }
++        await this.saveBackupDecryptionKey(saved.decryptionKey, response.version);
++        return {algorithm: info.algorithm, auth_data: signedAuthData,
++            version: response.version, count: 0, etag: ""};
++    }
++
+     private keyBackupCheckInProgress: Promise<KeyBackupCheck | null> | null = null;
+ 
+     /** Helper to check the key backup status, and enable/disable it as appropriate
+@@ -352,6 +406,10 @@
+                 this.logger.debug("Key backup present on server but not trusted: not enabling key backup");
+             }
+         } else {
++            if (trustInfo.matchesDecryptionKey) {
++                backupInfo = await this.upgradeAuthenticatedBackup(backupInfo);
++                this.serverBackupInfo = backupInfo;
++            }
+             await this.enableOrSwitchKeyBackup(backupInfo, activeVersion);
+         }
+         return { backupInfo, trustInfo };
+@@ -597,7 +655,7 @@
+         const randomKey = RustSdkCryptoJs.BackupDecryptionKey.createRandomKey();
+         const pubKey = randomKey.megolmV1PublicKey;
+ 
+-        const authData = { public_key: pubKey.publicKeyBase64 };
++        const authData = { public_key: pubKey.publicKeyBase64, "social.volna.authenticated_backup": 1 };
+ 
+         await signObject(authData);
+ 
+@@ -696,8 +754,19 @@
+         backupDecryptor: BackupDecryptor,
+         opts?: KeyBackupRestoreOpts,
+     ): Promise<KeyBackupRestoreResult> {
++        const info = await this.requestKeyBackupVersion(backupVersion);
++        const metadata = info?.auth_data as unknown as Record<string, unknown> | undefined;
++        const parent = metadata?.["social.volna.backup_parent_version"];
++        if (metadata?.["social.volna.authenticated_backup"] === 1 && typeof parent === "string"
++            && parent.length > 0 && parent.length <= 128 && parent !== backupVersion) {
++            const previous = await this.requestKeyBackupVersion(parent);
++            if (previous?.algorithm === info?.algorithm &&
++                (previous?.auth_data as Curve25519AuthData)?.public_key === metadata.public_key) {
++                // One level only: no server-controlled recursive version traversal.
++                await this.importKeyBackup(await this.downloadKeyBackup(parent), parent, backupDecryptor);
++            }
++        }
+         const keyBackup = await this.downloadKeyBackup(backupVersion);
+-
+         return this.importKeyBackup(keyBackup, backupVersion, backupDecryptor, opts);
+     }
+ 
+@@ -908,16 +977,13 @@
+         for (const [sessionId, sessionData] of Object.entries(ciphertexts)) {
+             try {
+                 const decrypted = JSON.parse(
+-                    this.decryptionKey.decryptV1(
+-                        sessionData.session_data.ephemeral,
+-                        sessionData.session_data.mac,
+-                        sessionData.session_data.ciphertext,
+-                    ),
++                    this.decryptionKey.decryptV1WithAuthentication(JSON.stringify(sessionData.session_data)),
+                 );
+                 decrypted.session_id = sessionId;
++                encryptedBackupEntries.set(decrypted, sessionData.session_data);
+                 keys.push(decrypted);
+             } catch (e) {
+-                this.logger.debug("Failed to decrypt megolm session from backup", e, sessionData);
++                this.logger.debug("Failed to decrypt megolm session from backup");
+             }
+         }
+         return keys;
+diff --git a/src/rust-crypto/rust-crypto.ts b/src/rust-crypto/rust-crypto.ts
+--- a/src/rust-crypto/rust-crypto.ts
++++ b/src/rust-crypto/rust-crypto.ts
+@@ -464,6 +464,29 @@
+     /**
+      * Implementation of {@link CryptoApi#getOwnDeviceKeys}.
+      */
++    public getAuthenticatedBackupVersion(): number {
++        return this.olmMachine.authenticatedBackupVersion === 1 ? 1 : 0;
++    }
++
++    public getRoomKeyRecipientPolicyVersion(): number {
++        return this.olmMachine.roomKeyRecipientPolicyVersion === 1 ? 1 : 0;
++    }
++
++    public async bindRoomKeyRecipients(roomId: string, peerId: string): Promise<void> {
++        if (this.getRoomKeyRecipientPolicyVersion() !== 1) {
++            throw new Error("Strict room-key recipient core is unavailable");
++        }
++        const room = new RustSdkCryptoJs.RoomId(roomId);
++        let peer: RustSdkCryptoJs.UserId | undefined;
++        try {
++            peer = new RustSdkCryptoJs.UserId(peerId);
++            await this.olmMachine.bindRoomKeyRecipients(room, peer);
++        } finally {
++            peer?.free();
++            room.free();
++        }
++    }
++
+     public async getOwnDeviceKeys(): Promise<OwnDeviceKeys> {
+         const keys = this.olmMachine.identityKeys;
+         return { ed25519: keys.ed25519.toBase64(), curve25519: keys.curve25519.toBase64() };

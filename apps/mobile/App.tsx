@@ -1,10 +1,19 @@
+import { createEditorNavigationGuard } from './src/components/editorAutosave';
+import { EditorNavigationContext, useEditorNavigationAction } from './src/components/useEditorAutosave';
+import { useAccountNotificationNavigation } from './src/useAccountNotificationNavigation';
+import { useChatNotificationCleanup } from './src/notifications/chatNotificationCleanup';
+import { useConnectLocationSync } from './src/location/useConnectLocationSync';
+import { AppTopBarProvider } from './src/components/ScreenTopBar';
+import { DrawerDismissArea } from './src/components/DrawerDismissArea';
+import { useReducedMotion } from '@volna/messaging-client/ui-motion';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { ScreenContinuityProvider } from './src/components/ScreenContinuity';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Sentry } from './src/monitoring/sentry';
 import { startClientTelemetry } from './src/monitoring/clientTelemetry';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   BackHandler,
   Platform,
@@ -14,6 +23,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { chatSafeAreaEdges } from './src/components/safeAreaEdges';
 import { VolnaChatScreen as ChatScreen, VolnaMessagesScreen as MessagesScreen } from '@volna/messaging-client/react-native-messages';
 import {
   apiFetch as fetch,
@@ -28,6 +38,7 @@ import {
   setApiMaintenanceHandler,
   setStoredSessionToken,
 } from './src/api/client';
+import { readRestorableSession } from './src/api/restoreSession';
 import { styles } from './src/styles';
 import {
   BottomNavigation,
@@ -66,7 +77,7 @@ import {
   SettingsScreen,
   SubscriptionScreen,
 } from './src/screens/SettingsScreens';
-import { messagingSurfaceController, releaseSecureMessagingClient } from './src/messaging/secureMessaging';
+import { logoutSecureMessagingClient, messagingSurfaceController, releaseSecureMessagingClient, warmupMatrixMessaging } from './src/messaging/secureMessaging';
 import { fromApiMessagePrivacy, toApiMessagePrivacy, uploadAvatarAsset, uploadEventPosterAsset } from './src/domain';
 import type {
   Profile,
@@ -77,6 +88,7 @@ import type {
   MessagePrivacy,
   ApiMessagePrivacy,
   NavigationState,
+  MusicCatalogDestination,
   ToastMessage,
   PublicPage,
   PublicPageTeamMember,
@@ -122,6 +134,15 @@ const PATH_TABS = Object.fromEntries(
 
 const LAST_SCREEN_STORAGE_VERSION = 1;
 const lastScreenStorageKey = (accountId: string) => `volna:last-screen:v${LAST_SCREEN_STORAGE_VERSION}:${accountId}`;
+
+async function resolveUsernameEntity(username: string, authToken: string) {
+  const response = await fetch(`${apiUrl}/search/resolve?username=${encodeURIComponent(username)}`, {
+    headers: { Authorization: `Bearer ${authToken}`, 'x-volna-suppress-error-report': '1' },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(await readApiError(response, 'Не удалось определить тип страницы'));
+  return (await response.json() as { entityType: 'account' | 'community' }).entityType;
+}
 
 function isPwaShellLaunch(): boolean {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
@@ -218,8 +239,10 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
   const [publicPageContentTab, setPublicPageContentTab] = useState<PublicPageContentTab>(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return 'feed';
     const value = new URLSearchParams(window.location.search).get('tab');
-    return value && ['feed', 'photos', 'events', 'music', 'team', 'partners', 'products'].includes(value) ? value as PublicPageContentTab : 'feed';
+    return value && ['feed', 'photos', 'events', 'schedule', 'music', 'team', 'partners', 'products'].includes(value) ? value as PublicPageContentTab : 'feed';
   });
+  const [musicCatalogDestination, setMusicCatalogDestination] = useState<MusicCatalogDestination | null>(null);
+  useEffect(() => setMusicCatalogDestination(null), [session?.account.id]);
   const [playlistIdToEdit, setPlaylistIdToEdit] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<string | null>(null);
   const [activePublicPage, setActivePublicPage] = useState<PublicPageDetail | null>(null);
@@ -229,13 +252,23 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
   const [isSideMenuOpen, setIsSideMenuOpen] = useState(false);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [isSessionRestoring, setIsSessionRestoring] = useState(true);
+  const [sessionRestoreError, setSessionRestoreError] = useState(false);
+  const [sessionRestoreAttempt, setSessionRestoreAttempt] = useState(0);
   const [isLastScreenRestoring, setIsLastScreenRestoring] = useState(false);
   const [isInitialRouteResolving, setIsInitialRouteResolving] = useState(Boolean(initialUsername || initialPostId));
+  useConnectLocationSync(
+    !isSessionRestoring && session && ownProfile?.id === session.account.id ? session.account.id : null,
+    session?.token ?? '',
+    ownProfile?.connectEnabled ?? false,
+  );
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [navigationReset, setNavigationReset] = useState(0);
   const [navigationStack, setNavigationStack] = useState<NavigationState[]>([]);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [maintenanceStatus, setMaintenanceStatus] = useState<SystemStatus | null>(null);
-  const lastToastRef = useRef({ message: '', time: 0 });
+  const lastToastRef = useRef({ message: '', time: 0, id: 0 });
+  const editorNavigation = useRef(createEditorNavigationGuard()).current;
+  const editorBrowserUrlRef = useRef('');
   const sessionTokenRef = useRef('');
   const sessionAccountIdRef = useRef('');
   const sessionEpochRef = useRef(0);
@@ -252,11 +285,12 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
   const showToast = useCallback((message: string, type: ToastMessage['type'] = 'success') => {
     const now = Date.now();
     if (lastToastRef.current.message === message && now - lastToastRef.current.time < 1_500) return;
-    lastToastRef.current = { message, time: now };
-    setToast({ id: Date.now(), message, type });
+    const id = Math.max(now, lastToastRef.current.id + 1);
+    lastToastRef.current = { message, time: now, id };
+    setToast({ id, message, type });
   }, []);
-  const closeToast = useCallback(() => {
-    setToast(null);
+  const closeToast = useCallback((id: number) => {
+    setToast(current => current?.id === id ? null : current);
   }, []);
 
   const checkSystemStatus = useCallback(async () => {
@@ -309,7 +343,7 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
       clearNotificationBadge();
       registeredPushTokenRef.current = null;
       void clearStoredSessionToken();
-      if (sessionAccountIdRef.current) void releaseSecureMessagingClient(sessionAccountIdRef.current);
+      if (sessionAccountIdRef.current) void logoutSecureMessagingClient(sessionAccountIdRef.current).catch(() => undefined);
       if (Platform.OS === 'web') {
         void baseFetch(`${apiUrl}/auth/logout`, {
           method: 'POST',
@@ -632,23 +666,21 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     let isMounted = true;
 
     const restoreSession = async () => {
+      setIsSessionRestoring(true);
+      setSessionRestoreError(false);
       try {
         const token = await getStoredSessionToken();
         if (Platform.OS !== 'web' && !token) {
           return;
         }
         setApiSessionToken(token ?? '');
-        const response = await fetch(`${apiUrl}/auth/me`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-
-        if (!response.ok) {
-          throw new Error('Stored session is invalid');
-        }
-
-        const result = (await response.json()) as { account: Account };
-
-        if (!isMounted) {
+        const result = await readRestorableSession(apiUrl, token ?? '', fetch);
+        if (!isMounted) return;
+        if (!result) {
+          setApiSessionToken('');
+          clearNotificationBadge();
+          await clearStoredSessionToken();
+          if (isMounted) { setSession(null); setProfile(null); setOwnProfile(null); }
           return;
         }
 
@@ -661,19 +693,13 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
         setSession(restoredSession);
         void refreshNotificationBadge({ force: true });
         void registerPushToken(restoredSession);
-        const nextProfile = await loadProfile(result.account.username, 'initial', restoredSession.token);
-        const normalizedProfile = { ...nextProfile, isFollowing: nextProfile.isFollowing ?? false, musicGenres: nextProfile.musicGenres ?? [] };
+        const normalizedProfile = result.profile;
+        setProfile(normalizedProfile);
         setOwnProfile(normalizedProfile);
         await restoreLastScreen(restoredSession, normalizedProfile);
       } catch {
-        setApiSessionToken('');
-        clearNotificationBadge();
-        await clearStoredSessionToken();
-        if (isMounted) {
-          setSession(null);
-          setProfile(null);
-          setOwnProfile(null);
-        }
+        // A temporary outage must not delete the native token or pretend the user logged out.
+        if (isMounted) setSessionRestoreError(true);
       } finally {
         if (isMounted) {
           setIsSessionRestoring(false);
@@ -686,7 +712,18 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     return () => {
       isMounted = false;
     };
-  }, [loadProfile, registerPushToken, restoreLastScreen]);
+  }, [registerPushToken, restoreLastScreen, sessionRestoreAttempt]);
+
+  useEffect(() => {
+    if (!session || !ownProfile || ownProfile.id !== session.account.id || isSessionRestoring || isLastScreenRestoring || isInitialRouteResolving) return;
+    const abort = new AbortController();
+    // Let the authenticated destination paint first; foreground Messages shares
+    // the same in-flight manager and never waits on this scheduling delay.
+    const timer = setTimeout(() => {
+      void warmupMatrixMessaging(session.account.id, abort.signal).catch(() => undefined);
+    }, 1500);
+    return () => { clearTimeout(timer); abort.abort(); };
+  }, [session?.account.id, ownProfile?.id, isSessionRestoring, isLastScreenRestoring, isInitialRouteResolving]);
 
   useEffect(() => {
     if (
@@ -781,6 +818,7 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
         chatUsername: activeChat,
         postId: activePostId,
         eventId: activeEventId,
+        musicCatalogDestination,
         browserPath: Platform.OS === 'web' && typeof window !== 'undefined'
           ? `${window.location.pathname}${window.location.search}`
           : null,
@@ -819,6 +857,8 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
   };
 
   const handleChangeTab = (tab: AppTab, updateBrowserUrl = true) => {
+    setMusicCatalogDestination(null);
+    setNavigationReset(value => value + 1);
     const shouldRefreshOwnProfile = Boolean(session && profile?.username !== session.account.username);
     setNavigationStack([]);
     setActiveTab(tab);
@@ -870,12 +910,14 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
         body: JSON.stringify({ token: tokenToUnregister, platform: Platform.OS }),
       }).catch(() => undefined);
     }
+    // Server revocation must still run if this browser denies local storage.
+    // Any successfully written Matrix cleanup marker remains for its next owner.
+    if (currentAccountId) await logoutSecureMessagingClient(currentAccountId).catch(() => undefined);
     await fetch(`${apiUrl}/auth/logout`, {
       method: 'POST',
       headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : undefined,
     }).catch(() => undefined);
     await clearStoredSessionToken();
-    if (currentAccountId) await releaseSecureMessagingClient(currentAccountId);
     if (session?.account.id) {
       await AsyncStorage.removeItem(lastScreenStorageKey(session.account.id)).catch(() => undefined);
     }
@@ -956,12 +998,10 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     if (Platform.OS === 'web') window.history.pushState({}, '', `/${normalizedUsername}`);
 
     const headers = { Authorization: `Bearer ${session.token}` };
-    const [profileResponse, pageResponse] = await Promise.all([
-      fetch(`${apiUrl}/profiles/${encodeURIComponent(normalizedUsername)}`, { headers }),
-      fetch(`${apiUrl}/public-pages/${encodeURIComponent(normalizedUsername)}`, { headers }),
-    ]);
-
-    if (profileResponse.ok) {
+    const entityType = await resolveUsernameEntity(normalizedUsername, session.token);
+    if (entityType === 'account') {
+      const profileResponse = await fetch(`${apiUrl}/profiles/${encodeURIComponent(normalizedUsername)}`, { headers });
+      if (!profileResponse.ok) throw new Error(await readApiError(profileResponse, 'Не удалось открыть профиль'));
       const nextProfile = await profileResponse.json() as Profile;
       setProfileContentTab('feed');
       setActivePublicPage(null);
@@ -969,7 +1009,9 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
       setProfileMode(normalizedUsername === session.account.username ? 'ownProfile' : 'view');
       return;
     }
-    if (pageResponse.ok) {
+    if (entityType === 'community') {
+      const pageResponse = await fetch(`${apiUrl}/public-pages/${encodeURIComponent(normalizedUsername)}`, { headers });
+      if (!pageResponse.ok) throw new Error(await readApiError(pageResponse, 'Не удалось открыть сообщество'));
       setPublicPageContentTab('feed');
       setActivePublicPage(await pageResponse.json() as PublicPageDetail);
       setProfileMode('publicPage');
@@ -979,7 +1021,12 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     setProfileMode('notFound');
   };
 
-  const handleGoBack = async () => {
+  const handleGoBack = async (fromBrowser = false) => {
+    if (fromBrowser !== true && Platform.OS === 'web' && navigationStack.length
+      && window.history.state?.volnaMusicDepth === navigationStack.length) {
+      window.history.back();
+      return;
+    }
     const previous = navigationStack[navigationStack.length - 1];
     setIsSideMenuOpen(false);
 
@@ -1042,6 +1089,7 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     setActiveChat(restoredState.chatUsername);
     setActivePostId(restoredState.postId);
     setActiveEventId(restoredState.eventId ?? null);
+    setMusicCatalogDestination(restoredState.musicCatalogDestination ?? null);
     restoreBrowserPath(restoredState);
 
     if (restoredProfile?.id === ownProfile?.id) {
@@ -1113,10 +1161,13 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
   };
 
   const handleOpenCreateEvent = () => {
+    if (!activePublicPage) {
+      showToast('Откройте вкладку «События» нужного сообщества', 'error');
+      return;
+    }
     rememberCurrentScreen();
     setActivePostId(null);
     setProfileMode('createEvent');
-    setActivePublicPage(null);
     setIsSideMenuOpen(false);
   };
 
@@ -1228,6 +1279,11 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
       return;
     }
 
+    const saveEpoch = sessionEpochRef.current;
+    const assertSaveSession = () => {
+      if (saveEpoch !== sessionEpochRef.current || sessionTokenRef.current !== session.token) throw new Error('Сессия изменилась. Откройте редактор заново.');
+    };
+    assertSaveSession();
     const response = await fetch(`${apiUrl}/public-pages/${pageUsername}`, {
       method: 'PATCH',
       headers: {
@@ -1242,6 +1298,7 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     }
 
     const updatedPage = (await response.json()) as PublicPage;
+    assertSaveSession();
     setActivePublicPage((currentPage) =>
       currentPage?.username === pageUsername
         ? {
@@ -1466,24 +1523,46 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
       window.history.pushState({ tab: 'events', eventId }, '', `/events?event=${encodeURIComponent(eventId)}`);
     }
   };
+  const handleOpenMusicDestination = (destination: MusicCatalogDestination) => {
+    rememberCurrentScreen();
+    setMusicCatalogDestination(destination);
+    if (Platform.OS === 'web') window.history.pushState({ tab: 'music', volnaMusicDepth: navigationStack.length + 1 }, '', '/music');
+  };
   const handleEditPlaylist = (playlistId: string) => {
     rememberCurrentScreen();
     setActivePostId(null);
     setPlaylistIdToEdit(playlistId);
+    if (Platform.OS === 'web') window.history.pushState({ tab: 'music', volnaMusicDepth: navigationStack.length + 1 }, '', '/music');
     setProfileMode('myMusic');
     setActivePublicPage(null);
     setIsSideMenuOpen(false);
   };
 
+  const guardedGoBack = useEditorNavigationAction(editorNavigation, handleGoBack);
+  const guardedChangeTab = useEditorNavigationAction(editorNavigation, handleChangeTab);
+  const guardedOpenProfile = useEditorNavigationAction(editorNavigation, handleOpenProfile);
+  const guardedOpenPublicPage = useEditorNavigationAction(editorNavigation, handleOpenPublicPage);
+  const guardedOpenMention = useEditorNavigationAction(editorNavigation, handleOpenMention);
+  const guardedCloseEditCommunity = useEditorNavigationAction(editorNavigation, () => {
+    if (editCommunityReturnsToStackRef.current) {
+      editCommunityReturnsToStackRef.current = false;
+      return handleGoBack();
+    }
+    setProfileMode('publicPage');
+  });
+
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const handleBrowserNavigation = () => {
+      if (editorNavigation.hasEditor() && editorBrowserUrlRef.current) {
+        window.history.pushState({}, '', editorBrowserUrlRef.current);
+      }
       if (navigationStack.length || activeEventId || activePostId || profileMode !== 'view') {
-        void handleGoBack();
+        void guardedGoBack(true);
         return;
       }
       const tab = PATH_TABS[window.location.pathname.toLowerCase()];
-      if (tab) handleChangeTab(tab, false);
+      if (tab) void guardedChangeTab(tab, false);
     };
     window.addEventListener('popstate', handleBrowserNavigation);
     return () => window.removeEventListener('popstate', handleBrowserNavigation);
@@ -1493,7 +1572,7 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     if (Platform.OS === 'web') return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (!navigationStack.length && !activeEventId && !activePostId && profileMode === 'view') return false;
-      void handleGoBack();
+      void guardedGoBack();
       return true;
     });
     return () => subscription.remove();
@@ -1596,6 +1675,11 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
       return;
     }
 
+    const saveEpoch = sessionEpochRef.current;
+    const assertSaveSession = () => {
+      if (saveEpoch !== sessionEpochRef.current || sessionTokenRef.current !== session.token) throw new Error('Сессия изменилась. Откройте редактор заново.');
+    };
+    assertSaveSession();
     const response = await fetch(`${apiUrl}/auth/me`, {
       method: 'PATCH',
       headers: {
@@ -1610,9 +1694,11 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     }
 
     const nextSession = (await response.json()) as { account: Account };
+    assertSaveSession();
     const previous = navigationStack[navigationStack.length - 1];
     setSession({ ...session, account: nextSession.account });
     const savedProfile = await loadProfile(nextSession.account.username, options?.stayOnScreen ? 'silent' : 'initial');
+    assertSaveSession();
     const normalizedSavedProfile = {
       ...savedProfile,
       isFollowing: savedProfile.isFollowing ?? false,
@@ -1644,6 +1730,11 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
 
   const handleSaveAdminProfile = async (username: string, data: ProfileUpdate, options?: { stayOnScreen?: boolean }) => {
     if (!session) return;
+    const saveEpoch = sessionEpochRef.current;
+    const assertSaveSession = () => {
+      if (saveEpoch !== sessionEpochRef.current || sessionTokenRef.current !== session.token) throw new Error('Сессия изменилась. Откройте редактор заново.');
+    };
+    assertSaveSession();
     const response = await fetch(`${apiUrl}/profiles/${encodeURIComponent(username)}/admin-profile`, {
       method: 'PATCH',
       headers: {
@@ -1655,8 +1746,10 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     });
     if (!response.ok) throw new Error(await readApiError(response, 'Не удалось сохранить профиль'));
     const result = await response.json() as { account?: Account };
+    assertSaveSession();
     const nextUsername = result.account?.username ?? data.username ?? username;
     const savedProfile = await loadProfile(nextUsername, 'silent');
+    assertSaveSession();
     const normalizedSavedProfile = {
       ...savedProfile,
       isFollowing: savedProfile.isFollowing ?? false,
@@ -1670,6 +1763,8 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
   const handleSaveSettings = async (data: {
     messagePrivacy: MessagePrivacy;
     readReceiptsPrivacy: MessagePrivacy;
+    onlinePrivacy: MessagePrivacy;
+    allowConnectMatchMessages: boolean;
     invisibleMode: boolean;
     showSavedMusicOnProfile: boolean;
     showUploadedMusicOnProfile: boolean;
@@ -1688,6 +1783,8 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
       body: JSON.stringify({
         messagePrivacy: toApiMessagePrivacy(data.messagePrivacy),
         readReceiptsPrivacy: toApiMessagePrivacy(data.readReceiptsPrivacy),
+        onlinePrivacy: toApiMessagePrivacy(data.onlinePrivacy),
+        allowConnectMatchMessages: data.allowConnectMatchMessages,
         invisibleMode: data.invisibleMode,
         showSavedMusicOnProfile: data.showSavedMusicOnProfile,
         showUploadedMusicOnProfile: data.showUploadedMusicOnProfile,
@@ -1700,7 +1797,7 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     }
 
     const result = (await response.json()) as {
-      settings: { messagePrivacy: ApiMessagePrivacy; readReceiptsPrivacy: ApiMessagePrivacy; invisibleMode: boolean; sharePlaybackActivity: boolean; showSavedMusicOnProfile: boolean; showUploadedMusicOnProfile: boolean; showBirthYear: boolean };
+      settings: { messagePrivacy: ApiMessagePrivacy; readReceiptsPrivacy: ApiMessagePrivacy; onlinePrivacy: ApiMessagePrivacy; allowConnectMatchMessages: boolean; invisibleMode: boolean; sharePlaybackActivity: boolean; showSavedMusicOnProfile: boolean; showUploadedMusicOnProfile: boolean; showBirthYear: boolean };
     };
     setSession({
       ...session,
@@ -1708,6 +1805,8 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
         ...session.account,
         messagePrivacy: result.settings.messagePrivacy,
         readReceiptsPrivacy: result.settings.readReceiptsPrivacy,
+        onlinePrivacy: result.settings.onlinePrivacy,
+        allowConnectMatchMessages: result.settings.allowConnectMatchMessages,
         invisibleMode: result.settings.invisibleMode,
         showSavedMusicOnProfile: result.settings.showSavedMusicOnProfile,
         showUploadedMusicOnProfile: result.settings.showUploadedMusicOnProfile,
@@ -1720,6 +1819,8 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
             ...currentProfile,
             messagePrivacy: result.settings.messagePrivacy,
             readReceiptsPrivacy: result.settings.readReceiptsPrivacy,
+        onlinePrivacy: result.settings.onlinePrivacy,
+        allowConnectMatchMessages: result.settings.allowConnectMatchMessages,
             invisibleMode: result.settings.invisibleMode,
             sharePlaybackActivity: result.settings.sharePlaybackActivity,
             showSavedMusicOnProfile: result.settings.showSavedMusicOnProfile,
@@ -1733,6 +1834,8 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
           ...currentProfile,
           messagePrivacy: result.settings.messagePrivacy,
           readReceiptsPrivacy: result.settings.readReceiptsPrivacy,
+        onlinePrivacy: result.settings.onlinePrivacy,
+        allowConnectMatchMessages: result.settings.allowConnectMatchMessages,
           invisibleMode: result.settings.invisibleMode,
           sharePlaybackActivity: result.settings.sharePlaybackActivity,
           showSavedMusicOnProfile: result.settings.showSavedMusicOnProfile,
@@ -1775,9 +1878,11 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     let active = true;
     void (async () => {
       const headers = { Authorization: `Bearer ${session.token}` };
-      const profileResponse = await fetch(`${apiUrl}/profiles/${encodeURIComponent(username)}`, { headers });
+      const entityType = await resolveUsernameEntity(username, session.token);
       if (!active) return;
-      if (profileResponse.ok) {
+      if (entityType === 'account') {
+        const profileResponse = await fetch(`${apiUrl}/profiles/${encodeURIComponent(username)}`, { headers });
+        if (!profileResponse.ok) throw new Error(await readApiError(profileResponse, 'Не удалось открыть профиль'));
         const nextProfile = await profileResponse.json() as Profile;
         if (!active) return;
         setNavigationStack([]);
@@ -1789,9 +1894,10 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
         setIsInitialRouteResolving(false);
         return;
       }
-      const pageResponse = await fetch(`${apiUrl}/public-pages/${encodeURIComponent(username)}`, { headers });
-      if (!active) return;
-      if (pageResponse.ok) {
+      if (entityType === 'community') {
+        const pageResponse = await fetch(`${apiUrl}/public-pages/${encodeURIComponent(username)}`, { headers });
+        if (!pageResponse.ok) throw new Error(await readApiError(pageResponse, 'Не удалось открыть сообщество'));
+        if (!active) return;
         setNavigationStack([]);
         setActivePostId(normalizedPostId);
         setActivePublicPage(await pageResponse.json() as PublicPageDetail);
@@ -1887,14 +1993,16 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
     if (activeEventId && path === '/events') query.set('event', activeEventId);
     const target = `${path}${query.size ? `?${query.toString()}` : ''}`;
     if (`${window.location.pathname}${window.location.search}` !== target) window.history.replaceState({ tab: activeTab, profileMode }, '', target);
+    editorBrowserUrlRef.current = ['edit', 'editAdminProfile', 'editCommunity'].includes(profileMode) ? target : '';
   }, [activeChat, activeEventId, activePostId, activePublicPage, activeTab, initialUsername, isSessionRestoring, profile, profileMode, session]);
 
   return (
     <SafeAreaProvider>
+      <EditorNavigationContext.Provider value={editorNavigation}>
       <View style={styles.safeArea}>
         {maintenanceStatus ? (
           <MaintenanceScreen onRetry={checkSystemStatus} />
-        ) : session && profile && !isInitialRouteResolving && !isLastScreenRestoring ? (
+        ) : session && profile && !isSessionRestoring && !sessionRestoreError && !isInitialRouteResolving && !isLastScreenRestoring ? (
           <MainApp
             accountRole={session.account.role}
             activeTab={activeTab}
@@ -1903,27 +2011,21 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
             activeEventId={activeEventId}
             profileContentTab={profileContentTab}
             publicPageContentTab={publicPageContentTab}
+            navigationReset={navigationReset}
             canGoBack={navigationStack.length > 0 || profile.username !== session.account.username || profileMode !== 'view'}
             isRefreshingPublicPage={isRefreshingPublicPage}
             isProfileLoading={isProfileLoading}
             isRefreshing={isRefreshing}
             isSideMenuOpen={isSideMenuOpen}
             activeChat={activeChat}
-            onChangeTab={handleChangeTab}
+            onChangeTab={guardedChangeTab}
             onBlockProfile={handleBlockProfile}
             onBlockPublicPage={handleBlockPublicPage}
-            onCloseEditCommunity={() => {
-              if (editCommunityReturnsToStackRef.current) {
-                editCommunityReturnsToStackRef.current = false;
-                void handleGoBack();
-                return;
-              }
-              setProfileMode('publicPage');
-            }}
+            onCloseEditCommunity={guardedCloseEditCommunity}
             onCreateCommunity={handleCreateCommunity}
             onAddTeamMember={handleAddTeamMember}
             onAddPartnerPage={handleAddPartnerPage}
-            onGoBack={handleGoBack}
+            onGoBack={guardedGoBack}
             onCloseSideMenu={() => setIsSideMenuOpen(false)}
             onLogout={handleLogout}
             onRefreshPublicPage={handleRefreshPublicPage}
@@ -1942,10 +2044,10 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
               setIsSideMenuOpen(false);
               setProfileMode('editAdminProfile');
             }}
-            onOpenProfile={handleOpenProfile}
+            onOpenProfile={guardedOpenProfile}
             onOpenPost={handleOpenPost}
-            onOpenMention={handleOpenMention}
-            onOpenPublicPage={handleOpenPublicPage}
+            onOpenMention={guardedOpenMention}
+            onOpenPublicPage={guardedOpenPublicPage}
             onRemoveTeamMember={handleRemoveTeamMember}
             onRemovePartnerPage={handleRemovePartnerPage}
             onNotify={showToast}
@@ -1959,6 +2061,8 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
             }}
             onOpenMyCommunities={handleOpenMyCommunities}
             onOpenMyMusic={handleOpenMyMusic}
+            musicCatalogDestination={musicCatalogDestination}
+            onOpenMusicDestination={handleOpenMusicDestination}
             onEditPlaylist={handleEditPlaylist}
             onPlaylistEditorOpened={() => setPlaylistIdToEdit(null)}
             onCreateEvent={handleCreateEvent}
@@ -2035,6 +2139,8 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
             ownShowBirthYear={session.account.showBirthYear}
             ownProfile={ownProfile ?? profile}
             ownReadReceiptsPrivacy={session.account.readReceiptsPrivacy}
+            ownOnlinePrivacy={session.account.onlinePrivacy ?? 'FOLLOWING'}
+            ownAllowConnectMatchMessages={session.account.allowConnectMatchMessages ?? true}
             ownUsername={session.account.username}
             subscriptionExpiresAt={session.account.subscriptionExpiresAt}
             showSubscription={session.account.profileType === 'SUBSCRIBER' && (
@@ -2046,33 +2152,29 @@ function App({ initialUsername, initialPostId, initialTab = 'feed', initialProfi
             profileMode={profileMode}
             playlistIdToEdit={playlistIdToEdit}
           />
-        ) : isSessionRestoring || isLastScreenRestoring || (session && profile && isInitialRouteResolving) ? (
-          <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}><DevelopmentLoadingScreen /></SafeAreaView>
+        ) : sessionRestoreError || isSessionRestoring || isLastScreenRestoring || (session && profile && isInitialRouteResolving) ? (
+          <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}><DevelopmentLoadingScreen error={sessionRestoreError} onRetry={() => { setIsSessionRestoring(true); setSessionRestoreError(false); setSessionRestoreAttempt(value => value + 1); }} /></SafeAreaView>
         ) : (
           <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}><AuthScreen isLoading={isProfileLoading} onAuthenticated={handleAuthenticated} /></SafeAreaView>
         )}
         <TopToast onClose={closeToast} toast={toast} />
-        {session ? <PushPermissionPrompt onNotify={showToast} /> : null}
+        {session ? <PushPermissionPrompt key={session.account.id} onNotify={showToast} /> : null}
       </View>
+    </EditorNavigationContext.Provider>
     </SafeAreaProvider>
   );
 }
 
 export default Sentry.wrap(App);
 
-function DevelopmentLoadingScreen() {
-  const progress = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const animation = Animated.loop(Animated.timing(progress, { duration: 1200, toValue: 1, useNativeDriver: true }));
-    animation.start();
-    return () => animation.stop();
-  }, [progress]);
-  return <View accessibilityLiveRegion="polite" accessibilityRole="progressbar" style={styles.sessionRestoreScreen}>
+function DevelopmentLoadingScreen({ error = false, onRetry }: { error?: boolean; onRetry?: () => void }) {
+  return <View accessibilityLiveRegion="polite" accessibilityRole={error ? undefined : 'progressbar'} style={styles.sessionRestoreScreen}>
     <View style={styles.developmentLoadingContent}>
       <Text style={styles.developmentLoadingBrand}>ВОЛНА</Text>
-      <View style={styles.developmentLoadingTrack}><Animated.View style={[styles.developmentLoadingBar, { transform: [{ translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [-116, 278] }) }] }]} /></View>
-      <Text style={styles.developmentLoadingTitle}>Восстанавливаем сессию</Text>
-      <Text style={styles.developmentLoadingNote}>Режим разработки — обновления приложения загружаются напрямую</Text>
+      {!error ? <LoadingIndicator size="large" accessibilityLabel="Восстанавливаем сессию" /> : null}
+      <Text style={styles.developmentLoadingTitle}>{error ? 'Не удалось восстановить подключение' : 'Восстанавливаем сессию'}</Text>
+      {error || __DEV__ ? <Text style={styles.developmentLoadingNote}>{error ? 'Проверьте соединение и попробуйте снова. Повторный вход пока не требуется.' : 'Режим разработки — обновления приложения загружаются напрямую'}</Text> : null}
+      {error ? <Pressable accessibilityRole="button" onPress={onRetry} style={styles.maintenanceButton}><Text style={styles.maintenanceButtonText}>Попробовать снова</Text></Pressable> : null}
     </View>
   </View>;
 }
@@ -2090,7 +2192,11 @@ function MaintenanceScreen({ onRetry }: { onRetry: () => void }) {
   </SafeAreaView>;
 }
 
-function MainApp({
+function MainApp(props: Parameters<typeof MainAppContent>[0]) {
+  return <AppTopBarProvider><ScreenContinuityProvider key={`${props.ownAccountId}:${props.navigationReset}`}><MainAppContent {...props} /></ScreenContinuityProvider></AppTopBarProvider>;
+}
+
+function MainAppContent({
   accountRole,
   activeChat,
   activePublicPage,
@@ -2127,6 +2233,8 @@ function MainApp({
   onOpenCommunityCabinet,
   onOpenMyCommunities,
   onOpenMyMusic,
+  musicCatalogDestination,
+  onOpenMusicDestination,
   onEditPlaylist,
   onPlaylistEditorOpened,
   onOpenEditCommunity,
@@ -2168,6 +2276,8 @@ function MainApp({
   ownShowBirthYear,
   ownProfile,
   ownReadReceiptsPrivacy,
+  ownOnlinePrivacy,
+  ownAllowConnectMatchMessages,
   ownUsername,
   subscriptionExpiresAt,
   showSubscription,
@@ -2175,6 +2285,7 @@ function MainApp({
   profileMode,
   playlistIdToEdit,
 }: {
+  navigationReset: number;
   accountRole: Account['role'];
   activeChat: string | null;
   activePublicPage: PublicPageDetail | null;
@@ -2211,6 +2322,8 @@ function MainApp({
   onOpenCommunityCabinet: () => void;
   onOpenMyCommunities: () => void;
   onOpenMyMusic: () => void;
+  musicCatalogDestination: MusicCatalogDestination | null;
+  onOpenMusicDestination: (destination: MusicCatalogDestination) => void;
   onEditPlaylist: (playlistId: string) => void;
   onPlaylistEditorOpened: () => void;
   onOpenEditCommunity: () => void;
@@ -2241,6 +2354,8 @@ function MainApp({
   onSaveSettings: (data: {
     messagePrivacy: MessagePrivacy;
     readReceiptsPrivacy: MessagePrivacy;
+    onlinePrivacy: MessagePrivacy;
+    allowConnectMatchMessages: boolean;
     invisibleMode: boolean;
     showSavedMusicOnProfile: boolean;
     showUploadedMusicOnProfile: boolean;
@@ -2263,6 +2378,8 @@ function MainApp({
   ownShowBirthYear: boolean;
   ownProfile: Profile;
   ownReadReceiptsPrivacy: ApiMessagePrivacy;
+  ownOnlinePrivacy: ApiMessagePrivacy;
+  ownAllowConnectMatchMessages: boolean;
   ownUsername: string;
   subscriptionExpiresAt: string | null;
   showSubscription: boolean;
@@ -2273,18 +2390,28 @@ function MainApp({
   const [adminMode, setAdminMode] = useState(false);
   const [releaseComposerRequest, setReleaseComposerRequest] = useState<import('./src/components/GlobalAudioPlayer').TrackComposerRequest | null>(null);
   const [bottomNavigationHeight, setBottomNavigationHeight] = useState(0);
+  const [isPlaylistEditorVisible, setIsPlaylistEditorVisible] = useState(false);
   const openMessagesFromHeader = useCallback(() => {
     void onOpenMessages().catch((error) => {
       onNotify(error instanceof Error ? error.message : 'Не удалось открыть сообщения', 'error');
     });
   }, [onNotify, onOpenMessages]);
+  useAccountNotificationNavigation(ownAccountId, onShowMessageSecurity, onOpenNotifications);
+  useChatNotificationCleanup(ownAccountId);
   const isProfileRouteVisible = profileMode === 'ownProfile' || (profileMode === 'view' && (activeTab === 'profile' || profile.username !== ownUsername));
   const { width: windowWidth } = useWindowDimensions();
   const drawerWidth = Math.min(Math.max(windowWidth * 0.76, 278), 330);
+  const reducedDrawerMotion = useReducedMotion();
   const drawerProgress = useRef(new Animated.Value(isSideMenuOpen ? 1 : 0)).current;
   const [isDrawerTransitionActive, setIsDrawerTransitionActive] = useState(isSideMenuOpen);
 
   useEffect(() => {
+    if (reducedDrawerMotion) {
+      drawerProgress.stopAnimation();
+      drawerProgress.setValue(isSideMenuOpen ? 1 : 0);
+      setIsDrawerTransitionActive(isSideMenuOpen);
+      return;
+    }
     if (isSideMenuOpen) {
       setIsDrawerTransitionActive(true);
     }
@@ -2298,30 +2425,32 @@ function MainApp({
       return () => clearTimeout(timeout);
     }
 
-    Animated.timing(drawerProgress, {
+    const animation = Animated.timing(drawerProgress, {
       toValue: isSideMenuOpen ? 1 : 0,
       duration: isSideMenuOpen ? 260 : 220,
       useNativeDriver: true,
-    }).start(({ finished }) => {
+    });
+    animation.start(({ finished }) => {
       if (finished && !isSideMenuOpen) {
         setIsDrawerTransitionActive(false);
       }
     });
-  }, [drawerProgress, isSideMenuOpen]);
+    return () => animation.stop();
+  }, [drawerProgress, isSideMenuOpen, reducedDrawerMotion]);
 
   const appTranslateX = drawerProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [0, -drawerWidth],
   });
   const appSurfaceMotionStyle = Platform.OS === 'web'
-    ? {
+    ? isDrawerTransitionActive ? {
         transform: [{ translateX: isSideMenuOpen ? -drawerWidth : 0 }],
-        transitionDuration: isSideMenuOpen ? '280ms' : '240ms',
+        transitionDuration: reducedDrawerMotion ? '0ms' : isSideMenuOpen ? '280ms' : '240ms',
         transitionProperty: 'transform',
         transitionTimingFunction: isSideMenuOpen
           ? 'cubic-bezier(0.22, 1, 0.36, 1)'
           : 'cubic-bezier(0.4, 0, 0.2, 1)',
-      }
+      } : null
     : { transform: [{ translateX: appTranslateX }] };
 
   if (mustChangePassword) {
@@ -2337,7 +2466,7 @@ function MainApp({
       onNotify={onNotify}
       storageScope={ownAccountId}
     >
-    <View style={styles.appShell}>
+    <DrawerDismissArea enabled={isSideMenuOpen} onDismiss={onCloseSideMenu} style={styles.appShell}>
       <View pointerEvents={isSideMenuOpen ? 'auto' : 'none'} style={[styles.sideMenuLayer, { width: drawerWidth }]}>
         <SafeAreaView edges={['top', 'bottom']} style={styles.drawerSafeArea}>
         <SideMenu
@@ -2379,12 +2508,12 @@ function MainApp({
         shouldRasterizeIOS={isDrawerTransitionActive}
         style={[
           styles.appSurfaceFrame,
-          styles.appSurfaceAnimated,
+          (Platform.OS !== 'web' || isDrawerTransitionActive) && styles.appSurfaceAnimated,
           isDrawerTransitionActive && styles.appSurfaceShifted,
           appSurfaceMotionStyle,
         ]}
       >
-        <SafeAreaView edges={['top']} style={[styles.appSurface, isDrawerTransitionActive && styles.appSurfaceClipped]}>
+        <SafeAreaView edges={profileMode === 'chat' ? chatSafeAreaEdges : ['top']} style={[styles.appSurface, isDrawerTransitionActive && styles.appSurfaceClipped]}>
         <View style={styles.mainContent}>
           {activeTab === 'feed' && profileMode === 'view' && !isProfileRouteVisible ? (
             <FeedScreen
@@ -2432,17 +2561,22 @@ function MainApp({
                 countryCode: ownProfile.countryCode,
                 countryName: ownProfile.countryName,
               }}
+              onNotify={onNotify}
               onOpenMenu={onOpenMenu}
               onOpenMessages={openMessagesFromHeader}
               onOpenNotifications={onOpenNotifications}
               onOpenPublicPage={onOpenPublicPage}
               onOpenProfile={onOpenProfile}
+              onTogglePublicPageFollow={onTogglePublicPageFollow}
+              ownAccountId={ownAccountId}
             />
           ) : null}
           {activeTab === 'community' && profileMode === 'view' && !isProfileRouteVisible ? (
             <CommunityScreen
               connectEnabled={ownProfile.connectEnabled}
+              ownAccountId={ownAccountId}
               onNotify={onNotify}
+              onOpenChat={onOpenChat}
               onOpenEditProfile={onOpenEdit}
               onOpenMenu={onOpenMenu}
               onOpenMessages={openMessagesFromHeader}
@@ -2456,9 +2590,13 @@ function MainApp({
           ) : null}
           {activeTab === 'music' && profileMode === 'view' && !isProfileRouteVisible ? (
             <MusicCatalogScreen
+              destination={musicCatalogDestination}
+              onOpenDestination={onOpenMusicDestination}
+              onBack={onGoBack}
               onEditPlaylist={onEditPlaylist}
               onOpenMenu={onOpenMenu}
               onOpenMessages={openMessagesFromHeader}
+              onOpenMyMusic={onOpenMyMusic}
               onOpenNotifications={onOpenNotifications}
               onOpenPublicPage={onOpenPublicPage}
               onNotify={onNotify}
@@ -2513,6 +2651,7 @@ function MainApp({
           ) : null}
           {profileMode === 'edit' ? (
             <EditProfileScreen
+              key={authToken + ownProfile.id}
               authToken={authToken}
               onBack={onGoBack}
               onNotify={onNotify}
@@ -2522,6 +2661,7 @@ function MainApp({
           ) : null}
           {profileMode === 'editAdminProfile' ? (
             <EditProfileScreen
+              key={authToken + profile.id}
               administrativeTarget
               authToken={authToken}
               onBack={onGoBack}
@@ -2535,10 +2675,13 @@ function MainApp({
               initialInvisibleMode={ownInvisibleMode}
               initialMessagePrivacy={fromApiMessagePrivacy(ownMessagePrivacy)}
               initialReadReceiptsPrivacy={fromApiMessagePrivacy(ownReadReceiptsPrivacy)}
+              initialOnlinePrivacy={fromApiMessagePrivacy(ownOnlinePrivacy)}
+              initialAllowConnectMatchMessages={ownAllowConnectMatchMessages}
               initialShowBirthYear={ownShowBirthYear}
               initialShowSavedMusicOnProfile={ownShowSavedMusicOnProfile}
               initialShowUploadedMusicOnProfile={ownShowUploadedMusicOnProfile}
               onBack={onGoBack}
+              onOpenMessageSecurity={onShowMessageSecurity}
               onSave={onSaveSettings}
             />
           ) : null}
@@ -2546,7 +2689,6 @@ function MainApp({
             <PasswordSecurityScreen
               onBack={onGoBack}
               onChangePassword={onChangePassword}
-              onOpenMessageSecurity={onShowMessageSecurity}
             />
           ) : null}
           {profileMode === 'messageSecurity' ? (
@@ -2575,6 +2717,8 @@ function MainApp({
               initialPlaylistId={playlistIdToEdit}
               onBack={onGoBack}
               onInitialPlaylistOpened={onPlaylistEditorOpened}
+              onPlaylistEditorVisibilityChange={setIsPlaylistEditorVisible}
+              playlistPlayer={<GlobalMiniPlayer placement="inline" modalPresentation hasBottomNavigation={false} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} />}
               onNotify={onNotify}
               onRefreshProfile={onRefreshProfile}
               onSave={onSaveProfile}
@@ -2585,7 +2729,6 @@ function MainApp({
             <MyCommunitiesScreen
               onBack={onGoBack}
               onCreateCommunity={onOpenCreateCommunity}
-              onCreateEvent={onOpenCreateEvent}
               onEditCommunity={async (username) => {
                 try {
                   await onOpenPublicPage(username);
@@ -2624,12 +2767,15 @@ function MainApp({
               onCreate={(data) => onCreateEvent(data, { adminMode: accountRole === 'ADMIN' && adminMode })}
               onNotify={onNotify}
               ownAccountId={ownAccountId}
+              organizerPage={activePublicPage ?? undefined}
             />
           ) : null}
           {profileMode === 'editCommunity' && activePublicPage ? (
             <PublicPageEditScreen
+              key={authToken + activePublicPage.id}
               authToken={authToken}
               canEditUsername={activePublicPage.ownerId === ownAccountId}
+              isGlobalAdmin={accountRole === 'ADMIN'}
               onAddPartnerPage={(data) => onAddPartnerPage(activePublicPage.username, data)}
               onAddTeamMember={(data) => onAddTeamMember(activePublicPage.username, data)}
               onBack={onCloseEditCommunity}
@@ -2679,7 +2825,7 @@ function MainApp({
             />
           ) : null}
           {profileMode === 'notifications' ? (
-            <NotificationsScreen authToken={authToken} onBack={onGoBack} onNotify={onNotify} onOpenChat={onOpenChat} onOpenEditProfile={onOpenEdit} onOpenEvent={onOpenEvent} onOpenMenu={onOpenMenu} onOpenMessages={openMessagesFromHeader} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} />
+            <NotificationsScreen accountId={ownAccountId} onOpenMessageSecurity={onShowMessageSecurity} authToken={authToken} onBack={onGoBack} onNotify={onNotify} onOpenChat={onOpenChat} onOpenEditProfile={onOpenEdit} onOpenEvent={onOpenEvent} onOpenMenu={onOpenMenu} onOpenMessages={openMessagesFromHeader} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} />
           ) : null}
           {profileMode === 'notFound' ? <EntityNotFoundScreen onBack={onGoBack} /> : null}
           {profileMode === 'messages' ? (
@@ -2696,6 +2842,7 @@ function MainApp({
             <ChatScreen
               accountId={ownAccountId}
               controller={messagingSurfaceController}
+              composerAccessory={<GlobalMiniPlayer placement="inline" onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} />}
               onActivity={() => void refreshNotificationBadge({ force: true })}
               onBack={onGoBack}
               onOpenEvent={onOpenEvent}
@@ -2720,15 +2867,14 @@ function MainApp({
             />
           ) : null}
         </View>
-        <GlobalMiniPlayer bottomNavigationHeight={bottomNavigationHeight} hasBottomNavigation={profileMode !== 'chat'} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} />
+        {profileMode !== 'chat' && !(profileMode === 'myMusic' && isPlaylistEditorVisible) ? <GlobalMiniPlayer bottomNavigationHeight={bottomNavigationHeight} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} /> : null}
         {profileMode !== 'chat' ? <BottomNavigation activeTab={activeTab} onChangeTab={onChangeTab} onHeightChange={setBottomNavigationHeight} /> : null}
         {isSideMenuOpen ? (
           <Pressable accessibilityRole="button" onPress={onCloseSideMenu} style={styles.drawerCloseLayer} />
         ) : null}
         </SafeAreaView>
       </Animated.View>
-    </View>
+    </DrawerDismissArea>
     </GlobalAudioProvider>
   );
 }
-

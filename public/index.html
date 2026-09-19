@@ -110,15 +110,19 @@
       .volna-boot { box-sizing: border-box; display: flex; width: 100%; min-height: 100%; padding: max(24px, env(safe-area-inset-top)) 28px max(24px, env(safe-area-inset-bottom)); align-items: center; justify-content: center; background: #fff; color: #111; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       .volna-boot__content { width: min(280px, 100%); text-align: center; }
       .volna-boot__brand { margin: 0 0 26px; font-size: 25px; font-weight: 500; letter-spacing: 0.36em; text-indent: 0.36em; }
-      .volna-boot__track { position: relative; height: 3px; overflow: hidden; border-radius: 2px; background: #e7e7e7; }
-      .volna-boot__bar { position: absolute; inset-block: 0; width: 42%; border-radius: inherit; background: #111; animation: volna-boot-progress 1.2s ease-in-out infinite; }
+      /* VOLNA_LOADING_START — generated from loading-tokens.js */
+      .volna-boot__loader { position: relative; width: 32px; height: 32px; margin: 0 auto; color: #111; }
+      .volna-boot__loader::before, .volna-boot__loader::after { content: ''; position: absolute; inset: 0; box-sizing: border-box; border: 2px solid currentColor; border-radius: 50%; }
+      .volna-boot__loader::before { opacity: 0.18; }
+      .volna-boot__loader::after { border-left-color: transparent; animation: volna-loading 900ms linear infinite; }
+      .volna-boot--failed .volna-boot__loader { display: none; }
+      @keyframes volna-loading { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .volna-boot__loader::after { animation: none; } }
+      /* VOLNA_LOADING_END */
       .volna-boot__title { margin: 16px 0 0; font-size: 14px; font-weight: 600; }
       .volna-boot__note { margin: 5px 0 0; color: #888; font-size: 12px; line-height: 17px; }
       .volna-boot__retry { display: none; width: 100%; margin-top: 18px; border: 0; border-radius: 22px; padding: 12px 16px; background: #111; color: #fff; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
-      .volna-boot--failed .volna-boot__track { display: none; }
-      .volna-boot--failed .volna-boot__retry { display: block; }
-      @keyframes volna-boot-progress { 0% { transform: translateX(-110%); } 100% { transform: translateX(245%); } }
-      @media (prefers-reduced-motion: reduce) { .volna-boot__bar { width: 100%; animation: none; } }
+      .volna-boot--slow .volna-boot__retry, .volna-boot--failed .volna-boot__retry { display: block; }
 
       .volna-orientation-guard {
         display: none;
@@ -201,7 +205,7 @@
 
   <body>
     <noscript>Для работы VOLNA необходимо включить JavaScript.</noscript>
-    <div id="root"><div class="volna-boot" role="status" aria-live="polite"><div class="volna-boot__content"><p class="volna-boot__brand">ВОЛНА</p><div class="volna-boot__track"><div class="volna-boot__bar"></div></div><p class="volna-boot__title">Загружаем приложение</p><p class="volna-boot__note">Первый запуск может занять несколько секунд</p><button class="volna-boot__retry" type="button">Попробовать снова</button></div></div></div>
+    <div id="root"><div class="volna-boot" role="status" aria-live="polite"><div class="volna-boot__content"><p class="volna-boot__brand">ВОЛНА</p><div class="volna-boot__loader" aria-hidden="true"></div><p class="volna-boot__title">Загружаем приложение</p><p class="volna-boot__note">Первый запуск может занять несколько секунд</p><button class="volna-boot__retry" type="button">Попробовать снова</button></div></div></div>
     <div class="volna-orientation-guard" role="alert" aria-live="polite">
       <div class="volna-orientation-guard__content">
         <div class="volna-orientation-guard__phone" aria-hidden="true"></div>
@@ -211,68 +215,69 @@
     </div>
     <script>
       (function () {
-        var retryKey = 'volna_boot_retry_v1';
-        var retryTimer;
+        var slowTimer;
+        var failureTimer;
+        var observer;
 
         function getBootElement() {
           return document.querySelector('.volna-boot');
         }
 
-        function reloadOnce() {
-          if (!getBootElement()) return;
-          var attempts = Number(sessionStorage.getItem(retryKey) || '0');
-          if (attempts < 1) {
-            sessionStorage.setItem(retryKey, String(attempts + 1));
-            window.location.reload();
-            return;
-          }
-          showFailure();
-        }
-
-        function showFailure() {
+        function showStatus(failed) {
           var boot = getBootElement();
           if (!boot) return;
-          boot.classList.add('volna-boot--failed');
+          boot.classList.add(failed ? 'volna-boot--failed' : 'volna-boot--slow');
           var title = boot.querySelector('.volna-boot__title');
           var note = boot.querySelector('.volna-boot__note');
           var retry = boot.querySelector('.volna-boot__retry');
-          if (title) title.textContent = 'Не удалось запустить приложение';
+          if (title) title.textContent = failed ? 'Не удалось запустить приложение' : 'Загрузка занимает больше времени';
           if (note) {
             note.textContent = navigator.onLine
-              ? 'Не удалось установить соединение с VOLNA через Cloudflare. Попробуйте включить VPN и загрузить приложение снова.'
+              ? (failed ? 'Не удалось завершить запуск. Проверьте подключение к интернету и попробуйте снова.' : 'Приложение продолжает загружаться. На медленном соединении это может занять больше времени.')
               : 'Нет подключения к интернету. Проверьте соединение и загрузите приложение снова.';
           }
           if (retry) {
+            retry.textContent = failed ? 'Попробовать снова' : 'Загрузить заново';
             retry.onclick = function () {
-              sessionStorage.removeItem(retryKey);
               window.location.reload();
             };
           }
         }
 
-        window.addEventListener('error', function (event) {
+        function showFailure() {
+          window.clearTimeout(slowTimer);
+          window.clearTimeout(failureTimer);
+          showStatus(true);
+        }
+
+        function onError(event) {
           if (!getBootElement()) return;
-          if (event.target && event.target.tagName === 'SCRIPT') {
-            window.clearTimeout(retryTimer);
-            retryTimer = window.setTimeout(reloadOnce, 800);
+          if ((event.target && event.target.tagName === 'SCRIPT') || event.target === window) {
+            showFailure();
           }
-        }, true);
+        }
 
-        window.addEventListener('unhandledrejection', function () {
-          if (!getBootElement()) return;
-          window.clearTimeout(retryTimer);
-          retryTimer = window.setTimeout(reloadOnce, 800);
-        });
+        function finishIfReady() {
+          if (getBootElement()) return;
+          window.clearTimeout(slowTimer);
+          window.clearTimeout(failureTimer);
+          if (observer) observer.disconnect();
+          window.removeEventListener('error', onError, true);
+          window.removeEventListener('unhandledrejection', showFailure);
+          window.removeEventListener('load', finishIfReady);
+        }
 
-        retryTimer = window.setTimeout(reloadOnce, 25000);
-        window.addEventListener('load', function () {
-          window.setTimeout(function () {
-            if (!getBootElement()) {
-              sessionStorage.removeItem(retryKey);
-              window.clearTimeout(retryTimer);
-            }
-          }, 0);
-        });
+        window.addEventListener('error', onError, true);
+        window.addEventListener('unhandledrejection', showFailure);
+        // Never reload a pending script automatically: on slow LTE a timed
+        // reload throws away downloaded bytes and starts the same transfer over.
+        slowTimer = window.setTimeout(function () { showStatus(false); }, 25000);
+        failureTimer = window.setTimeout(showFailure, 60000);
+        window.addEventListener('load', finishIfReady);
+        if (typeof MutationObserver !== 'undefined') {
+          observer = new MutationObserver(finishIfReady);
+          observer.observe(document.getElementById('root'), { childList: true, subtree: true });
+        }
       })();
 
       if ('serviceWorker' in navigator) {

@@ -1,17 +1,24 @@
+import { useEditorAutosave } from '../components/useEditorAutosave';
+import { useMusicGenrePicker } from '../components/useMusicGenrePicker';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { ContentTabIndicator } from '../components/ContentTabIndicator';
+import { MotionSurface } from '@volna/messaging-client/ui-motion';
+import { useScreenScroll, useScreenChoice } from '../components/ScreenContinuity';
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, EllipsisVertical, Flag, GripVertical, Heart, Images, Info, Link2, List, MapPin, MessageSquare, Pause, Pencil, Play, Plus, Radio, Search, Share2, ShieldBan, ShieldCheck, UsersRound, Volume2, X } from 'lucide-react-native';
+import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Disc3, EllipsisVertical, Flag, GripVertical, Heart, Images, Info, Link2, List, MapPin, MessageSquare, Pause, Pencil, Play, Plus, Radio, Search, Share2, ShieldBan, UsersRound, Volume2, X } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { forwardRef, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Easing, Keyboard, KeyboardAvoidingView, LayoutAnimation, Linking, Modal, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type ImageStyle } from 'react-native';
+import { createElement, forwardRef, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Alert, Animated, AppState, Easing, Keyboard, KeyboardAvoidingView, LayoutAnimation, Linking, Modal, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type ImageStyle } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppImage as Image } from '../components/AppImage';
 import { apiFetch as fetch, apiUrl, readApiError, remoteSearchDebounceMs } from '../api/client';
-import { buildMusicGenreValue, clamp, connectInterestGroups, connectInterestLabels, connectInterestLimit, connectPhotoThumbnail, countryOptions, formatCityName, formatCountryCity, getAvatarInitial, groupMusicGenreChips, isMusicSubgenreValue, musicArtworkThumbnail, musicGenreLimit, musicGenreSearchText, musicSubgenreDisplayName, musicTaxonomy, normalizeBandcampEmbedInput, normalizeMusicGenres, normalizeSocialLink, normalizeUsernameInput, profilePreviewPlayers, publicPageTypeLabels, russianPlural, uploadAvatarAsset, uploadConnectPhotoAsset, validateDisplayName } from '../domain';
+import { isKnownMusicUnavailable, useMusicAvailability } from '../music/musicAvailability';
+import { clamp, connectInterestGroups, connectInterestLabels, connectInterestLimit, connectPhotoThumbnail, countryOptions, formatCityName, formatCountryCity, getAvatarInitial, groupMusicGenreChips, isMusicSubgenreValue, musicArtworkThumbnail, musicGenreLimit, musicSubgenreDisplayName, normalizeBandcampEmbedInput, normalizeMusicGenres, normalizeSocialLink, normalizeUsernameInput, profilePreviewPlayers, publicPageTypeLabels, russianPlural, uploadAvatarAsset, uploadConnectPhotoAsset, validateDisplayName } from '../domain';
 import { ScreenTopBar } from '../components/navigation';
 import { VolnaSwitch } from '../components/VolnaSwitch';
 import { emitPlaybackVisibilityChanged } from '../components/playbackActivityEvents';
@@ -31,6 +38,7 @@ import { EntityShareModal } from '../components/EntityShareModal';
 import { AnimatedSegmentedControl } from '../components/AnimatedSegmentedControl';
 import { VerifiedName } from '../components/VerifiedBadge';
 import { CompactTrackScrubber } from '../components/CompactTrackScrubber';
+import { PrimaryTrackPreviewCard } from '../components/PrimaryTrackPreviewCard';
 import { AudioReleaseAttachmentCard } from '../components/AudioReleaseAttachmentCard';
 import { ExpandableReleaseTrackList } from '../components/ExpandableReleaseTrackList';
 import { boundedPlaybackQueue, normalizeMusicTrackTitle, normalizeYouTubeTrackMetadata, uploadedTrackPlayerId } from '../components/audioPlayerCore';
@@ -148,12 +156,11 @@ export function ProfileScreen({
   const canManageProfile = adminMode && !isOwnProfile;
 
   const [isMusicDragging, setIsMusicDragging] = useState(false);
-  const [visibleContentItemCount, setVisibleContentItemCount] = useState(profileContentPageSize);
+  const [visibleContentItemCount, setVisibleContentItemCount] = useScreenChoice(`profile:count:${profile.username}:${activeContentTab}`, profileContentPageSize);
   const [livePlayback, setLivePlayback] = useState<ProfilePlaybackActivity | null>(profile.currentPlayback ?? null);
   const lastContentLoadHeight = useRef(0);
   useEffect(() => setIsVerified(profile.isVerified), [profile.id, profile.isVerified]);
   useEffect(() => {
-    setVisibleContentItemCount(profileContentPageSize);
     lastContentLoadHeight.current = 0;
   }, [activeContentTab, profile.id]);
   useEffect(() => {
@@ -244,6 +251,7 @@ export function ProfileScreen({
     ? {
         artist: displayedPlayback.isLiveStream ? null : displayedPlayback.artist,
         artworkUrl: displayedPlayback.artworkUrl,
+        externalUrl: displayedPlayback.externalUrl,
         clipDurationSeconds: displayedPlayback.clipDurationSeconds,
         prefix: 'Сейчас слушает: ',
         previewUrl: displayedPlayback.previewUrl,
@@ -256,6 +264,7 @@ export function ProfileScreen({
     : {
         artist: headerTrackDisplay.artist,
         artworkUrl: profile.trackArtworkUrl,
+        externalUrl: profile.trackExternalUrl,
         clipDurationSeconds: profile.trackClipDurationSeconds,
         prefix: '',
         previewUrl: profile.trackPreviewUrl,
@@ -316,6 +325,7 @@ export function ProfileScreen({
     setLeavingMusicTrackIds((current) => current.filter((id) => id !== trackId));
     onRefresh();
   }, [onRefresh]);
+  const detailScroll = useScreenScroll(`detail:${profile.username}:${activeContentTab}`);
   const hasSocialLinks = [
     profile.bandcampUrl,
     profile.soundcloudUrl,
@@ -348,7 +358,13 @@ export function ProfileScreen({
       <ScrollView
         alwaysBounceVertical
         contentContainerStyle={styles.content}
-        onScroll={({ nativeEvent }) => {
+        ref={detailScroll.ref}
+        onLayout={detailScroll.onLayout}
+        onContentSizeChange={detailScroll.onContentSizeChange}
+        onScrollBeginDrag={detailScroll.onScrollBeginDrag}
+        onScroll={(event) => {
+          detailScroll.onScroll(event);
+          const { nativeEvent } = event;
           if (!['feed', 'events', 'music', 'locations'].includes(activeContentTab)) return;
           const isNearBottom = nativeEvent.contentOffset.y + nativeEvent.layoutMeasurement.height >= nativeEvent.contentSize.height - 320;
           const hasListGrown = lastContentLoadHeight.current === 0 || nativeEvent.contentSize.height >= lastContentLoadHeight.current + 120;
@@ -369,6 +385,7 @@ export function ProfileScreen({
               artworkUrl={headerTrack.artworkUrl}
               autoPlay={false}
               clipDurationSeconds={headerTrack.clipDurationSeconds}
+              externalUrl={headerTrack.externalUrl}
               prefix={headerTrack.prefix}
               previewUrl={headerTrack.previewUrl}
               provider={headerTrack.provider}
@@ -422,7 +439,6 @@ export function ProfileScreen({
                 <Text style={styles.avatarPlaceholderText}>{getAvatarInitial(profile.name)}</Text>
               </View>
             )}
-            {isOwnProfile && !profile.invisibleMode ? <View style={styles.onlineBadge} /> : null}
           </Pressable>
 
           <View style={styles.identity}>
@@ -530,7 +546,7 @@ export function ProfileScreen({
           )}
         </View>
 
-        {visibleContentTabs.length ? <View style={styles.tabs}>
+        {visibleContentTabs.length ? <ContentTabIndicator count={visibleContentTabs.length} index={visibleContentTabs.findIndex(tab => tab.value === activeContentTab)} style={styles.tabs}>
           {visibleContentTabs.map((tab) => {
             const isActive = activeContentTab === tab.value;
             const Icon = tab.icon;
@@ -545,15 +561,15 @@ export function ProfileScreen({
                 style={[styles.profileTabButton, isActive && styles.activeTab]}
               >
                 <Icon color={isActive ? '#111' : '#6f7b86'} size={22} strokeWidth={isActive ? 2.1 : 1.8} />
-                {isActive ? <View pointerEvents="none" style={styles.activeTabIndicator} /> : null}
+
               </Pressable>
             );
           })}
-        </View> : null}
+        </ContentTabIndicator> : null}
 
         {isLoading ? (
           <View style={styles.loadingRow}>
-            <ActivityIndicator color="#111" />
+            <LoadingIndicator />
           </View>
         ) : null}
 
@@ -675,22 +691,41 @@ export function ProfileSafetyModal({
     { label: 'Другое', value: 'OTHER' as const },
   ];
   const [showReasons, setShowReasons] = useState(false);
-  useEffect(() => { if (!isVisible) setShowReasons(false); }, [isVisible]);
+  const [confirmBlock, setConfirmBlock] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const running = useRef(false);
+  useEffect(() => { if (!isVisible) { setShowReasons(false); setConfirmBlock(false); setActionError(''); } }, [isVisible]);
   const run = async (operation: () => Promise<void>) => {
+    if (running.current) return;
+    running.current = true;
+    setBusy(true);
+    setActionError('');
     try {
       await operation();
     } catch (error) {
-      onNotify(error instanceof Error ? error.message : 'Не удалось выполнить действие', 'error');
+      const message = error instanceof Error ? error.message : 'Не удалось выполнить действие';
+      setActionError(message);
+      onNotify(message, 'error');
+    } finally {
+      running.current = false;
+      setBusy(false);
     }
   };
   return (
     <AppSheetModal
       isVisible={isVisible}
-      onClose={onClose}
-      title={showReasons ? 'Причина жалобы' : targetKind === 'community' ? 'Действия с сообществом' : 'Действия с профилем'}
+      onClose={() => { if (!running.current) onClose(); }}
+      title={confirmBlock ? targetKind === 'community' ? 'Заблокировать сообщество?' : 'Заблокировать профиль?' : showReasons ? 'Причина жалобы' : targetKind === 'community' ? 'Действия с сообществом' : 'Действия с профилем'}
+      subtitle={confirmBlock ? targetKind === 'community' ? 'Сообщество исчезнет из каталога и ваших подписок.' : 'Вы больше не будете видеть друг друга, а взаимные подписки удалятся.' : undefined}
+      footer={confirmBlock ? <View style={styles.eventFilterActions}>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setConfirmBlock(false); setActionError(''); }} style={styles.eventFilterReset}><Text style={styles.eventFilterResetText}>Отмена</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => void run(onBlock)} style={[styles.eventFilterApply, busy && styles.disabledButton]}>{busy ? <LoadingIndicator tone="inverse" /> : <Text style={styles.eventFilterApplyText}>Заблокировать</Text>}</Pressable>
+      </View> : undefined}
     >
-          {showReasons ? reasons.map((reason) => (
-            <Pressable key={reason.value} onPress={() => void run(() => onReport(reason.value))} style={styles.safetyAction}>
+          {actionError ? <Text accessibilityRole="alert" style={styles.settingsError}>{actionError}</Text> : null}
+          {confirmBlock ? null : showReasons ? reasons.map((reason) => (
+            <Pressable disabled={busy} key={reason.value} onPress={() => void run(() => onReport(reason.value))} style={styles.safetyAction}>
               <Text style={styles.safetyActionText}>{reason.label}</Text>
             </Pressable>
           )) : (
@@ -698,14 +733,7 @@ export function ProfileSafetyModal({
               <Pressable onPress={() => setShowReasons(true)} style={styles.safetyAction}>
                 <Flag size={20} color="#111" /><Text style={styles.safetyActionText}>Пожаловаться</Text>
               </Pressable>
-              <Pressable onPress={() => Alert.alert(
-                targetKind === 'community' ? 'Заблокировать сообщество?' : 'Заблокировать профиль?',
-                targetKind === 'community'
-                  ? 'Сообщество исчезнет из каталога и ваших подписок.'
-                  : 'Вы больше не будете видеть друг друга, а взаимные подписки удалятся.', [
-                { text: 'Отмена', style: 'cancel' },
-                { text: 'Заблокировать', style: 'destructive', onPress: () => void run(onBlock) },
-              ])} style={styles.safetyAction}>
+              <Pressable accessibilityRole="button" onPress={() => setConfirmBlock(true)} style={styles.safetyAction}>
                 <ShieldBan size={20} color="#d82c2c" /><Text style={[styles.safetyActionText, styles.safetyDangerText]}>Заблокировать</Text>
               </Pressable>
             </>
@@ -725,6 +753,7 @@ export function PrimaryTrackInlinePreview({
   artworkUrl,
   autoPlay = true,
   clipDurationSeconds,
+  externalUrl,
   previewUrl,
   prefix = '',
   provider,
@@ -736,6 +765,7 @@ export function PrimaryTrackInlinePreview({
   artworkUrl?: string | null;
   autoPlay?: boolean;
   clipDurationSeconds: number;
+  externalUrl?: string | null;
   previewUrl: string;
   prefix?: string;
   provider?: string | null;
@@ -771,6 +801,9 @@ export function PrimaryTrackInlinePreview({
     ? resolvedPreviewUrl.match(/^youtube:([\w-]{11})$/)?.[1] ?? resolvedPreviewUrl.match(/[?&]v=([\w-]{11})/)?.[1] ?? null
     : null;
   const isPlaying = normalizedProvider === 'youtube' ? youtubeSnapshot.playing : Boolean(status.playing);
+  const { label: unavailableLabel } = useMusicAvailability({ provider: normalizedProvider, externalUrl: externalUrl || (youtubeVideoId ? `https://www.youtube.com/watch?v=${youtubeVideoId}` : previewUrl) });
+  const unavailableRef = useRef(unavailableLabel);
+  unavailableRef.current = unavailableLabel;
 
   const pause = useCallback(() => {
     if (normalizedProvider === 'youtube') {
@@ -779,7 +812,9 @@ export function PrimaryTrackInlinePreview({
     }
     else player.pause();
   }, [normalizedProvider, player]);
+  useEffect(() => { if (unavailableLabel) pause(); }, [unavailableLabel, pause]);
   const play = useCallback(async () => {
+    if (unavailableRef.current) return;
     const global = globalAudioRef.current;
     if (variant === 'connect' && !suspendedGlobalTrackRef.current && global.isPlaying && global.activeTrack) {
       suspendedGlobalTrackRef.current = global.activeTrack;
@@ -802,6 +837,7 @@ export function PrimaryTrackInlinePreview({
       loadedUrlRef.current = resolvedPreviewUrl;
     }
     await player.seekTo(startSeconds);
+    if (unavailableRef.current) return;
     player.play();
   }, [normalizedProvider, player, playerId, resolvedPreviewUrl, startSeconds, variant, youtubeVideoId]);
 
@@ -856,21 +892,39 @@ export function PrimaryTrackInlinePreview({
   const displayTrackLabel = artistName ? `${artistName} — ${displayTitle}` : displayTitle;
 
   if (variant === 'connect') {
-    return <><Pressable accessibilityLabel={`${isPlaying ? 'Остановить' : 'Прослушать'} ${displayTrackLabel}`} accessibilityRole="button" onPress={toggle} style={styles.connectTrackButton}>
+    return <><Pressable accessibilityLabel={`${unavailableLabel || (isPlaying ? 'Остановить' : 'Прослушать')} ${displayTrackLabel}`} accessibilityRole="button" disabled={Boolean(unavailableLabel)} onPress={toggle} style={styles.connectTrackButton}>
       {compactArtworkUrl ? <Image source={{ uri: compactArtworkUrl }} style={styles.connectTrackArtwork} /> : null}
-      <View style={styles.connectTrackIcon}>{isYoutubeLoading ? <ActivityIndicator color="#fff" size="small" style={styles.profileTrackLoadingIndicator} /> : isPlaying ? <Pause size={14} color="#fff" strokeWidth={2} /> : <Volume2 size={14} color="#fff" strokeWidth={2} />}</View>
+      <View style={styles.connectTrackIcon}>{unavailableLabel ? <Info size={14} color="#fff" /> : isYoutubeLoading ? <LoadingIndicator tone="inverse" size="small" style={styles.profileTrackLoadingIndicator} /> : isPlaying ? <Pause size={14} color="#fff" fill="#fff" strokeWidth={2} /> : <Volume2 size={14} color="#fff" strokeWidth={2} />}</View>
       <View style={styles.connectTrackText}>
         <MarqueeTrackTitle connect emphasizeTitle={Boolean(artistName)} plainSuffix={artistName ? ` — ${displayTitle}` : ''} title={artistName || displayTitle} />
+        {unavailableLabel ? <Text style={{ color: '#fff', fontSize: 12, lineHeight: 16 }}>{unavailableLabel}</Text> : null}
       </View>
     </Pressable>{youtubeEngine}</>;
   }
 
-  return <><Pressable accessibilityLabel={`${isPlaying ? 'Остановить' : 'Прослушать'} ${displayTitle}`} accessibilityRole="button" onPress={toggle} style={styles.profileTrackButton}>
-    {isYoutubeLoading ? <ActivityIndicator color="#111" size="small" style={styles.profileTrackLoadingIndicator} /> : isPlaying ? <Pause size={14} color="#111" strokeWidth={2} /> : <Volume2 size={14} color="#111" strokeWidth={2} />}
+  return <><Pressable accessibilityLabel={`${unavailableLabel || (isPlaying ? 'Остановить' : 'Прослушать')} ${displayTitle}`} accessibilityRole="button" disabled={Boolean(unavailableLabel)} onPress={toggle} style={styles.profileTrackButton}>
+    {unavailableLabel ? <Info size={14} color="#626f7b" /> : isYoutubeLoading ? <LoadingIndicator size="small" style={styles.profileTrackLoadingIndicator} /> : isPlaying ? <Pause size={14} color="#111" fill="#111" strokeWidth={2} /> : <Volume2 size={14} color="#111" strokeWidth={2} />}
     <View style={styles.profileTrackText}>
       <MarqueeTrackTitle emphasisPrefix={prefix} emphasizeTitle={Boolean(artistName)} plainSuffix={artistName ? ` — ${displayTitle}` : ''} profile title={artistName || displayTitle} />
+      {unavailableLabel ? <Text style={{ color: '#626f7b', fontSize: 12, lineHeight: 16, textAlign: 'center' }}>{unavailableLabel}</Text> : null}
     </View>
   </Pressable>{youtubeEngine}</>;
+}
+
+export function clampPrimaryTrackStartSeconds(
+  startSeconds: number,
+  clipDurationSeconds: number,
+  availableDurationSeconds: number | null,
+) {
+  const availableDuration = Number.isFinite(availableDurationSeconds)
+    ? Math.max(0, Number(availableDurationSeconds))
+    : 0;
+  const clipDuration = Number.isFinite(clipDurationSeconds)
+    ? Math.max(0, Number(clipDurationSeconds))
+    : 0;
+  const requestedStart = Number.isFinite(startSeconds) ? Math.max(0, Number(startSeconds)) : 0;
+  const maximumStart = Math.max(0, availableDuration - Math.min(clipDuration, availableDuration));
+  return Math.round(Math.min(requestedStart, maximumStart) * 100) / 100;
 }
 
 function PrimaryTrackEditorPreview({
@@ -878,6 +932,8 @@ function PrimaryTrackEditorPreview({
   artworkUrl,
   clipDurationSeconds,
   durationSeconds,
+  externalUrl,
+  onRemove,
   onStartSecondsChange,
   previewUrl,
   provider,
@@ -888,6 +944,8 @@ function PrimaryTrackEditorPreview({
   artworkUrl: string | null;
   clipDurationSeconds: number;
   durationSeconds: number | null;
+  externalUrl: string | null;
+  onRemove: () => void;
   onStartSecondsChange: (seconds: number) => void;
   previewUrl: string;
   provider: GlobalTrack['provider'];
@@ -917,7 +975,11 @@ function PrimaryTrackEditorPreview({
   const selectableDurationSeconds = Math.max(1, observedDurationSeconds > 0
     ? observedDurationSeconds
     : durationSeconds && durationSeconds > 0 ? durationSeconds : clipDurationSeconds || 30);
-  const selectedStartSeconds = Math.min(selectableDurationSeconds, Math.max(0, startSeconds));
+  const maximumStartSeconds = Math.max(0, selectableDurationSeconds - Math.min(Math.max(0, clipDurationSeconds), selectableDurationSeconds));
+  const selectedStartSeconds = clampPrimaryTrackStartSeconds(startSeconds, clipDurationSeconds, selectableDurationSeconds);
+  const { label: unavailableLabel } = useMusicAvailability({ provider, externalUrl: externalUrl || (youtubeVideoId ? `https://www.youtube.com/watch?v=${youtubeVideoId}` : previewUrl) });
+  const unavailableRef = useRef(unavailableLabel);
+  unavailableRef.current = unavailableLabel;
 
   const pause = useCallback(() => {
     if (provider === 'youtube') youtubeEngineRef.current?.pause();
@@ -925,6 +987,7 @@ function PrimaryTrackEditorPreview({
   }, [player, provider]);
 
   const playFrom = useCallback(async (seconds: number) => {
+    if (unavailableRef.current) return;
     if (globalAudio.isPlaying) globalAudio.pause();
     profilePreviewPlayers.forEach((pauseOther, id) => { if (id !== playerId) pauseOther(); });
     if (provider === 'youtube') {
@@ -942,8 +1005,16 @@ function PrimaryTrackEditorPreview({
       loadedUrlRef.current = resolvedPreviewUrl;
     }
     await player.seekTo(seconds);
+    if (unavailableRef.current) return;
     player.play();
   }, [globalAudio, player, playerId, provider, resolvedPreviewUrl, youtubeVideoId]);
+
+  useEffect(() => {
+    if (!unavailableLabel) return;
+    pause();
+    // The unavailable UI unmounts this engine. A recovered source must load it again.
+    youtubeLoadedIdRef.current = null;
+  }, [unavailableLabel, pause]);
 
   useEffect(() => {
     profilePreviewPlayers.set(playerId, pause);
@@ -962,35 +1033,40 @@ function PrimaryTrackEditorPreview({
   }, [pause, resolvedPreviewUrl]);
 
   const updateSelectedStart = (nextProgress: number) => {
-    const nextSeconds = Math.round(Math.max(0, Math.min(1, nextProgress)) * selectableDurationSeconds * 100) / 100;
+    if (unavailableRef.current) return selectedStartSeconds;
+    const nextSeconds = Math.round(Math.max(0, Math.min(1, nextProgress)) * maximumStartSeconds * 100) / 100;
     onStartSecondsChange(nextSeconds);
     return nextSeconds;
   };
 
   return <>
-    <View style={styles.primaryTrackFragmentPlayer}>
-      <Pressable accessibilityLabel={`${isPlaying ? 'Остановить' : 'Прослушать'} ${displayTitle}`} accessibilityRole="button" onPress={() => { if (isPlaying) pause(); else void playFrom(selectedStartSeconds).catch(pause); }} style={styles.primaryTrackFragmentArtworkWrap}>
-        {compactArtworkUrl ? <Image source={{ uri: compactArtworkUrl }} style={styles.primaryTrackFragmentArtwork} /> : <View style={[styles.primaryTrackFragmentArtwork, styles.primaryTrackFragmentArtworkPlaceholder]}><Disc3 color="#6f7b86" size={20} /></View>}
-        <View style={styles.primaryTrackFragmentArtworkControl}>{isLoading ? <ActivityIndicator color="#fff" size="small" /> : isPlaying ? <Pause color="#fff" size={17} strokeWidth={2.4} /> : <Play color="#fff" fill="#fff" size={16} strokeWidth={2.2} />}</View>
-      </Pressable>
-      <View style={styles.primaryTrackFragmentPlayerCopy}>
-        <Text numberOfLines={1} style={styles.primaryTrackFragmentPlayerTitle}>{displayTitle}</Text>
-        {displayMetadata.artist ? <Text numberOfLines={1} style={styles.primaryTrackFragmentPlayerArtist}>{displayMetadata.artist}</Text> : null}
+    <PrimaryTrackPreviewCard
+      artist={displayMetadata.artist}
+      artworkUrl={compactArtworkUrl}
+      isLoading={isLoading}
+      isPlaying={isPlaying}
+      onRemove={onRemove}
+      onToggle={() => { if (isPlaying) pause(); else void playFrom(selectedStartSeconds).catch(pause); }}
+      title={displayTitle}
+      unavailableLabel={unavailableLabel}
+    >
         <CompactTrackScrubber
           accessibilityValueText={`Старт композиции с ${formatUploadedTrackTime(selectedStartSeconds)}`}
           onChange={updateSelectedStart}
           onChangeEnd={(nextProgress) => { const nextSeconds = updateSelectedStart(nextProgress); void playFrom(nextSeconds).catch(pause); }}
           onInteractionStart={pause}
-          progress={selectedStartSeconds / selectableDurationSeconds}
+          progress={maximumStartSeconds > 0 ? selectedStartSeconds / maximumStartSeconds : 0}
         />
         <Text style={styles.primaryTrackFragmentStartLabel}>Старт композиции с {formatUploadedTrackTime(selectedStartSeconds)}</Text>
-      </View>
-    </View>
-    {youtubeVideoId ? <YouTubeAudioEngine onStateChange={setYoutubeSnapshot} ref={youtubeEngineRef} /> : null}
+    </PrimaryTrackPreviewCard>
+    {youtubeVideoId && !unavailableLabel ? <YouTubeAudioEngine onStateChange={setYoutubeSnapshot} ref={youtubeEngineRef} /> : null}
   </>;
 }
 
 export const TrackPlayerPill = forwardRef<TrackPlayerController, {
+  listenLaterItemId?: string;
+  listenLaterTrackId?: string;
+  reviewed?: boolean;
   autoPlay?: boolean;
   artist: string | null;
   artworkFallback?: ReactNode;
@@ -1000,6 +1076,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
   collectionId?: string | null;
   externalUrl: string | null;
   genres?: string[];
+  showGenres?: boolean;
   isLiveStream?: boolean;
   isRadioFavorite?: boolean;
   labelName?: string | null;
@@ -1017,11 +1094,15 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
   radioPageUsername?: string;
   radioStationName?: string;
   releaseDateLabel?: string | null;
+  releaseDate?: string | null;
   releaseId?: string;
   startSeconds?: number;
   title: string | null;
   variant?: 'pill' | 'card' | 'release-card' | 'header' | 'editor' | 'connect' | 'control' | 'playlist';
 }>(function TrackPlayerPill({
+  listenLaterItemId,
+  listenLaterTrackId,
+  reviewed = false,
   autoPlay = false,
   artist,
   artworkFallback = null,
@@ -1031,6 +1112,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
   collectionId = null,
   externalUrl,
   genres = [],
+  showGenres = true,
   isLiveStream = false,
   isRadioFavorite = false,
   labelName = null,
@@ -1048,6 +1130,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
   radioPageUsername,
   radioStationName,
   releaseDateLabel = null,
+  releaseDate,
   releaseId,
   startSeconds = 0,
   title,
@@ -1073,6 +1156,9 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
   const displayTitle = displayMetadata.title;
   const compactArtworkUrl = musicArtworkThumbnail(artworkUrl, provider);
   const trackDescriptor: GlobalTrack = {
+    listenLaterItemId,
+    listenLaterTrackId,
+    reviewed,
     id: trackId,
     title: displayTitle,
     artist: artistName,
@@ -1088,6 +1174,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
     collectionTitle,
     collectionId,
     genres,
+    releaseDate: releaseDate !== undefined ? releaseDate : queuedTrack?.releaseDate,
     releaseId,
     labelName,
     labelUsername,
@@ -1097,11 +1184,14 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
     radioStationName,
     isRadioFavorite,
   };
+  const { label: unavailableLabel } = useMusicAvailability(trackDescriptor, !isLiveStream);
+  const reviewLabel = reviewed ? 'Прослушан' : null;
+  const reviewBadge = reviewLabel ? <Check accessibilityLabel={reviewLabel} color="#6f7b86" size={15} /> : null;
   const pauseSafely = () => {
     if (globalAudio.activeTrack?.id === trackId) globalAudio.pause();
   };
 
-  const playFrom = async (seconds: number) => {
+  const playFrom = async (seconds?: number) => {
     if (!resolvedPreviewUrl || !displayTitle) return;
     const effectiveQueue = queueWindowResolver?.(trackDescriptor) ?? queue;
     const effectiveQueueIndex = effectiveQueue?.findIndex((item) => item.id === trackId) ?? -1;
@@ -1143,7 +1233,12 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
       return;
     }
     try {
-      if (globalAudio.activeTrack?.id === trackId) await globalAudio.play(globalAudio.activeTrack);
+      if (globalAudio.activeTrack?.id === trackId) {
+        // A restored/previously isolated pending track must acquire the current
+        // listen-later playlist without seeking away from its paused position.
+        if (listenLaterItemId && !reviewed && (!globalAudio.activeTrack.queue?.length || !globalAudio.activeTrack.listenLaterItemId)) await playFrom();
+        else await globalAudio.play(globalAudio.activeTrack);
+      }
       else await playFrom(playbackStartSeconds);
     } catch (error) {
       onPlaybackError?.(error);
@@ -1154,6 +1249,17 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
     return null;
   }
 
+  if (unavailableLabel) {
+    return <Pressable accessibilityRole="button" accessibilityLabel={`${displayTitle}. ${unavailableLabel}. Открыть источник`} onPress={() => void openExternalHttpsUrl(externalUrl)} style={variant === 'playlist' ? styles.bandcampTrackRow : styles.trackCard}>
+      {variant !== 'playlist' ? compactArtworkUrl ? <Image source={{ uri: compactArtworkUrl }} style={[styles.trackCardArtwork, { opacity: 0.5 }]} /> : <View style={[styles.trackCardArtwork, styles.trackCardArtworkFallback]}><Text style={styles.audioArtworkFallbackNote}>♪</Text></View> : null}
+      <View style={styles.trackCardCopy}>
+        <Text numberOfLines={1} style={[variant === 'playlist' ? styles.bandcampTrackTitle : styles.trackCardTitle, { color: '#626f7b' }]}>{displayTitle}</Text>
+        {variant !== 'playlist' && artistName ? <Text numberOfLines={1} style={styles.trackCardArtist}>{artistName}</Text> : null}
+        <Text style={[styles.trackCardArtist, { color: '#626f7b' }]}>{unavailableLabel}</Text>
+      </View><Info color="#6f7b86" size={18} />
+    </Pressable>;
+  }
+
   if (variant === 'control') {
     return (
       <Pressable
@@ -1162,7 +1268,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
         onPress={() => { void togglePlayback(); }}
         style={styles.previewRangePlayButton}
       >
-        {isPlaying ? <Pause color="#fff" size={13} strokeWidth={2.2} /> : <Play color="#fff" fill="#fff" size={12} strokeWidth={2.2} />}
+        {isPlaying ? <Pause color="#fff" fill="#fff" size={13} strokeWidth={2.2} /> : <Play color="#fff" fill="#fff" size={12} strokeWidth={2.2} />}
       </Pressable>
     );
   }
@@ -1184,7 +1290,8 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
         style={styles.bandcampTrackRow}
       >
         {leadingLabel ? <Text style={styles.bandcampTrackNumber}>{leadingLabel}</Text> : null}
-        <Text numberOfLines={1} style={[styles.bandcampTrackTitle, isPlaying && styles.bandcampTrackTitleActive]}>{displayTitle}</Text>
+        <Text numberOfLines={1} style={[styles.bandcampTrackTitle, isPlaying && styles.bandcampTrackTitleActive, reviewed && { color: '#626f7b' }]}>{displayTitle}</Text>
+        {reviewBadge}
       </Pressable>
     );
   }
@@ -1217,10 +1324,10 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
           : <View style={[styles.bandcampReleaseArtworkFallback, styles.communityAudioReleaseArtwork]}><Text style={styles.audioArtworkFallbackNote}>♪</Text></View>}
         <View style={styles.trackCardCopy}>
           <Text numberOfLines={1} style={styles.bandcampReleaseTitle}>{displayTitle}</Text>
-          <ReleaseMetadataRows artist={artistName} genres={genres} provider={providerLabel} releaseDateLabel={releaseDateLabel} trackCount={1} />
+          <ReleaseMetadataRows artist={artistName} genres={genres} provider={providerLabel} releaseDateLabel={releaseDateLabel} showGenres={showGenres} trackCount={1} />
         </View>
         <View style={styles.trackCardIcon}>
-          {isPlaying ? <Pause color="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" size={12} fill="#fff" />}
+          {isPlaying ? <Pause color="#fff" fill="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" size={12} fill="#fff" />}
         </View>
       </Pressable>
     );
@@ -1228,12 +1335,12 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
 
   if (variant === 'card') {
     const artwork = compactArtworkUrl
-      ? <Image source={{ uri: compactArtworkUrl }} style={styles.trackCardArtwork} />
+      ? <Image source={{ uri: compactArtworkUrl }} style={[styles.trackCardArtwork, reviewed && { opacity: 0.5 }]} />
       : <View style={[styles.trackCardArtwork, styles.trackCardArtworkFallback]}>{artworkFallback ?? <Text style={styles.audioArtworkFallbackNote}>♪</Text>}</View>;
     const playbackIcon = isLoading
-      ? <ActivityIndicator color="#fff" size="small" />
+      ? <LoadingIndicator tone="inverse" size="small" />
       : isPlaying
-        ? <Pause color="#fff" size={13} strokeWidth={2} />
+        ? <Pause color="#fff" fill="#fff" size={13} strokeWidth={2} />
         : <Play color="#fff" size={12} fill="#fff" />;
     if (onDetailsPress) {
       return (
@@ -1258,15 +1365,14 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
       );
     }
     return (
-      <Pressable accessibilityLabel={`${isPlaying ? 'Остановить' : 'Воспроизвести'} ${displayTitle}`} accessibilityRole="button" disabled={isLoading} onPress={() => { void togglePlayback(); }} style={styles.trackCard}>
+      <Pressable accessibilityLabel={`${isPlaying ? 'Остановить' : 'Воспроизвести'} ${displayTitle}${reviewLabel ? `. ${reviewLabel}` : ''}`} accessibilityRole="button" disabled={isLoading} onPress={() => { void togglePlayback(); }} style={styles.trackCard}>
         {artwork}
         <View style={styles.trackCardCopy}>
-          <Text numberOfLines={1} style={styles.trackCardTitle}>{displayTitle}</Text>
+          <Text numberOfLines={1} style={[styles.trackCardTitle, reviewed && { color: '#626f7b' }]}>{displayTitle}</Text>
           {artist || releaseDateLabel ? <Text numberOfLines={1} style={styles.trackCardArtist}>{[artist, releaseDateLabel].filter(Boolean).join(' · ')}</Text> : null}
         </View>
-        <View style={styles.trackCardIcon}>
-          {playbackIcon}
-        </View>
+        {reviewBadge}
+        <View style={styles.trackCardIcon}>{playbackIcon}</View>
       </Pressable>
     );
   }
@@ -1280,7 +1386,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
           {artist ? <Text numberOfLines={1} style={styles.selectedTrackArtist}>{artist}</Text> : null}
         </View>
         <View style={styles.selectedTrackIcon}>
-          {isPlaying ? <Pause color="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" size={12} fill="#fff" />}
+          {isPlaying ? <Pause color="#fff" fill="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" size={12} fill="#fff" />}
         </View>
       </Pressable>
     );
@@ -1290,7 +1396,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
     return (
       <Pressable onPress={() => { void togglePlayback(); }} style={styles.profileTrackButton}>
         {compactArtworkUrl ? <Image source={{ uri: compactArtworkUrl }} style={styles.trackHeaderArtwork} /> : null}
-        {isPlaying ? <Pause size={14} color="#111" strokeWidth={2} /> : <Volume2 size={14} color="#111" strokeWidth={2} />}
+        {isPlaying ? <Pause size={14} color="#111" fill="#111" strokeWidth={2} /> : <Volume2 size={14} color="#111" strokeWidth={2} />}
         <Text style={styles.profileTrackText}>
           {artistName ? <Text style={styles.trackArtistText}>{artistName} </Text> : null}
           <Text style={styles.trackTitleText}>{displayTitle}</Text>
@@ -1305,7 +1411,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
       <Pressable accessibilityLabel={`${isPlaying ? 'Остановить' : 'Прослушать'} ${displayTrackLabel}`} accessibilityRole="button" onPress={() => { void togglePlayback(); }} style={styles.connectTrackButton}>
         {compactArtworkUrl ? <Image source={{ uri: compactArtworkUrl }} style={styles.connectTrackArtwork} /> : null}
         <View style={styles.connectTrackIcon}>
-          {isPlaying ? <Pause size={14} color="#fff" strokeWidth={2} /> : <Volume2 size={14} color="#fff" strokeWidth={2} />}
+          {isPlaying ? <Pause size={14} color="#fff" fill="#fff" strokeWidth={2} /> : <Volume2 size={14} color="#fff" strokeWidth={2} />}
         </View>
         <View style={styles.connectTrackText}>
           <MarqueeTrackTitle connect emphasizeTitle={Boolean(artistName)} plainSuffix={artistName ? ` — ${displayTitle}` : ''} title={artistName || displayTitle} />
@@ -1317,7 +1423,7 @@ export const TrackPlayerPill = forwardRef<TrackPlayerController, {
   return (
     <Pressable onPress={() => { void togglePlayback(); }} style={styles.trackPill}>
       {compactArtworkUrl ? <Image source={{ uri: compactArtworkUrl }} style={styles.trackPillArtwork} /> : null}
-      {isPlaying ? <Pause size={14} color="#111" strokeWidth={2} /> : <Volume2 size={14} color="#111" strokeWidth={2} />}
+      {isPlaying ? <Pause size={14} color="#111" fill="#111" strokeWidth={2} /> : <Volume2 size={14} color="#111" strokeWidth={2} />}
       <Text numberOfLines={1} style={styles.trackText}>
         {artistName ? <Text style={styles.trackArtistText}>{artistName} </Text> : null}
         <Text style={styles.trackTitleText}>{displayTitle}</Text>
@@ -1678,6 +1784,8 @@ function MusicSection({
     provider: 'volna' as const,
     startSeconds: 0,
     clipDurationSeconds: track.durationSeconds,
+    genres: track.genres,
+    releaseDate: track.releaseDate,
   }] : []);
   const artistMusicQueue = [
     ...artistReleases.flatMap((release) => buildPlayableQueue(release)),
@@ -1705,7 +1813,7 @@ function MusicSection({
   const generalMusicQueueSignature = generalMusicQueue.map((item) => item.id).join('\n');
   useEffect(() => {
     const activeTrack = globalAudio.activeTrack;
-    if (!activeTrack) return;
+    if (!activeTrack || activeTrack.queueSource === 'device-downloads') return;
     const artistQueueContainsTrack = artistMusicQueueRef.current.some((item) => item.id === activeTrack.id);
     const generalQueueContainsTrack = generalMusicQueueRef.current.some((item) => item.id === activeTrack.id);
     if (artistQueueContainsTrack) {
@@ -1932,6 +2040,7 @@ export function UploadedMusicPlayerCard({ expanded = false, ownerName, queue, qu
       clipDurationSeconds={track.durationSeconds}
       externalUrl={track.publicUrl}
       genres={track.genres}
+      releaseDate={track.releaseDate}
       previewUrl={`${apiUrl}/my-music/stream/${encodeURIComponent(track.id)}`}
       provider="volna"
       queue={queue.length > 1 ? queue : undefined}
@@ -1958,6 +2067,8 @@ export function UploadedMusicPlayerCard({ expanded = false, ownerName, queue, qu
       provider: 'volna',
       startSeconds: 0,
       clipDurationSeconds: track.durationSeconds,
+      genres: track.genres,
+      releaseDate: track.releaseDate,
     };
     const effectiveQueue = queueWindowResolver?.(descriptor) ?? queue;
     const queueIndex = effectiveQueue.findIndex((item) => item.id === trackId);
@@ -1981,7 +2092,7 @@ export function UploadedMusicPlayerCard({ expanded = false, ownerName, queue, qu
         <Text numberOfLines={1} style={styles.trackCardArtist}>{[track.artist?.trim() || ownerName, releaseDateLabel].filter(Boolean).join(' · ')}</Text>
       </View>
       <View style={styles.trackCardIcon}>
-        {isPlaying ? <Pause color="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" size={12} fill="#fff" />}
+        {isPlaying ? <Pause color="#fff" fill="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" size={12} fill="#fff" />}
       </View>
     </Pressable>
   );
@@ -2005,6 +2116,7 @@ export function buildFavoriteMusicQueue(tracks: ProfileMusicTrack[]): GlobalTrac
         collectionTitle: track.releaseMetadata!.title,
         collectionId: track.releaseMetadata!.externalUrl,
         genres: track.genres ?? [],
+        releaseDate: track.releaseDate !== undefined ? track.releaseDate : track.releaseMetadata?.releaseDate ?? null,
         releaseId: track.releaseId ?? undefined,
         labelName: track.labelName ?? null,
         labelUsername: track.labelUsername ?? null,
@@ -2025,6 +2137,7 @@ export function buildFavoriteMusicQueue(tracks: ProfileMusicTrack[]): GlobalTrac
       externalUrl: track.externalUrl,
       provider: track.provider,
       genres: track.genres ?? [],
+      releaseDate: track.releaseDate !== undefined ? track.releaseDate : track.releaseMetadata?.releaseDate ?? null,
       releaseId: track.releaseId ?? undefined,
       labelName: track.labelName ?? null,
       labelUsername: track.labelUsername ?? null,
@@ -2035,13 +2148,12 @@ export function buildFavoriteMusicQueue(tracks: ProfileMusicTrack[]): GlobalTrac
   });
 }
 
-function ExternalProfileMusicItem({ artistLayout = false, profileQueue, queueWindowResolver, showGenres, track }: { artistLayout?: boolean; profileQueue: GlobalTrackQueueItem[]; queueWindowResolver?: GlobalTrack['queueWindowResolver']; showGenres: boolean; track: ProfileMusicTrack }) {
-  const displayedGenres = showGenres ? track.genres ?? [] : [];
+function ExternalProfileMusicItem({ preferSnapshot = false, artistLayout = false, profileQueue, queueWindowResolver, showGenres, track }: { preferSnapshot?: boolean; artistLayout?: boolean; profileQueue: GlobalTrackQueueItem[]; queueWindowResolver?: GlobalTrack['queueWindowResolver']; showGenres: boolean; track: ProfileMusicTrack }) {
   const releaseDateLabel = track.releaseDate
     ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(track.releaseDate))
     : undefined;
   if (track.provider === 'bandcamp') {
-    return <BandcampReleaseCard expandedLayout={artistLayout} genres={displayedGenres} profileQueue={profileQueue} profileSpacing queueWindowResolver={queueWindowResolver} releaseDateLabel={releaseDateLabel} releaseId={track.releaseId ?? undefined} releaseSnapshot={track.releaseMetadata} releaseUrl={track.externalUrl} />;
+    return <BandcampReleaseCard preferSnapshot={preferSnapshot} expandedLayout={artistLayout} genres={track.genres} releaseDate={track.releaseDate} showGenres={showGenres} profileQueue={profileQueue} profileSpacing queueWindowResolver={queueWindowResolver} releaseDateLabel={track.releaseDate === null ? '' : releaseDateLabel} releaseId={track.releaseId ?? undefined} releaseSnapshot={track.releaseMetadata} releaseUrl={track.externalUrl} />;
   }
   if (track.provider === 'soundcloud' && isSoundcloudPlaylistUrl(track.externalUrl)) {
     return <SoundcloudPlaylistCard expandedLayout={artistLayout} fallbackTrack={track} playlistUrl={track.externalUrl} profileQueue={profileQueue} queueWindowResolver={queueWindowResolver} />;
@@ -2049,17 +2161,19 @@ function ExternalProfileMusicItem({ artistLayout = false, profileQueue, queueWin
   const previewUrl = track.provider === 'youtube' ? track.previewUrl : track.externalUrl;
   const clipDurationSeconds = track.durationSeconds ?? track.clipDurationSeconds;
   const id = profileMusicTrackId(previewUrl, track.externalUrl, track.title, track.startSeconds ?? 0, clipDurationSeconds);
-  return <TrackPlayerPill artist={track.artist} artworkUrl={track.artworkUrl} clipDurationSeconds={track.durationSeconds ?? track.clipDurationSeconds} externalUrl={track.externalUrl} genres={displayedGenres} labelName={track.labelName} labelUsername={track.labelUsername} previewUrl={track.provider === 'youtube' ? track.previewUrl : track.externalUrl} provider={track.provider} queue={profileQueue.length > 1 ? profileQueue : undefined} queueIndex={profileQueue.findIndex((item) => item.id === id)} queueWindowResolver={queueWindowResolver} releaseDateLabel={releaseDateLabel} releaseId={track.releaseId ?? undefined} startSeconds={track.startSeconds ?? 0} title={track.title} variant={artistLayout ? 'release-card' : 'card'} />;
+  return <TrackPlayerPill artist={track.artist} artworkUrl={track.artworkUrl} clipDurationSeconds={track.durationSeconds ?? track.clipDurationSeconds} externalUrl={track.externalUrl} genres={track.genres} releaseDate={track.releaseDate} showGenres={showGenres} labelName={track.labelName} labelUsername={track.labelUsername} previewUrl={track.provider === 'youtube' ? track.previewUrl : track.externalUrl} provider={track.provider} queue={profileQueue.length > 1 ? profileQueue : undefined} queueIndex={profileQueue.findIndex((item) => item.id === id)} queueWindowResolver={queueWindowResolver} releaseDateLabel={releaseDateLabel} releaseId={track.releaseId ?? undefined} startSeconds={track.startSeconds ?? 0} title={track.title} variant={artistLayout ? 'release-card' : 'card'} />;
 }
 
-export function ProfileMusicPlayerItem({ artistLayout = false, profileQueue, queueWindowResolver, showGenres = true, track }: { artistLayout?: boolean; profileQueue: GlobalTrackQueueItem[]; queueWindowResolver?: GlobalTrack['queueWindowResolver']; showGenres?: boolean; track: ProfileMusicTrack }) {
+export function ProfileMusicPlayerItem({ preferSnapshot = false, artistLayout = false, profileQueue, queueWindowResolver, showGenres = true, track }: { preferSnapshot?: boolean; artistLayout?: boolean; profileQueue: GlobalTrackQueueItem[]; queueWindowResolver?: GlobalTrack['queueWindowResolver']; showGenres?: boolean; track: ProfileMusicTrack }) {
   return track.provider === 'apple' || track.provider === 'yandex' ? (
     <TrackPlayerPill
       artist={track.artist}
       artworkUrl={track.artworkUrl}
       clipDurationSeconds={track.clipDurationSeconds}
       externalUrl={track.externalUrl}
-      genres={showGenres ? track.genres ?? [] : []}
+      genres={track.genres}
+      releaseDate={track.releaseDate}
+      showGenres={showGenres}
       previewUrl={track.previewUrl}
       provider={track.provider}
       queue={profileQueue.length > 1 ? profileQueue : undefined}
@@ -2070,7 +2184,7 @@ export function ProfileMusicPlayerItem({ artistLayout = false, profileQueue, que
       title={track.title}
       variant={artistLayout ? 'release-card' : 'card'}
     />
-  ) : <ExternalProfileMusicItem artistLayout={artistLayout} profileQueue={profileQueue} queueWindowResolver={queueWindowResolver} showGenres={showGenres} track={track} />;
+  ) : <ExternalProfileMusicItem preferSnapshot={preferSnapshot} artistLayout={artistLayout} profileQueue={profileQueue} queueWindowResolver={queueWindowResolver} showGenres={showGenres} track={track} />;
 }
 
 function isSoundcloudPlaylistUrl(value: string) {
@@ -2082,6 +2196,7 @@ function isSoundcloudPlaylistUrl(value: string) {
 }
 
 function SoundcloudPlaylistCard({ expandedLayout = false, fallbackTrack, playlistUrl, profileQueue, queueWindowResolver }: { expandedLayout?: boolean; fallbackTrack: ProfileMusicTrack; playlistUrl: string; profileQueue: GlobalTrackQueueItem[]; queueWindowResolver?: GlobalTrack['queueWindowResolver'] }) {
+  const { label: unavailableLabel } = useMusicAvailability({ provider: 'soundcloud', externalUrl: playlistUrl });
   recordClientRender('SoundcloudPlaylistCard');
   const globalAudio = useGlobalAudioControls();
   const [isActivated, setIsActivated] = useState(false);
@@ -2120,6 +2235,7 @@ function SoundcloudPlaylistCard({ expandedLayout = false, fallbackTrack, playlis
     collectionId: playlistUrl,
     sourceTrackUrl: track.externalUrl,
     genres: fallbackTrack.genres ?? [],
+    releaseDate: fallbackTrack.releaseDate,
     releaseId: fallbackTrack.releaseId ?? undefined,
     labelName: fallbackTrack.labelName,
     labelUsername: fallbackTrack.labelUsername,
@@ -2159,7 +2275,7 @@ function SoundcloudPlaylistCard({ expandedLayout = false, fallbackTrack, playlis
       else await globalAudio.play(globalAudio.activeTrack);
       return;
     }
-    const first = playableQueue[0];
+    const first = playableQueue.find((track) => !isKnownMusicUnavailable(track));
     if (!first) {
       setShouldPlayWhenReady(true);
       setIsActivated(true);
@@ -2171,19 +2287,21 @@ function SoundcloudPlaylistCard({ expandedLayout = false, fallbackTrack, playlis
   useEffect(() => {
     if (!shouldPlayWhenReady || !playableQueue.length) return;
     setShouldPlayWhenReady(false);
-    const first = playableQueue[0];
+    const first = playableQueue.find((track) => !isKnownMusicUnavailable(track));
+    if (!first) return;
     const queueIndex = effectiveQueue.findIndex((item) => item.id === first.id);
     void globalAudio.play({ ...first, queue: effectiveQueue.length > 1 ? effectiveQueue : undefined, queueIndex, queueWindowResolver });
   }, [effectiveQueueSignature, playableQueue.length, shouldPlayWhenReady]);
 
-  return <View style={[styles.bandcampReleaseCard, styles.bandcampReleaseCardProfile]}>
+  return <View style={[styles.bandcampReleaseCard, styles.bandcampReleaseCardProfile, unavailableLabel && { opacity: 0.65 }]}>
+    {unavailableLabel ? <Text style={styles.soundcloudFallbackText}>ⓘ {unavailableLabel}</Text> : null}
     <View style={[styles.bandcampReleaseHeader, expandedLayout && styles.communityAudioReleaseHeader]}>
       <Pressable accessibilityLabel={isPlaylistPlaying ? `Поставить ${fallbackTrack.title} на паузу` : `Воспроизвести ${fallbackTrack.title}`} accessibilityRole="button" onPress={() => void togglePlaylist()} style={[styles.bandcampReleaseHeaderLink, expandedLayout && styles.communityAudioReleaseHeaderLink]}>
         {fallbackTrack.artworkUrl ? <Image resizeMode="cover" source={{ uri: musicArtworkThumbnail(fallbackTrack.artworkUrl, 'soundcloud') ?? fallbackTrack.artworkUrl }} style={[styles.bandcampReleaseArtwork, expandedLayout && styles.communityAudioReleaseArtwork]} /> : <View style={[styles.bandcampReleaseArtworkFallback, expandedLayout && styles.communityAudioReleaseArtwork]}><Radio color="#111" size={24} strokeWidth={1.8} /></View>}
         <View style={styles.bandcampReleaseCopy}><Text numberOfLines={1} style={styles.bandcampReleaseTitle}>{release?.title || fallbackTrack.title}</Text><ReleaseMetadataRows artist={release?.artist || fallbackTrack.artist} genres={fallbackTrack.genres ?? []} provider="SoundCloud" releaseDateLabel={releaseDateLabel} showGenres={expandedLayout} trackCount={playableQueue.length} /></View>
       </Pressable>
       <Pressable accessibilityLabel={isPlaylistPlaying ? 'Поставить плейлист на паузу' : 'Воспроизвести плейлист'} accessibilityRole="button" disabled={isActivated && !playableQueue.length && !error} onPress={() => void togglePlaylist()} style={styles.bandcampTrackPlayButton}>
-        {isActivated && !playableQueue.length && !error ? <ActivityIndicator color="#fff" size="small" /> : isPlaylistPlaying ? <Pause color="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" fill="#fff" size={12} strokeWidth={2} />}
+        {isActivated && !playableQueue.length && !error ? <LoadingIndicator tone="inverse" size="small" /> : isPlaylistPlaying ? <Pause color="#fff" fill="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" fill="#fff" size={12} strokeWidth={2} />}
       </Pressable>
     </View>
     {error ? <Pressable accessibilityRole="link" onPress={() => void openExternalHttpsUrl(playlistUrl)} style={styles.soundcloudPlaylistError}><Text style={styles.soundcloudFallbackText}>{error}. Открыть в SoundCloud.</Text></Pressable> : null}
@@ -2213,7 +2331,8 @@ function profileBandcampReleaseUrl(value: string) {
   }
 }
 
-export function BandcampReleaseCard({ expandedLayout = false, flushTop = false, genres = [], onEdit, profileQueue, profileSpacing = false, queueWindowResolver, releaseDateLabel, releaseId, releaseSnapshot, releaseUrl }: { expandedLayout?: boolean; flushTop?: boolean; genres?: string[]; onEdit?: () => void; profileQueue?: GlobalTrackQueueItem[]; profileSpacing?: boolean; queueWindowResolver?: (target: GlobalTrackQueueItem) => GlobalTrackQueueItem[]; releaseDateLabel?: string; releaseId?: string; releaseSnapshot?: BandcampReleaseSnapshot | null; releaseUrl: string }) {
+export function BandcampReleaseCard({ preferSnapshot = false, expandedLayout = false, flushTop = false, genres = [], onEdit, profileQueue, profileSpacing = false, queueWindowResolver, releaseDateLabel, releaseId, releaseSnapshot, releaseUrl, releaseDate, showGenres = true }: { releaseDate?: string | null; preferSnapshot?: boolean; expandedLayout?: boolean; flushTop?: boolean; genres?: string[]; showGenres?: boolean; onEdit?: () => void; profileQueue?: GlobalTrackQueueItem[]; profileSpacing?: boolean; queueWindowResolver?: (target: GlobalTrackQueueItem) => GlobalTrackQueueItem[]; releaseDateLabel?: string; releaseId?: string; releaseSnapshot?: BandcampReleaseSnapshot | null; releaseUrl: string }) {
+  const { label: unavailableLabel } = useMusicAvailability({ provider: 'bandcamp', externalUrl: releaseUrl });
   recordClientRender('BandcampReleaseCard');
   const globalAudio = useGlobalAudioControls();
   const [release, setRelease] = useState<BandcampRelease | null>(() => releaseSnapshot ?? peekBandcampRelease(releaseUrl));
@@ -2222,18 +2341,19 @@ export function BandcampReleaseCard({ expandedLayout = false, flushTop = false, 
   useEffect(() => {
     let active = true;
     const cached = peekBandcampRelease(releaseUrl);
-    setRelease(cached ?? releaseSnapshot ?? null);
+    const preferred = preferSnapshot && releaseSnapshot?.tracks?.length ? releaseSnapshot : null;
+    setRelease(preferred ?? cached ?? releaseSnapshot ?? null);
     setError('');
     if (!releaseUrl) {
       setError('Не удалось определить ссылку релиза Bandcamp');
       return () => { active = false; };
     }
-    if (cached) return () => { active = false; };
+    if (preferred || cached) return () => { active = false; };
     void getBandcampRelease(releaseUrl)
       .then((result) => { if (active) setRelease(result); })
       .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : 'Не удалось загрузить релиз Bandcamp'); });
     return () => { active = false; };
-  }, [releaseSnapshot, releaseUrl]);
+  }, [preferSnapshot, releaseSnapshot, releaseUrl]);
 
   if (error) {
     return (
@@ -2248,12 +2368,13 @@ export function BandcampReleaseCard({ expandedLayout = false, flushTop = false, 
   }
 
   if (!release) {
-    return <View style={[styles.bandcampReleaseLoading, profileSpacing && styles.bandcampReleaseCardProfile]}><ActivityIndicator color="#6f7b86" /><Text style={styles.soundcloudFallbackText}>Загружаем релиз Bandcamp…</Text></View>;
+    return <View style={[styles.bandcampReleaseLoading, profileSpacing && styles.bandcampReleaseCardProfile]}><LoadingIndicator /><Text style={styles.soundcloudFallbackText}>Загружаем релиз Bandcamp…</Text></View>;
   }
 
-  const releaseQueueMetadata = profileQueue?.find((item) => item.releaseId === releaseId);
+  const releaseQueueMetadata = profileQueue?.find((item) => (releaseId && item.releaseId === releaseId) || (item.provider === 'bandcamp' && item.collectionId === release.externalUrl));
   const playableQueue = bandcampReleaseQueue(release, genres, releaseId).map((item) => ({
     ...item,
+    releaseDate: releaseDate !== undefined ? releaseDate : releaseQueueMetadata?.releaseDate !== undefined ? releaseQueueMetadata.releaseDate : item.releaseDate,
     labelName: releaseQueueMetadata?.labelName ?? item.labelName ?? null,
     labelUsername: releaseQueueMetadata?.labelUsername ?? item.labelUsername ?? null,
     participants: releaseQueueMetadata?.participants ?? item.participants ?? [],
@@ -2280,7 +2401,7 @@ export function BandcampReleaseCard({ expandedLayout = false, flushTop = false, 
       await globalAudio.play(globalAudio.activeTrack);
       return;
     }
-    const firstTrack = playableQueue[0];
+    const firstTrack = playableQueue.find((track) => !isKnownMusicUnavailable(track));
     if (!firstTrack) return;
     const playbackQueue = queueWindowResolver?.(firstTrack) ?? effectiveQueue;
     const queueIndex = playbackQueue.findIndex((item) => item.id === firstTrack.id);
@@ -2288,16 +2409,17 @@ export function BandcampReleaseCard({ expandedLayout = false, flushTop = false, 
   };
 
   return (
-    <View style={[styles.bandcampReleaseCard, flushTop && styles.bandcampReleaseCardFlushTop, profileSpacing && styles.bandcampReleaseCardProfile]}>
+    <View style={[styles.bandcampReleaseCard, flushTop && styles.bandcampReleaseCardFlushTop, profileSpacing && styles.bandcampReleaseCardProfile, unavailableLabel && { opacity: 0.65 }]}>
+      {unavailableLabel ? <Text style={styles.soundcloudFallbackText}>ⓘ {unavailableLabel}</Text> : null}
       <View style={[styles.bandcampReleaseHeader, profileSpacing && styles.bandcampReleaseHeaderProfile, expandedLayout && styles.communityAudioReleaseHeader]}>
         <Pressable accessibilityLabel={isReleasePlaying ? `Поставить ${release.title} на паузу` : `Воспроизвести ${release.title}`} accessibilityRole="button" onPress={() => void toggleReleasePlayback()} style={[styles.bandcampReleaseHeaderLink, expandedLayout && styles.communityAudioReleaseHeaderLink]}>
           {release.artworkUrl ? <Image resizeMode="cover" source={{ uri: musicArtworkThumbnail(release.artworkUrl, 'bandcamp') ?? release.artworkUrl }} style={[styles.bandcampReleaseArtwork, expandedLayout && styles.communityAudioReleaseArtwork]} /> : <View style={[styles.bandcampReleaseArtworkFallback, expandedLayout && styles.communityAudioReleaseArtwork]}><Text style={styles.audioArtworkFallbackNote}>♪</Text></View>}
           <View style={styles.bandcampReleaseCopy}>
             <Text numberOfLines={1} style={styles.bandcampReleaseTitle}>{release.title}</Text>
-            <ReleaseMetadataRows artist={release.artist} genres={genres} provider="Bandcamp" releaseDateLabel={releaseDateLabel ?? (release.releaseDate ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(release.releaseDate)) : null)} showGenres={expandedLayout} trackCount={release.tracks.length} />
+            <ReleaseMetadataRows artist={release.artist} genres={genres} provider="Bandcamp" releaseDateLabel={releaseDateLabel ?? (release.releaseDate ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(release.releaseDate)) : null)} showGenres={expandedLayout && showGenres} trackCount={release.tracks.length} />
           </View>
         </Pressable>
-        {playableQueue.length ? <Pressable accessibilityLabel={isReleasePlaying ? 'Поставить релиз на паузу' : 'Воспроизвести релиз'} accessibilityRole="button" onPress={() => void toggleReleasePlayback()} style={styles.bandcampTrackPlayButton}>{isReleasePlaying ? <Pause color="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" fill="#fff" size={12} strokeWidth={2} />}</Pressable> : null}
+        {playableQueue.length ? <Pressable accessibilityLabel={isReleasePlaying ? 'Поставить релиз на паузу' : 'Воспроизвести релиз'} accessibilityRole="button" onPress={() => void toggleReleasePlayback()} style={styles.bandcampTrackPlayButton}>{isReleasePlaying ? <Pause color="#fff" fill="#fff" size={13} strokeWidth={2} /> : <Play color="#fff" fill="#fff" size={12} strokeWidth={2} />}</Pressable> : null}
         {onEdit ? <Pressable accessibilityLabel="Редактировать релиз" hitSlop={6} onPress={onEdit} style={styles.bandcampReleaseRemoveButton}><Pencil color="#6f7b86" size={17} strokeWidth={1.9} /></Pressable> : null}
       </View>
       {release.tracks.length > 1 ? (
@@ -2417,7 +2539,7 @@ export function AvatarPreviewModal({
               {imageUrl && previewSize ? (
                 <Image source={{ uri: imageUrl }} style={styles.avatarPreviewImage} resizeMode="cover" />
               ) : imageUrl ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <LoadingIndicator tone="inverse" size="small" />
               ) : (
                 <View style={[styles.avatarPreviewImage, styles.avatarPreviewPlaceholder]}>
                   <Text style={styles.avatarPreviewPlaceholderText}>{getAvatarInitial(name)}</Text>
@@ -2459,19 +2581,24 @@ export function EditProfileScreen({
   const [connectInterests, setConnectInterests] = useState<string[]>(profile.connectInterests ?? []);
   const [connectPhotos, setConnectPhotos] = useState<ConnectPhoto[]>(profile.connectPhotos ?? []);
   const [connectAbout, setConnectAbout] = useState(profile.connectAbout ?? '');
-  const [connectFaceVerified, setConnectFaceVerified] = useState(profile.connectFaceVerified ?? false);
-  const [isConnectFaceVerifying, setIsConnectFaceVerifying] = useState(false);
   const [connectLocationPermission, setConnectLocationPermission] = useState<{ canAskAgain: boolean; granted: boolean } | null>(administrativeTarget ? { canAskAgain: false, granted: true } : null);
   const [isRequestingConnectLocation, setIsRequestingConnectLocation] = useState(false);
   const [connectPhotoCrop, setConnectPhotoCrop] = useState<{ asset: AvatarCropAsset; index: number } | null>(null);
   const [gender, setGender] = useState<Gender | null>(profile.gender === 'OTHER' ? null : profile.gender ?? null);
+  const initialTrackAvailableDuration = profile.trackProvider === 'apple' || profile.trackProvider === 'yandex'
+    ? profile.trackPreviewDurationSeconds ?? 30
+    : profile.trackDurationSeconds ?? profile.trackPreviewDurationSeconds ?? 30;
   const [trackTitle, setTrackTitle] = useState(profile.trackTitle ?? '');
   const [trackArtist, setTrackArtist] = useState(profile.trackArtist ?? '');
   const [trackArtworkUrl, setTrackArtworkUrl] = useState(profile.trackArtworkUrl ?? '');
   const [trackPreviewUrl, setTrackPreviewUrl] = useState(profile.trackPreviewUrl ?? '');
   const [trackExternalUrl, setTrackExternalUrl] = useState(profile.trackExternalUrl ?? '');
   const [trackProvider, setTrackProvider] = useState(profile.trackProvider ?? '');
-  const [trackStartSeconds, setTrackStartSeconds] = useState(profile.trackStartSeconds ?? 0);
+  const [trackStartSeconds, setTrackStartSeconds] = useState(() => clampPrimaryTrackStartSeconds(
+    profile.trackStartSeconds ?? 0,
+    profile.trackClipDurationSeconds ?? 30,
+    initialTrackAvailableDuration,
+  ));
   const [trackClipDurationSeconds, setTrackClipDurationSeconds] = useState(profile.trackClipDurationSeconds ?? 30);
   const [trackDurationSeconds, setTrackDurationSeconds] = useState<number | null>(profile.trackDurationSeconds ?? null);
   const [trackPreviewDurationSeconds, setTrackPreviewDurationSeconds] = useState(profile.trackPreviewDurationSeconds ?? 30);
@@ -2499,11 +2626,8 @@ export function EditProfileScreen({
   const [usernameState, setUsernameState] = useState<'checking' | 'invalid' | 'taken' | 'available'>('available');
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [countrySearch, setCountrySearch] = useState('');
-  const [autoSaveStatus, setAutoSaveStatus] = useState<'saved' | 'saving' | 'pending' | 'error'>('saved');
   const [verificationRequestStatus, setVerificationRequestStatus] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | null>(profile.isVerified ? 'APPROVED' : null);
   const [isVerificationRequestLoading, setIsVerificationRequestLoading] = useState(false);
-  const didInitializeAutoSave = useRef(false);
-  const autoSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [yandexStatus, setYandexStatus] = useState<{ connected: boolean; login: string | null; tracksCount: number; lastSyncedAt: string | null } | null>(null);
   const [appleStatus, setAppleStatus] = useState<{ configured: boolean; connected: boolean; storefront: string | null; tracksCount: number; lastSyncedAt: string | null } | null>(null);
   const [isAppleBusy, setIsAppleBusy] = useState(false);
@@ -2674,57 +2798,6 @@ export function EditProfileScreen({
     setTrackPreviewDurationSeconds(30);
   };
 
-  const verifyConnectFace = async () => {
-    if (!connectPhotos.length) {
-      notifyError('Сначала добавьте фотографию в Коннекте');
-      return;
-    }
-    setIsConnectFaceVerifying(true);
-    try {
-      if (Platform.OS !== 'web') {
-        const permission = await ImagePicker.requestCameraPermissionsAsync();
-        if (!permission.granted) throw new Error('Разрешите VOLNA доступ к камере');
-      }
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['images'],
-        cameraType: ImagePicker.CameraType.front,
-        allowsEditing: false,
-        base64: false,
-        quality: 0.85,
-      });
-      if (result.canceled) return;
-      const asset = result.assets[0];
-      if (!asset?.uri) throw new Error('Не удалось получить снимок с камеры');
-      const normalized = await manipulateAsync(
-        asset.uri,
-        asset.width > 1280 ? [{ resize: { width: 1280 } }] : [],
-        { base64: true, compress: 0.78, format: SaveFormat.JPEG },
-      );
-      if (!normalized.base64) throw new Error('Не удалось подготовить снимок с камеры');
-      const response = await fetch(`${apiUrl}/profiles/connect/face-verification`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // CPU face detection may need to inspect all five Connect photos.
-          // Keep this request aligned with the verifier/Gunicorn budget instead
-          // of aborting through the shared client's ordinary 15-second limit.
-          'x-volna-timeout-ms': '85000',
-        },
-        body: JSON.stringify({ selfie: `data:image/jpeg;base64,${normalized.base64}` }),
-      });
-      if (response.status === 429) {
-        throw new Error('Слишком много попыток. Подождите несколько минут и попробуйте снова.');
-      }
-      if (!response.ok) throw new Error(await readApiError(response, 'Не удалось подтвердить личность'));
-      setConnectFaceVerified(true);
-      onNotify('Личность подтверждена', 'success');
-    } catch (error) {
-      notifyError(error instanceof Error ? error.message : 'Не удалось подтвердить личность');
-    } finally {
-      setIsConnectFaceVerifying(false);
-    }
-  };
-
   const loadYandexStatus = useCallback(async () => {
     if (administrativeTarget) return;
     const response = await fetch(`${apiUrl}/music/yandex/account/status`, { headers: { Authorization: `Bearer ${authToken}` } });
@@ -2875,35 +2948,31 @@ export function EditProfileScreen({
     setConnectPhotoCrop({ index, asset: { uri: asset.uri, width: asset.width || 1200, height: asset.height || 1200, mimeType: asset.mimeType || 'image/jpeg' } });
   };
 
-  const submit = async () => {
-    if (usernameState !== 'available') {
-      setAutoSaveStatus('pending');
-      return;
+  const submit = async (): Promise<boolean> => {
+    if (!/^(?=.{3,20}$)(?=.*[a-z])[a-z0-9_]+$/.test(username.trim().replace(/^@/, '').toLowerCase()) || usernameState === 'taken') {
+      return false;
     }
 
     const nameError = validateDisplayName(name);
     if (nameError) {
       if (getProfileTextViolation(name)) notifyError(nameError);
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
 
     const aboutViolation = getProfileTextViolation(about);
     if (aboutViolation) {
-      setAutoSaveStatus('error');
       notifyError(aboutViolation === 'link'
         ? 'Описание профиля не должно содержать ссылки'
         : 'Описание профиля не должно содержать нецензурную лексику');
-      return;
+      return false;
     }
 
     const connectAboutViolation = getProfileTextViolation(connectAbout);
     if (connectAboutViolation) {
-      setAutoSaveStatus('error');
       notifyError(connectAboutViolation === 'link'
         ? 'Описание Коннекта не должно содержать ссылки'
         : 'Описание Коннекта не должно содержать нецензурную лексику');
-      return;
+      return false;
     }
 
     const normalizedBandcampLink = normalizeSocialLink(bandcampUrl, 'bandcamp');
@@ -2923,26 +2992,20 @@ export function EditProfileScreen({
       normalizedLetterboxdLink.error;
 
     if (urlError) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
 
     if (about.length > 500) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
 
     if (connectEnabled && !connectGoals.length) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
 
     if (connectEnabled && !connectPhotos.length) {
-      setAutoSaveStatus('pending');
-      return;
+      return false;
     }
-
-    setAutoSaveStatus('saving');
 
     try {
       let savedAvatarUrl = avatarUrl;
@@ -2951,8 +3014,8 @@ export function EditProfileScreen({
         const uploaded = await uploadAvatarAsset(avatarUrl, authToken, 'account', undefined, administrativeTarget ? profile.username : undefined);
         savedAvatarUrl = uploaded.avatarUrl;
         savedAvatarKey = uploaded.avatarKey;
-        setAvatarUrl(savedAvatarUrl);
-        setAvatarKey(savedAvatarKey);
+        setAvatarUrl(current => current === avatarUrl ? savedAvatarUrl : current);
+        setAvatarKey(current => current === avatarKey ? savedAvatarKey : current);
       }
       const savedConnectPhotos: ConnectPhoto[] = [];
       let didUploadConnectPhoto = false;
@@ -2966,14 +3029,18 @@ export function EditProfileScreen({
       }
       // Replacing an unchanged array retriggers the autosave effect forever.
       // Synchronize local state only when a local photo was actually uploaded.
-      if (didUploadConnectPhoto) setConnectPhotos(savedConnectPhotos);
+      if (didUploadConnectPhoto) setConnectPhotos(current => current === connectPhotos ? savedConnectPhotos : current);
       const avatarChanged = savedAvatarUrl !== profile.avatarUrl || savedAvatarKey !== (profile.avatarKey ?? null);
-      const normalizedTrackStartSeconds = Math.round(Number(trackStartSeconds) * 100) / 100;
       const normalizedTrackClipDurationSeconds = Math.round(Number(trackClipDurationSeconds) * 100) / 100;
       const normalizedTrackDurationSeconds = trackDurationSeconds == null
         ? null
         : Math.round(Number(trackDurationSeconds) * 100) / 100;
       const normalizedTrackPreviewDurationSeconds = Math.round(Number(trackPreviewDurationSeconds) * 100) / 100;
+      const normalizedTrackStartSeconds = clampPrimaryTrackStartSeconds(
+        trackStartSeconds,
+        normalizedTrackClipDurationSeconds,
+        primaryTrackStartSelectionDuration,
+      );
       await onSave({
         username: username.trim().replace(/^@/, '').toLowerCase(),
         name: name.trim(),
@@ -3013,34 +3080,26 @@ export function EditProfileScreen({
         letterboxdUrl: normalizedLetterboxdLink.url,
       }, { stayOnScreen: true });
       emitPlaybackVisibilityChanged();
-      setAutoSaveStatus('saved');
+      return true;
     } catch (saveError) {
-      setAutoSaveStatus('error');
       notifyError(saveError instanceof Error ? saveError.message : 'Не удалось сохранить профиль');
+      throw saveError;
     }
   };
 
-  useEffect(() => {
-    if (!didInitializeAutoSave.current) {
-      didInitializeAutoSave.current = true;
-      return;
-    }
-
-    setAutoSaveStatus('pending');
-    const timeout = setTimeout(() => {
-      autoSaveQueue.current = autoSaveQueue.current
-        .catch(() => undefined)
-        .then(submit);
-    }, 800);
-    return () => clearTimeout(timeout);
-  }, [
-    about, avatarKey, avatarUrl, bandcampUrl, cityId, connectEnabled, connectGoals, connectInterests,
+  const { status: autoSaveStatus } = useEditorAutosave({
+    scopeKey: authToken + ':' + profile.id,
+    draftKey: JSON.stringify([
+    about, avatarKey, avatarUrl, bandcampUrl, cityId, cityName, connectEnabled, connectGoals, connectInterests,
     connectPhotos, connectAbout, countryCode, countryName, gender, instagramUrl, letterboxdUrl, musicGenres, name,
     primaryUploadedTrackId, sharePlaybackActivity, soundcloudUrl, telegramUrl, threadsUrl, trackArtist, trackArtworkUrl,
     trackClipDurationSeconds, trackDurationSeconds, trackExternalUrl, trackPreviewDurationSeconds,
-    trackPreviewUrl, trackProvider, trackStartSeconds, trackTitle, username, usernameState, youtubeUrl,
-  ]);
-
+    trackPreviewUrl, trackProvider, trackStartSeconds, trackTitle, username, youtubeUrl,
+    ]),
+    readinessKey: usernameState,
+    save: submit,
+    onInvalid: () => onNotify('Изменения не сохранены. Проверьте заполненные поля и повторите выход.', 'error'),
+  });
   useEffect(() => {
     if (!connectEnabled) return;
     const hasSelectedGender = gender === 'MALE' || gender === 'FEMALE';
@@ -3050,15 +3109,7 @@ export function EditProfileScreen({
 
   return (
     <>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable onPress={onBack} style={styles.topBarIconButton}>
-            <ChevronLeft size={29} color="#090909" strokeWidth={2.1} />
-          </Pressable>
-          <Text style={styles.topBarTitle}>Редактировать</Text>
-        </View>
-        <EditorAutosaveStatus status={autoSaveStatus} />
-      </View>
+      <ScreenTopBar onBack={onBack} title="Редактировать" trailingAction={<><EditorAutosaveStatus status={autoSaveStatus} /></>} />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? safeAreaInsets.bottom : 0} style={styles.editShell}>
         <ScrollView contentContainerStyle={[styles.editContent, styles.editProfileContent]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -3081,7 +3132,7 @@ export function EditProfileScreen({
                   value={username}
                 />
                 <View style={styles.usernameStatusSlot}>
-                  {usernameState === 'checking' ? <ActivityIndicator color="#7d8894" size="small" /> : null}
+                  {usernameState === 'checking' ? <LoadingIndicator size="small" /> : null}
                   {usernameState === 'available' ? <Check color="#2fa84f" size={20} strokeWidth={2.4} /> : null}
                   {usernameState === 'taken' || usernameState === 'invalid' ? (
                     <X color="#c62828" size={19} strokeWidth={2.4} />
@@ -3193,39 +3244,11 @@ export function EditProfileScreen({
             onAdd={(index) => { void pickConnectPhoto(index); }}
             onChangeAbout={setConnectAbout}
             onChange={(photos) => {
-              setConnectFaceVerified(false);
               setConnectPhotos(photos);
               if (!photos.length && connectEnabled) setConnectEnabled(false);
             }}
             photos={connectPhotos}
           />
-          {!administrativeTarget ? <View style={styles.connectFaceVerificationBlock}>
-            <View style={styles.connectFaceVerificationCopy}>
-              <View style={styles.connectFaceVerificationTitleRow}>
-                <ShieldCheck color={connectFaceVerified ? '#20b863' : '#111'} size={20} strokeWidth={2} />
-                <Text style={[styles.connectGoalsTitle, styles.connectInlineTitle]}>
-                  {connectFaceVerified ? 'Личность подтверждена' : 'Подтверждение личности'}
-                </Text>
-              </View>
-              <Text style={styles.connectPhotosHint}>
-                Селфи с фронтальной камеры сравнивается с фотографиями Коннекта и удаляется сразу после проверки.
-                Хотя бы на одной фотографии должно быть хорошо видно лицо. Нажимая «Подтвердить», вы соглашаетесь на его разовую обработку.
-              </Text>
-            </View>
-            {!connectFaceVerified ? (
-              <Pressable
-                accessibilityLabel="Подтвердить лицо камерой"
-                accessibilityRole="button"
-                disabled={isConnectFaceVerifying}
-                onPress={() => void verifyConnectFace()}
-                style={styles.connectFaceVerificationButton}
-              >
-                {isConnectFaceVerifying
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.connectFaceVerificationButtonText}>Подтвердить</Text>}
-              </Pressable>
-            ) : null}
-          </View> : null}
           <View style={styles.connectGoalsBlock}>
                 <Text style={styles.connectGoalsTitle}>Цели взаимодействия</Text>
                 <View style={styles.connectGoalChips}>
@@ -3260,8 +3283,7 @@ export function EditProfileScreen({
                 })}
                 </View>
           </View>
-          <ConnectInterestSelector onChange={setConnectInterests} selected={connectInterests} />
-          <MusicGenreSelector selected={musicGenres} onChange={setMusicGenres} subgenresOnly />
+          <ConnectInterestSelector onChange={setConnectInterests} selected={connectInterests} musicGenres={musicGenres} onChangeMusicGenres={setMusicGenres} />
           {!administrativeTarget ? (
             <View style={styles.connectLocationPermissionBlock}>
               <View style={styles.connectLocationPermissionTitleRow}>
@@ -3286,7 +3308,7 @@ export function EditProfileScreen({
                   style={[styles.connectLocationPermissionButton, (isRequestingConnectLocation || !connectLocationPermission) && styles.connectLocationPermissionButtonDisabled]}
                 >
                   {isRequestingConnectLocation
-                    ? <ActivityIndicator color="#fff" size="small" />
+                    ? <LoadingIndicator tone="inverse" size="small" />
                     : <Text style={styles.connectLocationPermissionButtonText}>{connectLocationPermission?.canAskAgain ? 'Разрешить' : 'Открыть настройки'}</Text>}
                 </Pressable>
               ) : null}
@@ -3358,7 +3380,7 @@ export function EditProfileScreen({
               ]}
             >
               {isVerificationRequestLoading
-                ? <ActivityIndicator color="#fff" size="small" />
+                ? <LoadingIndicator tone="inverse" size="small" />
                 : <Text style={styles.profileVerificationRequestButtonText}>
                   {verificationRequestStatus === 'PENDING' ? 'Заявка на рассмотрении' : 'Подать заявку'}
                 </Text>}
@@ -3389,7 +3411,6 @@ export function EditProfileScreen({
         label="Фото Коннекта"
         onApply={(uri) => {
           const index = connectPhotoCrop?.index ?? connectPhotos.length;
-          setConnectFaceVerified(false);
           setConnectPhotos((current) => {
             const next = [...current];
             const item = { imageKey: '', imageUrl: uri };
@@ -3641,6 +3662,14 @@ export function AvatarCropModal({
     offset: { x: 0, y: 0 },
     zoom: 1,
     distance: 0,
+    translation: { x: 0, y: 0 },
+  });
+  const webPointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const webGestureRef = useRef({
+    offset: { x: 0, y: 0 },
+    zoom: 1,
+    distance: 0,
+    center: { x: 0, y: 0 },
   });
 
   useEffect(() => {
@@ -3685,6 +3714,15 @@ export function AvatarCropModal({
     };
   }, [cropHeight, cropWidth, getImageLayout]);
 
+  const updateCropTransform = useCallback((nextOffset: { x: number; y: number }, nextZoom = zoomRef.current) => {
+    const constrainedZoom = clamp(nextZoom, 1, 4);
+    const constrainedOffset = clampCropOffset(nextOffset, constrainedZoom);
+    zoomRef.current = constrainedZoom;
+    offsetRef.current = constrainedOffset;
+    setZoom(constrainedZoom);
+    setOffset(constrainedOffset);
+  }, [clampCropOffset]);
+
   const getTouchDistance = (touches: Array<{ pageX: number; pageY: number }>) => {
     if (touches.length < 2) {
       return 0;
@@ -3702,6 +3740,7 @@ export function AvatarCropModal({
         offset: offsetRef.current,
         zoom: zoomRef.current,
         distance: getTouchDistance(event.nativeEvent.touches),
+        translation: { x: 0, y: 0 },
       };
     },
     onPanResponderMove: (event, gestureState) => {
@@ -3709,19 +3748,102 @@ export function AvatarCropModal({
 
       if (touches.length >= 2) {
         const distance = getTouchDistance(touches);
-        const startDistance = gestureRef.current.distance || distance || 1;
-        const nextZoom = clamp(gestureRef.current.zoom * (distance / startDistance), 1, 4);
-        setZoom(nextZoom);
-        setOffset(clampCropOffset(offsetRef.current, nextZoom));
+        if (!gestureRef.current.distance) {
+          gestureRef.current = {
+            offset: offsetRef.current,
+            zoom: zoomRef.current,
+            distance: distance || 1,
+            translation: { x: gestureState.dx, y: gestureState.dy },
+          };
+          return;
+        }
+        const nextZoom = gestureRef.current.zoom * (distance / gestureRef.current.distance);
+        updateCropTransform(gestureRef.current.offset, nextZoom);
         return;
       }
 
-      setOffset(clampCropOffset({
-        x: gestureRef.current.offset.x + gestureState.dx,
-        y: gestureRef.current.offset.y + gestureState.dy,
-      }));
+      if (gestureRef.current.distance) {
+        gestureRef.current = {
+          offset: offsetRef.current,
+          zoom: zoomRef.current,
+          distance: 0,
+          translation: { x: gestureState.dx, y: gestureState.dy },
+        };
+      }
+      updateCropTransform({
+        x: gestureRef.current.offset.x + gestureState.dx - gestureRef.current.translation.x,
+        y: gestureRef.current.offset.y + gestureState.dy - gestureRef.current.translation.y,
+      });
     },
-  }), [asset, clampCropOffset]);
+    onPanResponderTerminationRequest: () => false,
+  }), [asset, updateCropTransform]);
+
+  const rebaseWebGesture = useCallback(() => {
+    const points = Array.from(webPointersRef.current.values());
+    const center = points.length
+      ? {
+          x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+          y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+        }
+      : { x: 0, y: 0 };
+    webGestureRef.current = {
+      offset: offsetRef.current,
+      zoom: zoomRef.current,
+      distance: points.length >= 2 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0,
+      center,
+    };
+  }, []);
+
+  const webCropGestureSurface = Platform.OS === 'web' ? createElement('div', {
+    onPointerCancel: (event: PointerEvent & { currentTarget: HTMLElement }) => {
+      webPointersRef.current.delete(event.pointerId);
+      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      rebaseWebGesture();
+    },
+    onPointerDown: (event: PointerEvent & { currentTarget: HTMLElement }) => {
+      event.preventDefault();
+      event.stopPropagation();
+      webPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      rebaseWebGesture();
+    },
+    onPointerMove: (event: PointerEvent) => {
+      if (!webPointersRef.current.has(event.pointerId)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      webPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const points = Array.from(webPointersRef.current.values());
+      const center = {
+        x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+        y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+      };
+      const nextZoom = points.length >= 2 && webGestureRef.current.distance > 0
+        ? webGestureRef.current.zoom * (Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) / webGestureRef.current.distance)
+        : webGestureRef.current.zoom;
+      updateCropTransform({
+        x: webGestureRef.current.offset.x + center.x - webGestureRef.current.center.x,
+        y: webGestureRef.current.offset.y + center.y - webGestureRef.current.center.y,
+      }, nextZoom);
+    },
+    onPointerUp: (event: PointerEvent & { currentTarget: HTMLElement }) => {
+      if (!webPointersRef.current.has(event.pointerId)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      webPointersRef.current.delete(event.pointerId);
+      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      rebaseWebGesture();
+    },
+    style: {
+      cursor: 'grab',
+      height: '100%',
+      inset: 0,
+      position: 'absolute',
+      touchAction: 'none',
+      userSelect: 'none',
+      width: '100%',
+      zIndex: 2,
+    },
+  }) : null;
 
   if (!asset) {
     return null;
@@ -3788,7 +3910,7 @@ export function AvatarCropModal({
           <View style={styles.avatarCropBody}>
             <View
               style={[styles.avatarCropFrame, { width: cropWidth, height: cropHeight, borderRadius: cropShape === 'circle' ? cropWidth / 2 : isCategoryCover ? 8 : 22 }]}
-              {...panResponder.panHandlers}
+              {...(Platform.OS === 'web' ? {} : panResponder.panHandlers)}
             >
               <Image
                 source={{ uri: asset.uri }}
@@ -3803,6 +3925,7 @@ export function AvatarCropModal({
                 resizeMode="cover"
               />
               <View pointerEvents="none" style={[styles.avatarCropCircle, { borderRadius: cropShape === 'circle' ? cropWidth / 2 : isCategoryCover ? 8 : 22 }]} />
+              {webCropGestureSurface}
             </View>
 
             <Text style={styles.avatarCropHint}>Двигайте фото и масштабируйте двумя пальцами</Text>
@@ -3819,7 +3942,7 @@ export function AvatarCropModal({
               </Pressable>
             </View>
 
-            {isApplying ? <ActivityIndicator color="#111" style={styles.avatarCropLoader} /> : null}
+            {isApplying ? <LoadingIndicator style={styles.avatarCropLoader} /> : null}
           </View>
         </View>
       </View>
@@ -4053,10 +4176,13 @@ export function PrimaryTrackCatalogSearch({ clipDurationSeconds, durationSeconds
           <Text style={styles.primaryTrackSearchTitle}>Главный трек</Text>
           <View style={styles.primaryTrackSearchHeaderSpacer} />
         </View>
-        <View accessibilityRole="tablist" style={styles.primaryTrackModeTabs}>{([{ value: 'search', label: 'Поиск по названию' }, { value: 'link', label: 'Ссылка' }] as const).map((tab) => { const active = inputMode === tab.value; return <Pressable accessibilityRole="tab" accessibilityState={{ selected: active }} key={tab.value} onPress={() => { setInputMode(tab.value); setSearchError(null); setExternalError(null); Keyboard.dismiss(); }} style={styles.primaryTrackModeTab}><Text style={[styles.primaryTrackModeTabText, active && styles.primaryTrackModeTabTextActive]}>{tab.label}</Text>{active ? <View pointerEvents="none" style={styles.activeTabIndicator} /> : null}</Pressable>; })}</View>
+        {playback ? <View style={styles.primaryTrackSelectedPreview}>
+          <PrimaryTrackEditorPreview artist={playback.artist} artworkUrl={playback.artworkUrl} clipDurationSeconds={clipDurationSeconds} durationSeconds={durationSeconds} externalUrl={playback.externalUrl} onRemove={() => { onRemove(); closeSearch(); }} onStartSecondsChange={onChangeStart} previewUrl={playback.previewUrl ?? ''} provider={selectedProvider === 'uploaded' ? 'volna' : selectedProvider} startSeconds={startSeconds} title={playback.title ?? ''} />
+        </View> : null}
+        <View accessibilityRole="tablist" style={styles.primaryTrackModeTabs}>{([{ value: 'search', label: 'Поиск по названию' }, { value: 'link', label: 'Ссылка' }] as const).map((tab) => { const active = inputMode === tab.value; return <Pressable accessibilityRole="tab" accessibilityState={{ selected: active }} aria-selected={active} key={tab.value} onPress={() => { setInputMode(tab.value); setSearchError(null); setExternalError(null); Keyboard.dismiss(); }} style={styles.primaryTrackModeTab}><Text style={[styles.primaryTrackModeTabText, active && styles.primaryTrackModeTabTextActive]}>{tab.label}</Text>{active ? <View pointerEvents="none" style={styles.activeTabIndicator} /> : null}</Pressable>; })}</View>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.primaryTrackSearchKeyboardView}>
           <View style={styles.primaryTrackSearchControls}>
-            {inputMode === 'search' ? <><AnimatedSegmentedControl accessibilityLabel="Музыкальный сервис" containerStyle={styles.primaryTrackProviderSwitch} onChange={(value) => { setProvider(value); setQuery(''); setResults([]); }} options={([{ value: 'apple', label: 'Apple Music' }, { value: 'yandex', label: 'Я.Музыка' }] as const)} value={provider} /><View style={styles.primaryTrackInputGroup}><View style={styles.primaryTrackSearchInputRow}><Search color="#6f7b86" size={19} strokeWidth={1.9} /><TextInput autoCapitalize="none" autoCorrect={false} autoFocus onChangeText={setQuery} placeholder="Название трека или исполнитель" placeholderTextColor="#8e99a4" returnKeyType="search" style={styles.primaryTrackSearchInput} value={query} /></View><Text style={styles.primaryTrackInputHint}>Поиск по каталогу выбранного музыкального сервиса.</Text></View></> : <View style={styles.primaryTrackInputGroup}><View style={styles.primaryTrackExternalInputRow}><Link2 color="#6f7b86" size={19} strokeWidth={1.9} /><TextInput autoCapitalize="none" autoCorrect={false} autoFocus keyboardType="url" onChangeText={(value) => { setExternalUrl(value); setExternalError(null); setExternalTracks([]); setIsExternalExpanded(false); setResolvedExternalUrl(null); }} onSubmitEditing={() => void resolveExternalTrack()} placeholder="Ссылка на музыку" placeholderTextColor="#8e99a4" returnKeyType="done" style={styles.primaryTrackSearchInput} value={externalUrl} /><Pressable accessibilityLabel={isExternalUrlResolved ? 'Музыкальная ссылка подтверждена' : 'Проверить музыкальную ссылку'} accessibilityRole="button" accessibilityState={{ disabled: !externalUrl.trim() || isResolvingExternal }} disabled={!externalUrl.trim() || isResolvingExternal} onPress={() => externalTracks.length ? setIsExternalExpanded((current) => !current) : void resolveExternalTrack()} style={[styles.primaryTrackExternalAdd, isExternalUrlResolved && styles.primaryTrackExternalAddActive, (!externalUrl.trim() || isResolvingExternal) && styles.primaryTrackExternalAddDisabled]}>{isResolvingExternal ? <ActivityIndicator color="#fff" size="small" /> : <ChevronDown color={isExternalUrlResolved ? '#111' : '#fff'} size={20} strokeWidth={2.2} style={{ transform: [{ rotate: isExternalExpanded ? '180deg' : '0deg' }] }} />}</Pressable></View><Text style={styles.primaryTrackInputHint}>Поддерживаются ссылки Apple Music, Яндекс Музыки, SoundCloud, Bandcamp и YouTube.</Text></View>}
+            {inputMode === 'search' ? <><AnimatedSegmentedControl accessibilityLabel="Музыкальный сервис" containerStyle={styles.primaryTrackProviderSwitch} onChange={(value) => { setProvider(value); setQuery(''); setResults([]); }} options={([{ value: 'apple', label: 'Apple Music' }, { value: 'yandex', label: 'Я.Музыка' }] as const)} value={provider} /><View style={styles.primaryTrackInputGroup}><View style={styles.primaryTrackSearchInputRow}><Search color="#6f7b86" size={19} strokeWidth={1.9} /><TextInput autoCapitalize="none" autoCorrect={false} autoFocus onChangeText={setQuery} placeholder="Название трека или исполнитель" placeholderTextColor="#8e99a4" returnKeyType="search" style={styles.primaryTrackSearchInput} value={query} /></View><Text style={styles.primaryTrackInputHint}>Поиск по каталогу выбранного музыкального сервиса.</Text></View></> : <View style={styles.primaryTrackInputGroup}><View style={styles.primaryTrackExternalInputRow}><Link2 color="#6f7b86" size={19} strokeWidth={1.9} /><TextInput autoCapitalize="none" autoCorrect={false} autoFocus keyboardType="url" onChangeText={(value) => { setExternalUrl(value); setExternalError(null); setExternalTracks([]); setIsExternalExpanded(false); setResolvedExternalUrl(null); }} onSubmitEditing={() => void resolveExternalTrack()} placeholder="Ссылка на музыку" placeholderTextColor="#8e99a4" returnKeyType="done" style={styles.primaryTrackSearchInput} value={externalUrl} /><Pressable accessibilityLabel={isExternalUrlResolved ? 'Музыкальная ссылка подтверждена' : 'Проверить музыкальную ссылку'} accessibilityRole="button" accessibilityState={{ disabled: !externalUrl.trim() || isResolvingExternal }} disabled={!externalUrl.trim() || isResolvingExternal} onPress={() => externalTracks.length ? setIsExternalExpanded((current) => !current) : void resolveExternalTrack()} style={[styles.primaryTrackExternalAdd, isExternalUrlResolved && styles.primaryTrackExternalAddActive, (!externalUrl.trim() || isResolvingExternal) && styles.primaryTrackExternalAddDisabled]}>{isResolvingExternal ? <LoadingIndicator tone="inverse" size="small" /> : <ChevronDown color={isExternalUrlResolved ? '#111' : '#fff'} size={20} strokeWidth={2.2} style={{ transform: [{ rotate: isExternalExpanded ? '180deg' : '0deg' }] }} />}</Pressable></View><Text style={styles.primaryTrackInputHint}>Поддерживаются ссылки Apple Music, Яндекс Музыки, SoundCloud, Bandcamp и YouTube.</Text></View>}
             {externalError ? <Text style={styles.primaryTrackExternalError}>{externalError}</Text> : null}
           </View>
           <ScrollView contentContainerStyle={styles.primaryTrackSearchResults} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" onScrollBeginDrag={() => Keyboard.dismiss()} showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}>
@@ -4070,10 +4196,6 @@ export function PrimaryTrackCatalogSearch({ clipDurationSeconds, durationSeconds
               </Pressable>;
             })}</View> : null}
             <AppleMusicSearchResults error={searchError} isSearching={isSearching} onSelect={selectTrack} results={results} />
-            {playback ? <View style={styles.primaryTrackRangeEditor}>
-              <View style={styles.primaryTrackRangeSelectedTrack}><PrimaryTrackEditorPreview artist={playback.artist} artworkUrl={playback.artworkUrl} clipDurationSeconds={clipDurationSeconds} durationSeconds={durationSeconds} onStartSecondsChange={onChangeStart} previewUrl={playback.previewUrl ?? ''} provider={selectedProvider === 'uploaded' ? 'volna' : selectedProvider} startSeconds={startSeconds} title={playback.title ?? ''} /></View>
-            </View> : null}
-            {playback ? <View style={styles.primaryTrackRemoveSection}><Pressable accessibilityRole="button" onPress={() => { onRemove(); closeSearch(); }} style={styles.primaryTrackRemoveButton}><Text style={styles.primaryTrackRemoveText}>Убрать трек из профиля</Text></Pressable></View> : null}
           </ScrollView>
         </KeyboardAvoidingView>
       </View>
@@ -4368,7 +4490,7 @@ export function AppleMusicSelector({
 
           {(provider === 'soundcloud' || provider === 'bandcamp' || provider === 'youtube') && query.trim() ? (
             <Pressable disabled={isResolvingExternal} onPress={() => void addExternalTrack()} style={[styles.yandexPrimaryButton, styles.musicAddLinkButton]}>
-              {isResolvingExternal ? <ActivityIndicator color="#fff" /> : <Text style={styles.yandexPrimaryButtonText}>Добавить ссылку</Text>}
+              {isResolvingExternal ? <LoadingIndicator tone="inverse" /> : <Text style={styles.yandexPrimaryButtonText}>Добавить ссылку</Text>}
             </Pressable>
           ) : null}
 
@@ -4420,7 +4542,7 @@ function AppleMusicSearchResults({
     <>
       {isSearching ? (
         <View style={styles.appleMusicSearchState}>
-          <ActivityIndicator color="#111" />
+          <LoadingIndicator />
         </View>
       ) : null}
       {error ? <Text style={styles.appleMusicError}>{error}</Text> : null}
@@ -4650,17 +4772,22 @@ function ReorderableMusicTrackRow({
   );
 }
 
-export function ConnectInterestSelector({ filterCard = false, onChange, selected }: {
+export function ConnectInterestSelector({ filterCard = false, onChange, selected, musicGenres, onChangeMusicGenres }: {
   filterCard?: boolean;
   onChange: (interests: string[]) => void;
   selected: string[];
+  musicGenres: string[];
+  onChangeMusicGenres: (genres: string[]) => void;
 }) {
   const [isVisible, setIsVisible] = useState(false);
   const [categoryIndex, setCategoryIndex] = useState<number | null>(null);
   const [search, setSearch] = useState('');
+  const musicPicker = useMusicGenrePicker({ selected: musicGenres, onChange: onChangeMusicGenres, genreSearch: search, maxSelected: musicGenreLimit, subgenresOnly: true });
+  const summary = `Интересы: ${selected.length}/${connectInterestLimit} · Жанры: ${musicGenres.length}/${musicGenreLimit}`;
   const normalizedSearch = search.trim().toLocaleLowerCase('ru-RU');
   const activeCategory = categoryIndex === null ? null : connectInterestGroups[categoryIndex] ?? null;
 
+  const isMusicCategory = activeCategory?.title === 'Музыка';
   const toggle = (value: string) => {
     if (selected.includes(value)) {
       onChange(selected.filter((interest) => interest !== value));
@@ -4675,11 +4802,12 @@ export function ConnectInterestSelector({ filterCard = false, onChange, selected
 
   const closePicker = () => {
     setIsVisible(false);
+    musicPicker.reset();
     setCategoryIndex(null);
     setSearch('');
   };
 
-  const pickerOptions: SelectionPickerOption[] = normalizedSearch
+  const interestOptions: SelectionPickerOption[] = normalizedSearch
     ? connectInterestGroups.flatMap((group) => group.items
         .filter(([value, label]) => `${value} ${label}`.toLocaleLowerCase('ru-RU').includes(normalizedSearch))
         .map(([value, label]) => ({
@@ -4699,13 +4827,23 @@ export function ConnectInterestSelector({ filterCard = false, onChange, selected
       : connectInterestGroups.map((group, index) => ({
           key: group.title,
           title: group.title,
-          meta: `${group.items.length} вариантов`,
+          meta: group.title === 'Музыка' ? 'Жанры и занятия музыкой' : `${group.items.length} вариантов`,
           navigates: true,
           onPress: () => {
+            musicPicker.reset();
             setCategoryIndex(index);
             setSearch('');
           },
         }));
+
+  const pickerOptions = normalizedSearch
+    ? [...interestOptions, ...musicPicker.pickerOptions]
+    : isMusicCategory
+      ? musicPicker.isAtRoot ? [...musicPicker.pickerOptions, ...interestOptions] : musicPicker.pickerOptions
+      : interestOptions;
+  const backLabel = !normalizedSearch && activeCategory
+    ? isMusicCategory && !musicPicker.isAtRoot ? musicPicker.pickerBackLabel : 'Все категории'
+    : undefined;
 
   return (
     <>
@@ -4713,6 +4851,7 @@ export function ConnectInterestSelector({ filterCard = false, onChange, selected
         <Pressable
           accessibilityRole="button"
           onPress={() => {
+            musicPicker.reset();
             setCategoryIndex(null);
             setSearch('');
             setIsVisible(true);
@@ -4721,22 +4860,27 @@ export function ConnectInterestSelector({ filterCard = false, onChange, selected
         >
           <View>
             <Text style={[styles.connectGoalsTitle, filterCard && styles.connectFilterPickerTitle]}>Интересы</Text>
-            <Text style={[styles.connectPhotosHint, filterCard && styles.connectFilterPickerHint, filterCard && !selected.length && styles.connectFilterPickerEmptyHint]}>{selected.length ? `Выбрано: ${selected.length} из ${connectInterestLimit}` : `Выберите до ${connectInterestLimit} творческих интересов`}</Text>
+            <Text style={[styles.connectPhotosHint, filterCard && styles.connectFilterPickerHint, filterCard && !selected.length && !musicGenres.length && styles.connectFilterPickerEmptyHint]}>{summary}</Text>
           </View>
           <ChevronRight color="#7d8894" size={20} strokeWidth={1.8} />
         </Pressable>
-        {selected.length ? <View style={styles.connectInterestSelected}>
+        {selected.length || musicGenres.length ? <View style={styles.connectInterestSelected}>
           {selected.map((interest) => <Pressable key={interest} onPress={() => toggle(interest)} style={[styles.connectInterestSelectedChip, filterCard && styles.connectFilterSelectedChip]}>
             <Text style={[styles.connectInterestSelectedText, filterCard && styles.connectFilterSelectedText]}>{connectInterestLabels[interest] ?? interest}</Text>
+            <X color={filterCard ? '#111' : '#6f7b86'} size={14} strokeWidth={2.1} />
+          </Pressable>)}
+          {musicGenres.map((genre) => <Pressable accessibilityRole="button" accessibilityLabel={`Убрать жанр ${musicSubgenreDisplayName(genre)}`} key={genre} onPress={() => musicPicker.toggleGenre(genre)} style={[styles.connectInterestSelectedChip, filterCard && styles.connectFilterSelectedChip]}>
+            <Text style={[styles.connectInterestSelectedText, filterCard && styles.connectFilterSelectedText]}>{musicSubgenreDisplayName(genre)}</Text>
             <X color={filterCard ? '#111' : '#6f7b86'} size={14} strokeWidth={2.1} />
           </Pressable>)}
         </View> : null}
       </View>
       <SelectionPickerModal
-        backLabel={!normalizedSearch && activeCategory ? 'Все категории' : undefined}
+        backLabel={backLabel}
         emptyText="Ничего не найдено"
         isVisible={isVisible}
-        onBack={!normalizedSearch && activeCategory ? () => {
+        onBack={backLabel ? () => {
+          if (isMusicCategory && !musicPicker.isAtRoot) { musicPicker.onBack(); return; }
           setCategoryIndex(null);
           setSearch('');
         } : undefined}
@@ -4744,9 +4888,9 @@ export function ConnectInterestSelector({ filterCard = false, onChange, selected
         onClose={closePicker}
         options={pickerOptions}
         search={search}
-        searchPlaceholder="Найти интерес"
-        subtitle={`Выбрано: ${selected.length} из ${connectInterestLimit}`}
-        title="Интересы"
+        searchPlaceholder="Найти интерес или жанр"
+        subtitle={summary}
+        title={isMusicCategory ? 'Музыка' : 'Интересы'}
       />
     </>
   );
@@ -4756,6 +4900,7 @@ export function MusicGenreSelector({
   editorCard = false,
   editorWhiteCard = false,
   filterCard = false,
+  filterButton = false,
   maxSelected = musicGenreLimit,
   onChange,
   selected,
@@ -4766,6 +4911,7 @@ export function MusicGenreSelector({
   editorCard?: boolean;
   editorWhiteCard?: boolean;
   filterCard?: boolean;
+  filterButton?: boolean;
   maxSelected?: number;
   onChange: (genres: string[]) => void;
   primarySelectionCount?: number;
@@ -4774,109 +4920,20 @@ export function MusicGenreSelector({
   title?: string;
 }) {
   const [isPickerOpen, setIsPickerOpen] = useState(false);
-  const [categoryIndex, setCategoryIndex] = useState<number | null>(null);
-  const [genreIndex, setGenreIndex] = useState<number | null>(null);
   const [genreSearch, setGenreSearch] = useState('');
-  const activeCategory = musicTaxonomy[categoryIndex ?? 0] ?? musicTaxonomy[0];
-  const activeGenre = activeCategory.genres[genreIndex ?? 0] ?? activeCategory.genres[0];
-  const normalizedGenreSearch = genreSearch.trim().toLocaleLowerCase('ru-RU').replace(/[\s\-_/]+/g, '');
-  const genreSearchResults = useMemo(() => {
-    if (!normalizedGenreSearch) return [];
-
-    return musicTaxonomy.flatMap((category) => category.genres.flatMap((genre) => {
-      const context = `${genre.name} · ${category.category}`;
-      const options: Array<{ context: string; title: string; value: string }> = genre.subgenres.map((subgenre) => ({
-        context,
-        title: musicSubgenreDisplayName(buildMusicGenreValue(category.category, genre.name, subgenre)),
-        value: buildMusicGenreValue(category.category, genre.name, subgenre),
-      }));
-
-      if (!subgenresOnly) {
-        options.unshift({
-          context: category.category,
-          title: genre.name,
-          value: buildMusicGenreValue(category.category, genre.name),
-        });
-      }
-
-      return options.filter((option) => `${musicGenreSearchText(option.value)} ${option.title} ${option.context}`
-        .toLocaleLowerCase('ru-RU')
-        .replace(/[\s\-_/]+/g, '')
-        .includes(normalizedGenreSearch));
-    }));
-  }, [normalizedGenreSearch, subgenresOnly]);
-
-  const toggleGenre = (value: string) => {
-    if (selected.includes(value)) {
-      onChange(selected.filter((genre) => genre !== value));
-      return;
-    }
-
-    if (selected.length >= maxSelected) {
-      Alert.alert(title, `Можно выбрать до ${maxSelected} жанров.`);
-      return;
-    }
-
-    onChange([...selected, value]);
-  };
-
-  const chooseCategory = (index: number) => {
-    setCategoryIndex(index);
-    setGenreIndex(null);
-  };
-  const closePicker = () => {
-    setIsPickerOpen(false);
-    setGenreSearch('');
-  };
+  const { pickerOptions, pickerBackLabel, onBack: pickerBack } = useMusicGenrePicker({ selected, onChange, genreSearch, maxSelected, subgenresOnly, title });
   const selectedGroups = useMemo(() => groupMusicGenreChips(selected), [selected]);
-  const pickerOptions: SelectionPickerOption[] = normalizedGenreSearch
-    ? genreSearchResults.map((option) => ({
-        key: option.value,
-        title: option.title,
-        meta: option.context,
-        selected: selected.includes(option.value),
-        onPress: () => toggleGenre(option.value),
-      }))
-    : categoryIndex === null
-      ? musicTaxonomy.map((item, index) => ({
-          key: item.category,
-          title: item.category,
-          meta: `${item.genres.length} жанров`,
-          navigates: true,
-          onPress: () => chooseCategory(index),
-        }))
-      : genreIndex === null
-        ? activeCategory.genres.map((genre, index) => ({
-            key: genre.name,
-            title: genre.name,
-            meta: `${genre.subgenres.length} поджанров`,
-            navigates: true,
-            onPress: () => setGenreIndex(index),
-          }))
-        : [
-            ...(!subgenresOnly ? [{
-              key: buildMusicGenreValue(activeCategory.category, activeGenre.name),
-              title: `Весь ${activeGenre.name}`,
-              selected: selected.includes(buildMusicGenreValue(activeCategory.category, activeGenre.name)),
-              onPress: () => toggleGenre(buildMusicGenreValue(activeCategory.category, activeGenre.name)),
-            }] : []),
-            ...activeGenre.subgenres.map((subgenre) => {
-              const value = buildMusicGenreValue(activeCategory.category, activeGenre.name, subgenre);
-              return {
-                key: value,
-                title: musicSubgenreDisplayName(value),
-                selected: selected.includes(value),
-                onPress: () => toggleGenre(value),
-              };
-            }),
-          ];
-  const pickerBackLabel = !normalizedGenreSearch && categoryIndex !== null
-    ? genreIndex !== null ? activeGenre.name : activeCategory.category
-    : undefined;
+  const closePicker = () => { setIsPickerOpen(false); setGenreSearch(''); };
 
   return (
     <>
-      <View
+      {filterButton ? <Pressable accessibilityRole="button" accessibilityLabel={selected.length ? `Жанры, выбрано: ${selected.length}` : 'Жанры'}
+        onPress={() => { setGenreSearch(''); setIsPickerOpen(true); }}
+        style={[styles.connectFilterButton, selected.length > 0 && styles.eventFilterButtonActive]}>
+        <Text style={styles.connectFilterButtonText}>{title}</Text>
+        {selected.length ? <View style={styles.eventFilterCountBadge}><Text style={styles.eventFilterCountBadgeText}>{selected.length}</Text></View> : null}
+        <ChevronDown color="#111" size={18} />
+      </Pressable> : <View
         style={[
           styles.connectInterestsBlock,
           editorCard && styles.communityAudioFieldCard,
@@ -4932,13 +4989,13 @@ export function MusicGenreSelector({
                 ))}
           </View>
         ) : null}
-      </View>
+      </View>}
 
       <SelectionPickerModal
         backLabel={pickerBackLabel}
         emptyText="Ничего не найдено"
         isVisible={isPickerOpen}
-        onBack={pickerBackLabel ? () => genreIndex !== null ? setGenreIndex(null) : setCategoryIndex(null) : undefined}
+        onBack={pickerBackLabel ? pickerBack : undefined}
         onChangeSearch={setGenreSearch}
         onClose={closePicker}
         options={pickerOptions}
@@ -4950,4 +5007,3 @@ export function MusicGenreSelector({
     </>
   );
 }
-

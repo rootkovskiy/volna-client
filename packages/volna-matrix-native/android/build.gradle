@@ -1,0 +1,51 @@
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'social.volna.matrix'
+version = '0.1.0'
+
+android {
+  namespace 'social.volna.matrix'
+  defaultConfig {
+    minSdkVersion 24
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+def recipientManifest = new groovy.json.JsonSlurper().parse(file('../sdk/manifest.json'))
+def recipientArtifact = file('../sdk/' + recipientManifest.android.artifact)
+if (recipientManifest.android.parts) {
+  recipientArtifact = file("${buildDir}/generated/recipient-sdk/${recipientManifest.android.artifact}")
+  def combined = new ByteArrayOutputStream()
+  recipientManifest.android.parts.each { part ->
+    if (!(part.file ==~ /matrix-sdk-android-26\.08\.13-volna\.1\.aar\.part[0-9]{2}/)) {
+      throw new GradleException('Unexpected Matrix artifact part path')
+    }
+    def bytes = file('../sdk/' + part.file).bytes
+    if (java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() != part.sha256) {
+      throw new GradleException('Matrix artifact part integrity mismatch')
+    }
+    combined.write(bytes)
+  }
+  def bytes = combined.toByteArray()
+  if (java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() != recipientManifest.android.sha256) {
+    throw new GradleException('Matrix combined artifact integrity mismatch')
+  }
+  recipientArtifact.parentFile.mkdirs()
+  if (!recipientArtifact.isFile() || !java.util.Arrays.equals(recipientArtifact.bytes, bytes)) recipientArtifact.bytes = bytes
+}
+if (!recipientArtifact.isFile() || java.security.MessageDigest.getInstance('SHA-256')
+  .digest(recipientArtifact.bytes).encodeHex().toString() != recipientManifest.android.sha256) {
+  throw new GradleException('Custom Matrix recipient SDK artifact is missing or has invalid integrity')
+}
+
+dependencies {
+  // Custom, pinned-source recipient-enforcing build. Never substitute upstream FFI.
+  implementation files(recipientArtifact)
+  implementation 'net.java.dev.jna:jna:5.18.1@aar'
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
+  implementation 'androidx.annotation:annotation:1.9.1'
+  testImplementation 'junit:junit:4.13.2'
+}

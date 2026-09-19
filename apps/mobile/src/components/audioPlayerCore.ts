@@ -1,5 +1,39 @@
 export type AudioProvider = 'apple' | 'yandex' | 'soundcloud' | 'bandcamp' | 'youtube' | 'volna';
 
+export function playbackStartPosition(changed: boolean, fromSeconds: number | undefined, restoredPosition: number | null, startSeconds = 0, live = false) {
+  const value = live ? null : fromSeconds ?? restoredPosition ?? (changed ? startSeconds : null);
+  return value !== null && Number.isFinite(value) ? Math.max(0, value) : null;
+}
+
+export function shouldReloadPlaybackSource(changed: boolean, restoring: boolean, currentSource: string, nextSource: string, hasError: boolean) {
+  return changed || restoring || !currentSource || currentSource !== nextSource || hasError;
+}
+
+export function unreviewedQueue<T extends { id: string; reviewed?: boolean }>(tracks: T[]): T[] {
+  return tracks.filter((track) => !track.reviewed);
+}
+
+/** Unlike catalog windows, listen-later is one complete pending playlist. */
+export function listenLaterPlaybackQueue<T extends { id: string; reviewed?: boolean }>(tracks: T[], target: T): T[] {
+  if (target.reviewed) return [target];
+  const pending = unreviewedQueue(tracks);
+  return pending.some((track) => track.id === target.id) ? pending : [target];
+}
+
+/** Presentation only: keep source snapshots, release identity and the active queue unchanged. */
+export function listenLaterDisplayGroups<T extends { id: string; tracks: readonly { reviewed?: boolean }[] }>(items: readonly T[]) {
+  type Group = { item: T; tracks: Array<T['tracks'][number]>; reviewed: boolean };
+  const fresh: Group[] = [];
+  const reviewed: Group[] = [];
+  for (const item of items) {
+    const freshTracks = item.tracks.filter((track) => !track.reviewed);
+    const reviewedTracks = item.tracks.filter((track) => track.reviewed);
+    if (freshTracks.length) fresh.push({ item, tracks: freshTracks, reviewed: false });
+    if (reviewedTracks.length) reviewed.push({ item, tracks: reviewedTracks, reviewed: true });
+  }
+  return [...fresh, ...reviewed];
+}
+
 export function uploadedTrackPlayerId(trackId: string) {
   return `uploaded:${trackId.trim()}`;
 }
@@ -116,7 +150,10 @@ export type ShuffleQueueState = {
   position: number;
   queueSignature: string;
   remaining: string[];
+  cyclePrepared?: boolean;
 };
+
+export const SHUFFLE_HISTORY_LIMIT = 101; // Current track plus 100 previous transitions.
 
 function uniqueQueueIds(ids: string[]) {
   return Array.from(new Set(ids.filter(Boolean)));
@@ -149,10 +186,53 @@ export function ensureShuffleQueueState(
 ) {
   const queueIds = uniqueQueueIds(ids);
   const queueSignature = queueIds.join('\n');
-  if (!state || state.queueSignature !== queueSignature || state.history[state.position] !== currentId) {
+  if (!state || !Array.isArray(state.history) || !Array.isArray(state.remaining)
+    || typeof state.queueSignature !== 'string' || state.history[state.position] !== currentId) {
     return createShuffleQueueState(queueIds, currentId, random);
   }
+  if (state.queueSignature !== queueSignature) {
+    const allowed = new Set(queueIds);
+    const previousIds = new Set(state.queueSignature.split('\n'));
+    const past = state.history.slice(0, state.position).filter((id) => allowed.has(id)).slice(-(SHUFFLE_HISTORY_LIMIT - 1));
+    const future = state.history.slice(state.position + 1).filter((id) => allowed.has(id));
+    return {
+      ...state,
+      history: [...past, currentId, ...future],
+      position: past.length,
+      queueSignature,
+      // Reordering/metadata repair must not reroll the next visible cover.
+      remaining: [...state.remaining.filter((id) => allowed.has(id) && id !== currentId),
+        ...shuffleQueueIds(queueIds.filter((id) => id !== currentId && !previousIds.has(id)), random)],
+    };
+  }
   return state;
+}
+
+/** Prepare the next cycle at activation/toggle time, never while painting a cover. */
+export function prepareShuffleQueueState(
+  state: ShuffleQueueState | null, ids: string[], currentId: string, repeat: boolean,
+  random: () => number = Math.random,
+) {
+  const ready = ensureShuffleQueueState(state, ids, currentId, random);
+  if (!repeat && ready.cyclePrepared) return { ...ready, remaining: [], cyclePrepared: false };
+  if (!repeat || ready.remaining.length || ready.position < ready.history.length - 1) return ready;
+  const remaining = shuffleQueueIds(uniqueQueueIds(ids).filter((id) => id !== currentId), random);
+  return remaining.length ? { ...ready, remaining, cyclePrepared: true } : ready;
+}
+
+export function shuffledQueueNeighbors(state: ShuffleQueueState | null) {
+  return {
+    previous: state && state.position > 0 ? state.history[state.position - 1] : null,
+    next: state ? state.history[state.position + 1] ?? state.remaining[0] ?? null : null,
+  };
+}
+
+/** A lazy provider playlist placeholder becomes its concrete selected child. */
+export function resolveShuffledQueueTrack(state: ShuffleQueueState, placeholderId: string, trackId: string) {
+  if (placeholderId === trackId) return state;
+  const resolve = (id: string) => id === placeholderId ? trackId : id;
+  return { ...state, history: state.history.map(resolve), remaining: state.remaining.map(resolve),
+    queueSignature: state.queueSignature.split('\n').map(resolve).join('\n') };
 }
 
 export function takeNextShuffledTrack(
@@ -162,19 +242,17 @@ export function takeNextShuffledTrack(
   repeat: boolean,
   random: () => number = Math.random,
 ) {
-  let nextState = ensureShuffleQueueState(state, ids, currentId, random);
+  let nextState = prepareShuffleQueueState(state, ids, currentId, repeat, random);
   if (nextState.position < nextState.history.length - 1) {
     nextState = { ...nextState, position: nextState.position + 1 };
-    return { id: nextState.history[nextState.position], state: nextState };
-  }
-  if (!nextState.remaining.length && repeat) {
-    nextState = createShuffleQueueState(ids, currentId, random);
+    const id = nextState.history[nextState.position];
+    return { id, state: prepareShuffleQueueState(nextState, ids, id, repeat, random) };
   }
   const [id, ...remaining] = nextState.remaining;
   if (!id) return { id: null, state: nextState };
-  const history = nextState.history.slice(0, nextState.position + 1).concat(id);
-  nextState = { ...nextState, history, position: history.length - 1, remaining };
-  return { id, state: nextState };
+  const history = nextState.history.slice(0, nextState.position + 1).concat(id).slice(-SHUFFLE_HISTORY_LIMIT);
+  nextState = { ...nextState, history, position: history.length - 1, remaining, cyclePrepared: false };
+  return { id, state: prepareShuffleQueueState(nextState, ids, id, repeat, random) };
 }
 
 export function takePreviousShuffledTrack(state: ShuffleQueueState, ids: string[], currentId: string) {

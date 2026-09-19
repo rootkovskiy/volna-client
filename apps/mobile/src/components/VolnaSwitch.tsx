@@ -62,7 +62,7 @@ export function VolnaSwitch({
           { opacity: progress },
         ]}
       />
-      <Pressable accessibilityLabel={accessibilityLabel} accessibilityRole="switch" accessibilityState={{ checked: value, disabled }} disabled={disabled} hitSlop={8} onPress={() => onValueChange(!value)} style={styles.pressable}>
+      <Pressable accessibilityLabel={accessibilityLabel} accessibilityRole="switch" accessibilityState={{ checked: value, disabled }} aria-checked={value} disabled={disabled} hitSlop={8} onPress={() => onValueChange(!value)} style={styles.pressable}>
         <Animated.View style={[styles.thumb, { transform: [{ translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [0, 16] }) }] }]} />
       </Pressable>
     </View>

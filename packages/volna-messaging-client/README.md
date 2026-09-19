@@ -11,7 +11,11 @@ composer/renderer/dialog-list/direct-share surface, an RFC 9420 MLS client runti
 based on pinned `ts-mls` `1.6.2`, account-master-authorized devices, one-time key
 packages, local encrypted state, an Expo storage adapter and client manager, an
 opaque transport, endpoint message projection, a React Native/Web device-security
-screen, a fail-closed legacy/MLS controller, and adversarial tests. A separate
+screen, a fail-closed legacy/MLS/Matrix controller, a strict Matrix event codec,
+the lazy Web/PWA `matrix-js-sdk` 42.1.0 Rust/WASM engine, Matrix cross-signing,
+signed-device isolation, identity-change warnings, SAS/QR verification, secret
+storage/recovery, encrypted message and content-free notification outboxes,
+bounded refreshable Matrix sessions, and adversarial tests. A separate
 pinned OpenMLS `0.8.1` crate is retained
 for native/cross-implementation evaluation. Verified device-directory chains are
 pinned in encrypted endpoint state, so a rollback or changed chain prefix already
@@ -54,6 +58,10 @@ and the product must not advertise these chats as end-to-end encrypted.
 - composer-to-ciphertext and ciphertext-to-render message code;
 - the versioned plaintext event codec and opaque delivery contract;
 - MLS runtime adapters and pinned dependency/build metadata;
+- Matrix Web/PWA runtime, strict encrypted-event codec, cross-signing/SAS/QR/
+  recovery surface and fail-closed native boundary; the separate native contour
+  pins official Rust Kotlin/Swift FFI distributions but does not yet implement
+  the complete manager contract;
 - local encrypted-state and platform key-storage adapters;
 - a journaled encrypted message-projection store and endpoint-only local search;
 - a signature-verifying checkpoint-gossip monitor with durable evidence records;
@@ -63,7 +71,7 @@ and the product must not advertise these chats as end-to-end encrypted.
 - the shipped device-security/transfer UI and Expo client manager;
 - the shipped dialog list, composer, renderer, local previews/playback, reactions,
   edits, attachment search, and direct-share recipient UI;
-- a fail-closed surface controller that owns legacy adaptation, MLS encryption,
+- a fail-closed surface controller that owns legacy adaptation, MLS/Matrix encryption,
   local projection, downgrade detection, and content-aware realtime handling;
 - an automatic-media policy that permits background message media fetches only
   from the public VOLNA CDN and requires explicit user action for external audio;

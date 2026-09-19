@@ -244,7 +244,7 @@ export declare class VolnaMlsRuntime {
     event?: unknown;
     sender?: { accountId: string; deviceId: string };
     rejected?: boolean;
-    rejectionReason?: 'invalid_content';
+    rejectionReason?: 'invalid_content' | 'invalid_ciphertext';
     stateChanged: boolean;
     transition?: { operationId: string; rosterHash: string; epoch: string };
   }>;

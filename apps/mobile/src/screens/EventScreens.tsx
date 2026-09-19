@@ -1,9 +1,13 @@
+import { CatalogTabs } from '../components/CatalogTabs';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { MotionSurface } from '@volna/messaging-client/ui-motion';
+import { useScreenChoice, useScreenScroll } from '../components/ScreenContinuity';
 import { Bell, BellOff, CalendarClock, CalendarDays, CalendarPlus, Check, ChevronRight, Clock3, EllipsisVertical, Flag, Handshake, List, MapPin, PanelsTopLeft, Pencil, Plus, Search, Share2, SlidersHorizontal, X } from 'lucide-react-native';
 import * as Calendar from 'expo-calendar';
 import * as Location from 'expo-location';
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { UIEvent as ReactUIEvent } from 'react';
-import { ActivityIndicator, Modal, Platform, Pressable, SafeAreaView, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { Animated, Modal, PanResponder, Platform, Pressable, SafeAreaView, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { AppImage as Image } from '../components/AppImage';
 import { FlashList } from '@shopify/flash-list';
@@ -20,9 +24,11 @@ import { useAccountSearchSuggestions } from '../hooks/useAccountSearchSuggestion
 import { styles } from '../styles';
 import type { CreateEventInput, CursorPage, EventParticipationStatus, EventSummary, EventTypeOption, ProfileEvent, PublicPage, PublicPageDetail, ToastMessage } from '../types';
 import { AvatarCropModal } from './ProfileScreens';
-import { CalendarPickerModal, CreateEventScreen, TimePickerModal } from './CreateEventScreen';
+import { CreateEventScreen, TimePickerModal } from './CreateEventScreen';
+import { CalendarPickerModal } from '../components/CalendarPickerModal';
 import { CatalogCategoryTile, eventCategoryOptions, useCategoryCovers } from '../components/CatalogCategoryTile';
 import { CatalogInnerHeader } from '../components/CatalogInnerHeader';
+import { CatalogBackArea } from '../components/CatalogBackArea';
 import { resolveForegroundLocation } from '../location/foregroundLocation';
 import { normalizeExternalHttpsUrl } from '../security/externalUrls.mjs';
 import { openExternalHttpsUrl } from '../security/openExternalUrl';
@@ -35,7 +41,7 @@ type EventFilters = {
   dateFrom: string;
   dateTo: string;
   types: string[];
-  venue: PublicPage | null;
+  venue: Pick<PublicPage, 'id' | 'name' | 'cityId'> | null;
 };
 
 type EventListTab = 'all' | 'planned';
@@ -113,21 +119,29 @@ export function EventsScreen({
   const [showPastEvents, setShowPastEvents] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [pastNextCursor, setPastNextCursor] = useState<string | null>(null);
-  const [filters, setFilters] = useState<EventFilters>(() => ({
+  const [filters, setFilters] = useScreenChoice<EventFilters>('events:filters', () => ({
     ...emptyEventFilters,
     cityId: defaultLocation.cityId ?? '',
     cityName: defaultLocation.cityName,
     countryCode: defaultLocation.countryCode ?? '',
     countryName: defaultLocation.countryName,
   }));
-  const [activeListTab, setActiveListTab] = useState<EventListTab>('all');
-  const [selectedCategory, setSelectedCategory] = useState<EventCategory | null>(null);
+  const [activeListTab, setActiveListTab] = useScreenChoice<EventListTab>('events:tab', 'all');
+  const [selectedCategory, setSelectedCategory] = useScreenChoice<EventCategory | null>('events:category', null);
   const [categoryCounts, setCategoryCounts] = useState<Record<EventCategory, number> | null>(null);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [isCatalogLocationPickerOpen, setIsCatalogLocationPickerOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
   const locationWasManuallyChangedRef = useRef(false);
+  const catalogScroll = useScreenScroll(`events:scroll:${activeListTab}:${selectedCategory}:${JSON.stringify(filters)}`, { loading: isInitialLoading || isLoadingMore, canLoadMore: Boolean(nextCursor), loadMore: () => void loadEvents(false) });
   const pastLoadInFlightRef = useRef(false);
+  const eventRequest = useRef(0);
+  const eventBusy = useRef(false);
+  const pastRequest = useRef(0);
+  const currentQuery = useRef("");
+  const queryIdentity = JSON.stringify([activeListTab, filters, selectedCategory, authToken]);
+  currentQuery.current = queryIdentity;
+  useEffect(() => () => { eventRequest.current++; pastRequest.current++; }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -165,6 +179,9 @@ export function EventsScreen({
   }, []);
 
   const loadEvents = useCallback(async (reset = true, source: 'initial' | 'refresh' = 'initial') => {
+    if (!reset && (!nextCursor || eventBusy.current)) return;
+    const request = ++eventRequest.current;
+    const isCurrent = () => request === eventRequest.current && queryIdentity === currentQuery.current;
     if (activeListTab === 'all' && !selectedCategory) {
       setEvents([]);
       setNextCursor(null);
@@ -173,7 +190,7 @@ export function EventsScreen({
       setIsLoadingMore(false);
       return;
     }
-    if (!reset && !nextCursor) return;
+    eventBusy.current = true;
     if (reset) source === 'refresh' ? setIsRefreshing(true) : setIsInitialLoading(true);
     else setIsLoadingMore(true);
 
@@ -192,11 +209,15 @@ export function EventsScreen({
       }
 
       const page = await response.json() as CursorPage<EventSummary>;
+      if (!isCurrent()) return;
       setEvents((current) => reset ? page.items : [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]);
       setNextCursor(page.nextCursor);
     } catch (error) {
+      if (!isCurrent()) return;
       onNotify(error instanceof Error ? error.message : 'Не удалось загрузить события', 'error');
     } finally {
+      if (!isCurrent()) return;
+      eventBusy.current = false;
       setIsInitialLoading(false);
       setIsRefreshing(false);
       setIsLoadingMore(false);
@@ -207,6 +228,8 @@ export function EventsScreen({
     if (activeListTab !== 'all' || !selectedCategory || pastLoadInFlightRef.current) return;
     if (!reset && !pastNextCursor) return;
     pastLoadInFlightRef.current = true;
+    const request = ++pastRequest.current;
+    const isCurrent = () => request === pastRequest.current && queryIdentity === currentQuery.current;
     if (reset && source === 'initial') setIsPastInitialLoading(true);
     if (!reset) setIsPastLoadingMore(true);
 
@@ -220,12 +243,15 @@ export function EventsScreen({
       if (!response.ok) throw new Error(await readApiError(response, 'Не удалось загрузить прошедшие события'));
 
       const page = await response.json() as CursorPage<EventSummary>;
+      if (!isCurrent()) return;
       setPastEvents((current) => reset ? page.items : [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]);
       setPastNextCursor(page.nextCursor);
       setHasLoadedPastEvents(true);
     } catch (error) {
+      if (!isCurrent()) return;
       onNotify(error instanceof Error ? error.message : 'Не удалось загрузить прошедшие события', 'error');
     } finally {
+      if (!isCurrent()) return;
       pastLoadInFlightRef.current = false;
       setIsPastInitialLoading(false);
       setIsPastLoadingMore(false);
@@ -247,6 +273,10 @@ export function EventsScreen({
   useEffect(() => {
     setEvents([]);
     setNextCursor(null);
+    pastRequest.current++;
+    pastLoadInFlightRef.current = false;
+    setIsPastInitialLoading(false);
+    setIsPastLoadingMore(false);
     setPastEvents([]);
     setPastNextCursor(null);
     setHasLoadedPastEvents(false);
@@ -314,13 +344,26 @@ export function EventsScreen({
     }
     if (Platform.OS === 'web') window.history.replaceState({ tab: 'events' }, '', '/events');
   };
+  const backToEventCategories = () => {
+    setFilters((current) => ({ ...current, types: [] }));
+    setSelectedCategory(null);
+  };
 
-  if (selectedEvent) return <EventDetailScreen adminMode={adminMode} authToken={authToken} event={selectedEvent} isGlobalAdmin={accountRole === 'ADMIN'} onBack={closeSelectedEvent} onDeleted={(eventId) => { setEvents((current) => current.filter((item) => item.id !== eventId)); setPastEvents((current) => current.filter((item) => item.id !== eventId)); closeSelectedEvent(); }} onNotify={onNotify} onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onUpdate={(updatedEvent) => { setSelectedEvent(updatedEvent); setEvents((current) => current.map((item) => item.id === updatedEvent.id ? updatedEvent : item)); setPastEvents((current) => current.map((item) => item.id === updatedEvent.id ? updatedEvent : item)); }} onToggleParticipation={onToggleEventParticipation} ownAccountId={ownAccountId} />;
+
 
   return (
-    <>
+    <View style={{ flex: 1 }}>
+      {selectedEvent ? <EventDetailScreen adminMode={adminMode} authToken={authToken} event={selectedEvent} isGlobalAdmin={accountRole === 'ADMIN'} onBack={closeSelectedEvent} onDeleted={(eventId) => { setEvents((current) => current.filter((item) => item.id !== eventId)); setPastEvents((current) => current.filter((item) => item.id !== eventId)); closeSelectedEvent(); }} onNotify={onNotify} onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onUpdate={(updatedEvent) => { setSelectedEvent(updatedEvent); setEvents((current) => current.map((item) => item.id === updatedEvent.id ? updatedEvent : item)); setPastEvents((current) => current.map((item) => item.id === updatedEvent.id ? updatedEvent : item)); }} onToggleParticipation={onToggleEventParticipation} ownAccountId={ownAccountId} /> : null}
+      <View style={{ flex: 1, display: selectedEvent ? "none" : "flex" }}>
       <ScreenTopBar onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} title="События" />
+      <CatalogBackArea routeKey={activeListTab === 'all' ? selectedCategory : null} enabled={!selectedEvent && !isFiltersOpen && !isCatalogLocationPickerOpen} onBack={backToEventCategories}>
+      <MotionSurface identity={`${isInitialLoading}:${events.length ? "results" : "empty"}`} style={{ flex: 1 }}>
       <FlashList
+        ref={catalogScroll.ref}
+        onLayout={catalogScroll.onLayout}
+        onScroll={catalogScroll.onScroll}
+        onScrollBeginDrag={catalogScroll.onScrollBeginDrag}
+        onContentSizeChange={catalogScroll.onContentSizeChange}
         alwaysBounceVertical
         data={eventListItems}
         keyExtractor={(item) => item.kind === 'event' ? `${item.period}:${item.event.id}` : item.kind}
@@ -338,16 +381,11 @@ export function EventsScreen({
         }}
         onEndReachedThreshold={0.4}
         ListHeaderComponent={<>
-          {activeListTab === 'all' && selectedCategory ? null : <View accessibilityRole="tablist" style={styles.eventCatalogTabs}>
-            {([{ value: 'all', label: 'Категории' }, { value: 'planned', label: 'Планирую посетить' }] as const).map((tab) => {
-              const isActive = activeListTab === tab.value;
-              return <Pressable accessibilityRole="tab" accessibilityState={{ selected: isActive }} key={tab.value} onPress={() => setActiveListTab(tab.value)} style={styles.eventCatalogTab}><Text style={[styles.eventCatalogTabText, isActive && styles.eventCatalogTabTextActive]}>{tab.label}</Text>{isActive ? <View pointerEvents="none" style={styles.activeTabIndicator} /> : null}</Pressable>;
-            })}
-          </View>}
+          {activeListTab === 'all' && selectedCategory ? null : <CatalogTabs tabs={[{ value: 'all', label: 'Категории' }, { value: 'planned', label: 'Планирую посетить' }]} value={activeListTab} onChange={setActiveListTab} />}
           {activeListTab === 'all' ? <>
             {selectedCategory ? <CatalogInnerHeader
               backLabel="Назад к категориям событий"
-              onBack={() => { setFilters((current) => ({ ...current, types: [] })); setSelectedCategory(null); }}
+              onBack={backToEventCategories}
               title={eventCategoryOptions.find((category) => category.value === selectedCategory)?.label ?? ''}
             /> : null}
             {selectedCategory ? <View style={styles.eventFilterHeader}><View style={styles.eventCatalogControls}>
@@ -375,7 +413,7 @@ export function EventsScreen({
           if (item.kind === 'archive-control') {
             return <View style={styles.profileEventsArchiveAction}>
               <Pressable accessibilityRole="link" accessibilityState={{ disabled: isPastInitialLoading }} disabled={isPastInitialLoading} onPress={togglePastEvents} style={styles.profileEventsArchiveLink}>
-                {isPastInitialLoading ? <ActivityIndicator color="#111" size="small" /> : null}
+                {isPastInitialLoading ? <LoadingIndicator size="small" /> : null}
                 <Text style={styles.profileEventsArchiveLinkText}>{showPastEvents ? 'Скрыть прошедшие события' : 'Показать прошедшие события'}</Text>
               </Pressable>
             </View>;
@@ -404,15 +442,17 @@ export function EventsScreen({
             }}
           />;
         }}
-        ListEmptyComponent={activeListTab === 'all' && !selectedCategory ? null : isInitialLoading ? <View style={styles.loadingRow}><ActivityIndicator color="#111" /></View> : (
+        ListEmptyComponent={activeListTab === 'all' && !selectedCategory ? null : isInitialLoading ? <View style={styles.loadingRow}><LoadingIndicator /></View> : (
           <View style={styles.emptyProfileTab}>
             <CalendarDays color="#111" size={28} strokeWidth={1.8} />
             <Text style={styles.emptyProfileTabTitle}>{activeListTab === 'planned' ? 'Нет запланированных событий' : activeEventFilterCount(filters) || selectedCategory ? 'События не найдены' : 'События появятся здесь'}</Text>
             <Text style={styles.emptyProfileTabText}>{activeListTab === 'planned' ? 'Отметьте «Иду» или включите отслеживание внутри события.' : activeEventFilterCount(filters) || selectedCategory ? 'Попробуйте изменить категорию или параметры фильтра.' : 'Когда сообщества создадут события, они будут отображаться в этой вкладке.'}</Text>
           </View>
         )}
-        ListFooterComponent={isLoadingMore || isPastLoadingMore ? <ActivityIndicator color="#111" style={{ marginVertical: 16 }} /> : null}
+        ListFooterComponent={isLoadingMore || isPastLoadingMore ? <LoadingIndicator style={{ marginVertical: 16 }} /> : null}
       />
+      </MotionSurface>
+      </CatalogBackArea>
       {selectedCategory ? <EventFiltersModal authToken={authToken} category={selectedCategory} initialValue={filters} isVisible={isFiltersOpen} onApply={(value) => { if (value.cityId !== filters.cityId || value.countryCode !== filters.countryCode) locationWasManuallyChangedRef.current = true; setFilters(value); setIsFiltersOpen(false); }} onClose={() => setIsFiltersOpen(false)} onNotify={onNotify} /> : null}
       {activeListTab === 'all' ? <LocationPickerModal
         initialCountryName={filters.countryName || undefined}
@@ -430,7 +470,8 @@ export function EventsScreen({
           }));
         }}
       /> : null}
-    </>
+      </View>
+    </View>
   );
 }
 
@@ -439,16 +480,17 @@ function buildEventFilterQuery(filters: EventFilters) {
   if (filters.cityId) query.set('cityId', filters.cityId);
   else if (filters.countryCode) query.set('countryCode', filters.countryCode);
   if (filters.dateFrom) query.set('dateFrom', filterDateToIso(filters.dateFrom));
-  if (filters.dateTo) query.set('dateTo', filterDateToIso(filters.dateTo));
+  if (filters.dateTo) query.set('dateTo', filterDateToIso(filters.dateTo, true));
   if (filters.types.length) query.set('types', filters.types.join(','));
   if (filters.venue?.id) query.set('venuePageId', filters.venue.id);
   const value = query.toString();
   return value ? `&${value}` : '';
 }
 
-function filterDateToIso(value: string) {
-  const [day, month, year] = value.split('.');
-  return `${year}-${month}-${day}`;
+function filterDateToIso(value: string, endOfDay = false) {
+  const [day, month, year] = value.split('.').map(Number);
+  // Match the local dates displayed throughout the client, including DST days.
+  return new Date(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0).toISOString();
 }
 
 function filterDateValue(value: string) {
@@ -544,8 +586,8 @@ function EventFiltersModal({ authToken, category, initialValue, isVisible, onApp
 
             <Text style={styles.connectFilterTitle}>Локация</Text>
             <View style={styles.eventFilterVenueInput}><Search color="#6f7b86" size={19} /><TextInput autoCorrect={false} onChangeText={(value) => { setVenueQuery(value); setDraft((current) => ({ ...current, venue: null })); }} onFocus={() => setIsVenueFocused(true)} placeholder={draft.cityName ? `Найти локацию в городе ${draft.cityName}` : 'Найти локацию'} placeholderTextColor="#8e99a4" style={styles.eventFilterVenueText} value={venueQuery} />{venueQuery ? <Pressable accessibilityLabel="Очистить локацию" hitSlop={8} onPress={() => { setVenueQuery(''); setDraft((current) => ({ ...current, venue: null })); }}><X color="#6f7b86" size={20} /></Pressable> : null}</View>
-            {isVenueLoading ? <ActivityIndicator color="#111" style={{ marginVertical: 12 }} /> : null}
-            {isVenueFocused && venueQuery.trim().length >= 3 && !draft.venue && venueOptions.length ? <View style={styles.eventFilterVenueOptions}>{venueOptions.map((venue) => <Pressable key={venue.id} onPress={() => { setDraft((current) => ({ ...current, venue, cityId: venue.cityId ?? '', cityName: venue.cityName, countryName: venue.countryName })); setVenueQuery(venue.name); setIsVenueFocused(false); }} style={styles.eventFilterVenueOption}><Text style={styles.eventFilterVenueName}>{venue.name}</Text><Text style={styles.eventFilterVenueMeta}>{[venue.cityName, venue.address].filter(Boolean).join(' · ')}</Text></Pressable>)}</View> : null}
+            {isVenueLoading ? <LoadingIndicator style={{ marginVertical: 12 }} /> : null}
+            {isVenueFocused && venueQuery.trim().length >= 3 && !draft.venue && venueOptions.length ? <View style={styles.eventFilterVenueOptions}>{venueOptions.map((venue) => <Pressable key={venue.id} onPress={() => { setDraft((current) => ({ ...current, venue: { id: venue.id, name: venue.name, cityId: venue.cityId }, cityId: venue.cityId ?? '', cityName: venue.cityName, countryName: venue.countryName })); setVenueQuery(venue.name); setIsVenueFocused(false); }} style={styles.eventFilterVenueOption}><Text style={styles.eventFilterVenueName}>{venue.name}</Text><Text style={styles.eventFilterVenueMeta}>{[venue.cityName, venue.address].filter(Boolean).join(' · ')}</Text></Pressable>)}</View> : null}
     </AppSheetModal>
     <CalendarPickerModal isVisible={dateTarget !== null} minDate={dateTarget === 'to' && selectedFrom ? selectedFrom : new Date(1970, 0, 1)} onClose={() => setDateTarget(null)} onSelect={(value) => { setDraft((current) => ({ ...current, [dateTarget === 'to' ? 'dateTo' : 'dateFrom']: value })); setDateTarget(null); }} selectedValue={dateTarget === 'to' ? draft.dateTo : draft.dateFrom} title={dateTarget === 'to' ? 'Дата до' : 'Дата от'} />
   </>;
@@ -670,10 +712,10 @@ export function EventDetailScreen({ adminMode = false, authToken, canManageOverr
   const usesHorizontalTimeAxis = scheduleTimeline.stages.length > 2;
   const scheduleVerticalHeaderHeight = scheduleTimeline.hasTimes || scheduleTimeline.hasStageLabels ? scheduleHeaderHeight : 0;
   const tabs = useMemo<Array<{ value: EventContentTab; label: string; Icon: typeof List }>>(() => [
-    ...(canManage || event.postsCount > 0 ? [{ value: 'feed' as const, label: 'Публикации', Icon: List }] : []),
+    ...(event.organizerPage && (canManage || event.postsCount > 0) ? [{ value: 'feed' as const, label: 'Публикации', Icon: List }] : []),
     ...(canManage || event.lineup.length > 0 ? [{ value: 'schedule' as const, label: 'Таймтейбл', Icon: CalendarClock }] : []),
     ...(canManage || event.partners.length > 0 ? [{ value: 'partners' as const, label: 'Партнёры', Icon: Handshake }] : []),
-  ], [canManage, event.lineup.length, event.partners.length, event.postsCount]);
+  ], [canManage, event.lineup.length, event.organizerPage, event.partners.length, event.postsCount]);
   const visibleActiveTab = tabs.some((tab) => tab.value === activeTab)
     ? activeTab
     : tabs[0]?.value ?? null;
@@ -773,6 +815,10 @@ export function EventDetailScreen({ adminMode = false, authToken, canManageOverr
       setCanManage(canManageOverride);
       return;
     }
+    if (!event.organizerPage) {
+      setCanManage(isGlobalAdmin && adminMode);
+      return;
+    }
     void fetch(`${apiUrl}/public-pages/${event.organizerPage.username}`, { headers: { Authorization: `Bearer ${authToken}` } })
       .then(async (response) => response.ok ? response.json() as Promise<PublicPageDetail> : null)
       .then((page) => setCanManage(Boolean(page && (
@@ -781,7 +827,7 @@ export function EventDetailScreen({ adminMode = false, authToken, canManageOverr
         || (isGlobalAdmin && adminMode)
       ))))
       .catch(() => setCanManage(false));
-  }, [adminMode, authToken, canManageOverride, event.organizerPage.username, isGlobalAdmin, ownAccountId]);
+  }, [adminMode, authToken, canManageOverride, event.organizerPage, isGlobalAdmin, ownAccountId]);
 
   const setParticipation = async (status: EventParticipationStatus) => {
     const updated = await onToggleParticipation(event.id, event.myParticipationStatus === status ? null : status);
@@ -860,7 +906,7 @@ export function EventDetailScreen({ adminMode = false, authToken, canManageOverr
           <View style={styles.eventDetailHeroCopy}>
             <Text style={styles.eventDate}>{formatEventDateRangeLabel(event.startsAt, event.endsAt)}</Text>
             <Text style={styles.eventDetailTitle}>{event.title}</Text>
-            <Pressable onPress={() => void onOpenPublicPage(event.organizerPage.username)}><Text style={styles.eventDetailOrganizer}>{event.organizerPage.name} · @{event.organizerPage.username}</Text></Pressable>
+            {event.organizerPage ? <Pressable onPress={() => void onOpenPublicPage(event.organizerPage!.username)}><Text style={styles.eventDetailOrganizer}>{event.organizerPage.name} · @{event.organizerPage.username}</Text></Pressable> : null}
             <Text style={styles.eventDetailType}>{event.typeLabel}</Text>
             <View style={styles.eventDetailLocationRow}>
               <Text ellipsizeMode="clip" numberOfLines={1} style={styles.eventDetailLocationText}>{[event.countryName, event.cityName].filter(Boolean).join(', ')}</Text>
@@ -902,7 +948,7 @@ export function EventDetailScreen({ adminMode = false, authToken, canManageOverr
         {canManage ? <Pressable accessibilityRole="button" onPress={() => setIsEditing(true)} style={styles.eventEditButton}><Pencil color="#111" size={19} strokeWidth={1.8} /><Text style={styles.eventEditButtonText}>Редактировать</Text></Pressable> : null}
         {tabs.length ? <View style={styles.eventTabs}>{tabs.map(({ value, label, Icon }) => <Pressable key={value} accessibilityLabel={label} accessibilityRole="tab" accessibilityState={{ selected: visibleActiveTab === value }} onPress={() => setActiveTab(value)} style={[styles.eventTab, visibleActiveTab === value && styles.eventTabActive]}><Icon color={visibleActiveTab === value ? '#111' : '#7d8894'} size={23} strokeWidth={1.8} /></Pressable>)}</View> : null}
       </View>
-      {visibleActiveTab === 'feed' ? <PostFeed authToken={authToken} authorType="community" canCreate={canManage} composerAuthor={{ avatarUrl: event.posterUrl, name: event.organizerPage.name, username: event.organizerPage.username }} CropModal={AvatarCropModal} eventId={event.id} onNotify={onNotify} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} username={event.organizerPage.username} /> : null}
+      {visibleActiveTab === 'feed' && event.organizerPage ? <PostFeed authToken={authToken} authorType="community" canCreate={canManage} composerAuthor={{ avatarUrl: event.posterUrl, name: event.organizerPage.name, username: event.organizerPage.username }} CropModal={AvatarCropModal} eventId={event.id} onNotify={onNotify} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} username={event.organizerPage.username} /> : null}
       {visibleActiveTab === 'schedule' ? <View style={styles.eventScheduleHeadingSection}>
         <View style={styles.eventTabHeadingRow}><Text style={[styles.eventTabHeading, styles.eventTabHeadingInRow]}>Таймтейбл</Text>{canManage ? <Pressable onPress={() => setIsScheduleEditorOpen(true)}><Text style={styles.eventManageLink}>Редактировать</Text></Pressable> : null}</View>
       </View> : null}
@@ -946,7 +992,7 @@ export function EventDetailScreen({ adminMode = false, authToken, canManageOverr
       </View> : null}
       {visibleActiveTab === 'partners' ? <View style={styles.eventTabContent}><Text style={styles.eventTabHeading}>Партнёры</Text>{canManage ? <View style={styles.eventPartnerEditor}><TextInput autoCapitalize="words" autoCorrect={false} maxLength={80} onChangeText={setPartnerValue} placeholder="@username или название партнёра" placeholderTextColor="#8e99a4" style={styles.eventPartnerInput} value={partnerValue} /><Pressable accessibilityLabel="Добавить партнёра" onPress={() => void addPartner().catch((error) => onNotify(error.message, 'error'))} style={styles.eventPartnerAdd}><Plus color="#fff" size={20} /></Pressable></View> : null}{event.partners.map((partner) => <View key={partner.id} style={styles.eventPartnerRow}><Pressable disabled={!partner.username} onPress={() => partner.username ? void onOpenPublicPage(partner.username) : undefined} style={styles.eventPartnerMain}>{partner.avatarUrl ? <Image source={{ uri: partner.avatarUrl }} style={styles.eventPartnerAvatar} /> : <View style={styles.eventPartnerAvatar}><Text>{partner.name.slice(0, 1)}</Text></View>}<View><Text style={styles.eventScheduleName}>{partner.name}</Text>{partner.username ? <Text style={styles.eventScheduleUsername}>@{partner.username}</Text> : null}{partner.typeLabel || partner.cityName ? <Text style={styles.eventScheduleInfo}>{[partner.typeLabel, partner.cityName].filter(Boolean).join(' · ')}</Text> : null}</View></Pressable>{canManage ? <Pressable accessibilityLabel="Убрать партнёра" onPress={() => void removePartner(partner.id).catch((error) => onNotify(error.message, 'error'))} style={styles.eventPartnerRemove}><X color="#6f7b86" size={20} /></Pressable> : null}</View>)}{!event.partners.length ? <Text style={styles.eventEmptyText}>Партнёры пока не добавлены</Text> : null}</View> : null}
     </ScrollView>
-    <EntityShareModal authToken={authToken} chatEventId={event.id} chatSnapshot={{ organizerName: event.organizerPage.name, posterUrl: event.posterUrl, startsAt: event.startsAt, title: event.title }} isVisible={isShareOpen} onClose={() => setIsShareOpen(false)} onNotify={onNotify} repost={{ previewTitle: event.title, previewMeta: `${event.typeLabel} · ${[event.cityName, event.venueName].filter(Boolean).join(', ')}` }} shareText={`${event.title} — ${event.typeLabel}. ${[event.cityName, event.venueName].filter(Boolean).join(', ')}\n${formatEventPublicUrl(event.id)}`} shareTitle={event.title} shareUrl={formatEventPublicUrl(event.id)} subjectLabel="Событие" />
+    <EntityShareModal authToken={authToken} chatEventId={event.id} chatSnapshot={{ organizerName: event.organizerPage?.name ?? 'VOLNA', posterUrl: event.posterUrl, startsAt: event.startsAt, title: event.title }} isVisible={isShareOpen} onClose={() => setIsShareOpen(false)} onNotify={onNotify} repost={{ previewTitle: event.title, previewMeta: `${event.typeLabel} · ${[event.cityName, event.venueName].filter(Boolean).join(', ')}` }} shareText={`${event.title} — ${event.typeLabel}. ${[event.cityName, event.venueName].filter(Boolean).join(', ')}\n${formatEventPublicUrl(event.id)}`} shareTitle={event.title} shareUrl={formatEventPublicUrl(event.id)} subjectLabel="Событие" />
     <EventMoreModal authToken={authToken} event={event} isVisible={isMoreOpen} onClose={() => setIsMoreOpen(false)} onNotify={onNotify} />
     <EventScheduleEditor adminMode={isGlobalAdmin && adminMode} authToken={authToken} event={event} isVisible={isScheduleEditorOpen} onClose={() => setIsScheduleEditorOpen(false)} onNotify={onNotify} onSaved={refresh} />
     <EventImagePreviewModal imageUrl={previewImageUrl} onClose={() => setPreviewImageUrl(null)} />
@@ -972,7 +1018,7 @@ const scheduleHorizontalDaySelectionClearance = scheduleHorizontalDayScrollClear
 const scheduleProgrammaticNavigationLockMs = 1_200;
 const scheduleScrollEndTolerance = 2;
 
-function EventScheduleTable({ horizontalScrollRequest, onHorizontalInteractionStart, onHorizontalOffsetChange, onOpenProfile, timeline }: {
+export function EventScheduleTable({ horizontalScrollRequest, onHorizontalInteractionStart, onHorizontalOffsetChange, onOpenProfile, timeline }: {
   horizontalScrollRequest: { key: string; x: number } | null;
   onHorizontalInteractionStart: () => void;
   onHorizontalOffsetChange: (position: { maxOffsetX: number; offsetX: number }) => void;
@@ -1290,7 +1336,7 @@ const webScheduleStyles = {
   horizontalArtistUsername: { display: 'block', marginTop: 1, color: '#7d8894', fontSize: 11, lineHeight: '14px', fontWeight: 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
 } as const;
 
-function buildScheduleTimeline(items: EventSummary['lineup'], stageOrder: string[]) {
+export function buildScheduleTimeline(items: EventSummary['lineup'], stageOrder: string[]) {
   const normalizedStageOrder = stageOrder.map((stage) => stage.trim()).filter(Boolean);
   const hasStageLabels = normalizedStageOrder.length > 0 || items.some((item) => Boolean(item.stageName?.trim()));
   const stagesInDay = new Set(items.map((item) => item.stageName?.trim() || 'Без сцены'));
@@ -1473,17 +1519,43 @@ function formatScheduleArtistAccessibilityLabel(item: EventSummary['lineup'][num
 }
 
 function EventImagePreviewModal({ imageUrl, onClose }: { imageUrl: string | null; onClose: () => void }) {
-  return <Modal animationType="fade" onRequestClose={onClose} transparent visible={Boolean(imageUrl)}>
+  const translateY = useRef(new Animated.Value(0)).current;
+  const restorePosition = useCallback(() => {
+    Animated.spring(translateY, { damping: 24, mass: 0.75, stiffness: 260, toValue: 0, useNativeDriver: true }).start();
+  }, [translateY]);
+  const closeWithSwipe = useCallback(() => {
+    Animated.timing(translateY, { duration: 180, toValue: 700, useNativeDriver: true }).start(onClose);
+  }, [onClose, translateY]);
+  const swipeResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gesture) => gesture.dy > 8 && gesture.dy > Math.abs(gesture.dx) * 1.1,
+    onPanResponderMove: (_event, gesture) => translateY.setValue(Math.max(0, gesture.dy)),
+    onPanResponderRelease: (_event, gesture) => {
+      if (gesture.dy >= 80 || (gesture.dy >= 36 && gesture.vy >= 0.75)) closeWithSwipe();
+      else restorePosition();
+    },
+    onPanResponderTerminate: restorePosition,
+  }), [closeWithSwipe, restorePosition, translateY]);
+
+  useEffect(() => {
+    if (imageUrl) translateY.setValue(0);
+  }, [imageUrl, translateY]);
+
+  return <Modal animationType="fade" onRequestClose={onClose} statusBarTranslucent transparent visible={Boolean(imageUrl)}>
     <View style={styles.avatarPreviewLayer}>
-      <Pressable accessibilityLabel="Закрыть просмотр изображения" onPress={onClose} style={styles.avatarPreviewBackdrop} />
-      <SafeAreaView pointerEvents="box-none" style={styles.eventImagePreviewSafeArea}>
-        <View pointerEvents="box-none" style={styles.avatarPreviewHeader}>
-          <Pressable accessibilityLabel="Закрыть" accessibilityRole="button" onPress={onClose} style={styles.avatarPreviewClose}>
-            <X color="#fff" size={26} strokeWidth={2.2} />
-          </Pressable>
-        </View>
-        {imageUrl ? <Image source={{ uri: imageUrl }} resizeMode="contain" style={styles.eventImagePreviewImage} /> : null}
-      </SafeAreaView>
+      <Animated.View {...swipeResponder.panHandlers} style={[styles.eventImagePreviewAnimatedLayer, { transform: [{ translateY }] }]}>
+        <Pressable accessible={false} onPress={onClose} style={styles.eventImagePreviewDismissSurface}>
+          <SafeAreaView pointerEvents="box-none" style={styles.eventImagePreviewSafeArea}>
+            <View pointerEvents="box-none" style={styles.avatarPreviewHeader}>
+              <Pressable accessibilityLabel="Закрыть" accessibilityRole="button" hitSlop={8} onPress={onClose} style={styles.avatarPreviewClose}>
+                <X color="#fff" size={26} strokeWidth={2.2} />
+              </Pressable>
+            </View>
+            <View pointerEvents="none" style={styles.eventImagePreviewCanvas}>
+              {imageUrl ? <Image source={{ uri: imageUrl }} resizeMode="contain" style={styles.eventImagePreviewImage} /> : null}
+            </View>
+          </SafeAreaView>
+        </Pressable>
+      </Animated.View>
     </View>
   </Modal>;
 }
@@ -1722,7 +1794,7 @@ function EventScheduleEditor({ adminMode, authToken, event, isVisible, onClose, 
         <Text numberOfLines={1} style={styles.eventEditorTitle}>Расписание</Text>
         <View style={[styles.eventEditorHeaderSide, styles.eventEditorHeaderSideTrailing]}>
           <Pressable accessibilityRole="button" accessibilityState={{ disabled: isSaving }} disabled={isSaving} onPress={() => void submitSave()} style={[styles.eventEditorSave, isSaving && styles.disabledButton]}>
-            {isSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.eventEditorSaveText}>Сохранить</Text>}
+            {isSaving ? <LoadingIndicator tone="inverse" size="small" /> : <Text style={styles.eventEditorSaveText}>Сохранить</Text>}
           </Pressable>
         </View>
       </View>
@@ -1781,7 +1853,7 @@ function EventScheduleEditor({ adminMode, authToken, event, isVisible, onClose, 
               <Pressable accessibilityLabel="Удалить участника" accessibilityRole="button" onPress={() => setItems((current) => current.filter((candidate) => candidate.id !== item.id))} style={styles.eventPartnerRemove}><X color="#6f7b86" size={20} /></Pressable>
             </View>
             {activeArtistItemId === item.id && artistSearch.queryLength > 0 && artistSearch.queryLength < 3 ? <Text style={styles.communityAudioParticipantSearchHint}>Поиск начнётся после ввода 3 символов</Text> : null}
-            {activeArtistItemId === item.id && artistSearch.isSearching ? <View style={styles.communityAudioParticipantSearchStatus}><ActivityIndicator color="#6f7b86" size="small" /><Text style={styles.communityAudioParticipantSearchStatusText}>Ищем профили…</Text></View> : null}
+            {activeArtistItemId === item.id && artistSearch.isSearching ? <View style={styles.communityAudioParticipantSearchStatus}><LoadingIndicator size="small" /><Text style={styles.communityAudioParticipantSearchStatusText}>Ищем профили…</Text></View> : null}
             {activeArtistItemId === item.id && artistSearch.suggestions.length ? <View style={styles.entityUsernameSuggestions}>{artistSearch.suggestions.map((suggestion) => <Pressable accessibilityRole="button" key={suggestion.id} onPress={() => {
               updateItem(item.id, { accountUsername: suggestion.username, artist: `@${suggestion.username}` });
               setActiveArtistItemId(null);

@@ -8,6 +8,11 @@ const repositoryRoot = path.resolve(releaseRoot, '..');
 const ignoredDirectoryNames = new Set([
   '.cache',
   '.expo',
+  '.gradle',
+  '.cxx',
+  'build',
+  'vendor',
+  '__pycache__',
   'coverage',
   'dist',
   'node_modules',
@@ -28,12 +33,19 @@ const serverOnlyImportPrefixes = [
   'prisma',
 ];
 const imageSizePatchSha256 = '01100757bdbd55c38cda4b40e79d1b358024fe9fee2d45ab7a9f72111758e8e3';
+const matrixJsPatchSha256 = '683f232f90755a35fdf0ad9505ac886a347cb33c97d27187bf463c776bef8051';
+const matrixWasmArtifact = 'matrix-org-matrix-sdk-crypto-wasm-18.5.0-volna.2.tgz';
+const matrixWasmSha256 = '37724d99c18839342994856a48e14e0e8d0294670e44667bcdbf4456788998f5';
 const reviewedTransitiveOverrides = [
+  ['@xmldom/xmldom@>=0.7.0 <0.9.0', '0.8.15'],
+  ['@xmldom/xmldom@>=0.9.0 <0.10.0', '0.9.12'],
   ['brace-expansion@<2.0.0', '1.1.18'],
   ['brace-expansion@>=2.0.0 <3.0.0', '2.1.4'],
   ['brace-expansion@>=4.0.0 <5.0.9', '5.0.9'],
-  ['js-yaml@>=3.0.0 <4.0.0', '3.15.1'],
-  ['js-yaml@>=4.0.0 <5.0.0', '4.3.1'],
+  ['browserslist@<=4.28.6', '4.28.7'],
+  ['decode-uri-component@<=0.4.2', '0.5.0'],
+  ['js-yaml@>=3.0.0 <4.0.0', '3.15.2'],
+  ['js-yaml@>=4.0.0 <5.0.0', '4.3.2'],
   ['nanoid@<3.3.18', '3.3.18'],
   ['socket.io-parser@>=4.0.0 <4.2.7', '4.2.7'],
   ['tar@<=7.5.20', '7.5.21'],
@@ -57,6 +69,7 @@ async function collectFiles(target, output = []) {
   for (const entry of statEntries) {
     if (entry.isDirectory() && ignoredDirectoryNames.has(entry.name)) continue;
     if (entry.name === '.env' || entry.name.startsWith('.env.')) continue;
+    if (/\.(?:pyc|pyo)$/i.test(entry.name)) continue;
     const absolute = path.join(target, entry.name);
     if (entry.isDirectory()) await collectFiles(absolute, output);
     else output.push(absolute);
@@ -110,7 +123,7 @@ async function validateReleaseMetadata(manifest, failures) {
   if (packageJson.name !== manifest.name) failures.push('release package name does not match the boundary');
   if (packageJson.license !== manifest.license) failures.push('release package license does not match the boundary');
   if (packageJson.packageManager !== 'pnpm@11.7.0') failures.push('release package manager must be pnpm@11.7.0');
-  if (packageJson.engines?.node !== '>=20 <25') failures.push('release Node engine must exclude unsupported Node 25');
+  if (packageJson.engines?.node !== '>=22 <25') failures.push('release Node engine must require the Matrix SDK-compatible Node 22/24 range');
   if (packageJson.scripts?.['verify:openmls'] !== 'cargo test --locked --all-targets --manifest-path packages/volna-messaging-client/rust/openmls-evaluation/Cargo.toml') {
     failures.push('release must expose the pinned locked OpenMLS verification command');
   }
@@ -146,8 +159,12 @@ async function validateReleaseMetadata(manifest, failures) {
       failures.push(`public Dependabot configuration must cover ${ecosystem}`);
     }
   }
-  if (!/^patchedDependencies:\r?\n\s{2}image-size@1\.2\.1:\s+patches\/image-size@1\.2\.1\.patch\s*$/m.test(workspace)) {
+  if (!/^\s{2}image-size@1\.2\.1:\s+patches\/image-size@1\.2\.1\.patch\s*$/m.test(workspace)) {
     failures.push('public workspace must apply the reviewed image-size 1.2.1 patch');
+  }
+  if (!workspace.includes(`"@matrix-org/matrix-sdk-crypto-wasm": file:packages/volna-matrix-native/sdk/${matrixWasmArtifact}`)
+    || !workspace.includes('matrix-js-sdk@42.1.0: patches/matrix-js-sdk@42.1.0.patch')) {
+    failures.push('public workspace must require the custom recipient-enforcing WASM and public JS facade');
   }
   for (const advisory of ['GHSA-5p2g-fcmc-qvqq', 'GHSA-w3rx-r6r6-pgpr']) {
     if (!new RegExp(`^\\s{4}- ${advisory}$`, 'm').test(workspace)) {
@@ -195,7 +212,9 @@ async function validateReleaseMetadata(manifest, failures) {
   }
   for (const [dependency, allowedVersions] of Object.entries({
     'brace-expansion': new Set(['1.1.18', '2.1.4', '5.0.9']),
-    'js-yaml': new Set(['3.15.1', '4.3.1']),
+    browserslist: new Set(['4.28.7']),
+    'decode-uri-component': new Set(['0.5.0']),
+    'js-yaml': new Set(['3.15.2', '4.3.2']),
     nanoid: new Set(['3.3.18']),
     'socket.io-parser': new Set(['4.2.7']),
     tar: new Set(['7.5.21']),
@@ -207,6 +226,11 @@ async function validateReleaseMetadata(manifest, failures) {
       failures.push(`public lockfile contains an unreviewed ${dependency} resolution: ${resolved.join(', ') || 'missing'}`);
     }
   }
+  const xmldomVersions = [...lockPackages.matchAll(/^  '@xmldom\/xmldom@([^']+)':/gm)].map((match) => match[1]);
+  if (
+    xmldomVersions.length !== 2
+    || xmldomVersions.some((version) => !new Set(['0.8.15', '0.9.12']).has(version))
+  ) failures.push(`public lockfile contains an unreviewed @xmldom/xmldom resolution: ${xmldomVersions.join(', ') || 'missing'}`);
   const releaseMessagingRoot = path.join(releaseRoot, 'packages', 'volna-messaging-client');
   const standaloneMessagingRoot = await exists(releaseMessagingRoot)
     ? releaseMessagingRoot
@@ -230,6 +254,16 @@ async function validateReleaseMetadata(manifest, failures) {
   if (!standaloneWorkspace.includes('  "socket.io-parser@>=4.0.0 <4.2.7": 4.2.7')) {
     failures.push('standalone messaging workspace must retain the reviewed socket.io-parser override');
   }
+  for (const [selector, version] of [
+    ['@xmldom/xmldom@>=0.7.0 <0.9.0', '0.8.15'],
+    ['@xmldom/xmldom@>=0.9.0 <0.10.0', '0.9.12'],
+    ['browserslist@<=4.28.6', '4.28.7'],
+    ['decode-uri-component@<=0.4.2', '0.5.0'],
+  ]) {
+    if (!standaloneWorkspace.includes(`  "${selector}": ${version}`)) {
+      failures.push(`standalone messaging workspace must retain reviewed override ${selector} -> ${version}`);
+    }
+  }
   const standaloneSocketParsers = [...standaloneLockPackages.matchAll(/^  socket\.io-parser@([^:]+):/gm)].map((match) => match[1]);
   if (standaloneSocketParsers.length === 0 || standaloneSocketParsers.some((version) => version !== '4.2.7')) {
     failures.push(`standalone messaging lockfile contains an unreviewed socket.io-parser resolution: ${standaloneSocketParsers.join(', ') || 'missing'}`);
@@ -243,6 +277,36 @@ async function validateReleaseMetadata(manifest, failures) {
   }
   if (!lock.includes(`image-size@1.2.1: ${imageSizePatchSha256}`)) {
     failures.push('public lockfile does not pin the reviewed image-size patch hash');
+  }
+  const matrixPatchPath = path.join(releaseRoot, 'patches', 'matrix-js-sdk@42.1.0.patch');
+  const cameraPatchHash = '30798b42c540130023c3b4b75329a0f06e7b49b0f237d82fa78cb021e0bb1f31';
+  const mobilePackage = JSON.parse(await readFile(path.join(repositoryRoot, 'apps/mobile/package.json'), 'utf8'));
+  const applicationPackage = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
+  if (![packageJson, mobilePackage, applicationPackage].every(pkg => pkg.expo?.autolinking?.android?.buildFromSource?.includes('expo-camera'))) {
+    failures.push('Patched Expo Camera must build from source; a prebuilt AAR loses binary QR bytes');
+  }
+  const cameraPatchPath = path.join(releaseRoot, 'patches', 'expo-camera@17.0.10.patch');
+  if (!(await exists(cameraPatchPath))
+    || createHash('sha256').update(await readFile(cameraPatchPath)).digest('hex') !== cameraPatchHash
+    || !lock.includes(`expo-camera@17.0.10: ${cameraPatchHash}`)
+    || !workspace.includes('expo-camera@17.0.10: patches/expo-camera@17.0.10.patch')) {
+    failures.push('Android lossless verification QR camera adapter is missing or unpinned');
+  }
+  if (!(await exists(matrixPatchPath))) {
+    failures.push('Matrix recipient JS facade patch is missing');
+  } else {
+    const patchHash = createHash('sha256').update(await readFile(matrixPatchPath)).digest('hex');
+    if (patchHash !== matrixJsPatchSha256) failures.push(`unexpected Matrix JS patch SHA-256: ${patchHash}`);
+  }
+  if (!lock.includes(`matrix-js-sdk@42.1.0: ${matrixJsPatchSha256}`)) {
+    failures.push('public lockfile does not pin the Matrix recipient facade patch hash');
+  }
+  const wasmBytes = await readFile(path.join(repositoryRoot, 'packages/volna-matrix-native/sdk', matrixWasmArtifact));
+  if (createHash('sha256').update(wasmBytes).digest('hex') !== matrixWasmSha256
+    || !lock.includes(`sha512-${createHash('sha512').update(wasmBytes).digest('base64')}`)
+    || !lock.includes(`file:packages/volna-matrix-native/sdk/${matrixWasmArtifact}`)
+    || /^  ['"]?@matrix-org\/matrix-sdk-crypto-wasm@18\.5\.0['"]?:/m.test(lock)) {
+    failures.push('public Matrix WASM artifact/integrity differs or contains an upstream fallback');
   }
   const snapshots = lock.slice(lock.indexOf('\nsnapshots:\n'));
   if (/^  image-size@1\.2\.1:\s*$/m.test(snapshots)) {

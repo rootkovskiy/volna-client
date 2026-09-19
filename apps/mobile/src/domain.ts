@@ -35,7 +35,7 @@ export const connectInterestGroups = [
     ['PAINTING', 'Живопись'], ['ILLUSTRATION', 'Иллюстрация'], ['SCULPTURE', 'Скульптура'], ['PHOTOGRAPHY', 'Фотография'], ['STREET_ART', 'Стрит-арт'], ['CALLIGRAPHY', 'Каллиграфия'], ['COMICS_MANGA', 'Комиксы и манга'], ['COLLAGE', 'Коллаж'], ['THREE_D_ART', '3D-арт'],
   ] },
   { title: 'Музыка', items: [
-    ['SINGING', 'Пение'], ['ELECTRONIC_MUSIC', 'Электронная музыка'], ['ELECTRONIC_MUSIC_PRODUCTION', 'Создание электронной музыки'], ['DJING', 'Диджеинг'], ['LIVE_SOUND', 'Рок-концерты'], ['GIG_ATTENDANCE', 'Посещение гигов'], ['RAVE_CULTURE', 'Рейв-культура'], ['ROCK_MUSIC', 'Рок-музыка'], ['POP_MUSIC', 'Поп-музыка'], ['RAP', 'Хип-хоп'], ['VINYL_COLLECTING', 'Коллекционирование винила'], ['CASSETTE_COLLECTING', 'Коллекционирование кассет'],
+    ['SINGING', 'Пение'], ['ELECTRONIC_MUSIC_PRODUCTION', 'Создание электронной музыки'], ['DJING', 'Диджеинг'], ['LIVE_SOUND', 'Рок-концерты'], ['GIG_ATTENDANCE', 'Посещение гигов'], ['RAVE_CULTURE', 'Рейв-культура'], ['VINYL_COLLECTING', 'Коллекционирование винила'], ['CASSETTE_COLLECTING', 'Коллекционирование кассет'],
   ] },
   { title: 'Кино и сцена', items: [
     ['CINEMA', 'Кино'], ['DIRECTING', 'Режиссура'], ['SCREENWRITING', 'Сценарное мастерство'], ['VIDEO_ART', 'Видеоарт'], ['ANIMATION', 'Анимация'], ['THEATER', 'Театр'], ['ACTING', 'Актёрское мастерство'], ['PERFORMANCE', 'Перформанс'], ['DANCE', 'Танец'], ['SCENOGRAPHY', 'Сценография'],
@@ -113,46 +113,7 @@ export const publicPageTypeGroups: PublicPageTypeGroup[] = [
   },
 ];
 
-export const publicPageTypeLabels: Record<string, string> = {
-  BAR: 'Бар',
-  CLUB: 'Клуб',
-  JAZZ_CLUB: 'Джаз-клуб',
-  RESTAURANT: 'Ресторан',
-  PIZZERIA: 'Пиццерия',
-  KEBAB: 'Кебабная',
-  FAST_FOOD: 'Фастфуд',
-  TATTOO: 'Тату-салон',
-  BARBERSHOP: 'Барбершоп',
-  BEAUTY: 'Бьюти-студия',
-  VINYL: 'Рекорд-стор',
-  VINTAGE_STORE: 'Винтажный магазин',
-  CLOTHING: 'Одежда',
-  CLOTHING_BRAND: 'Бренд одежды',
-  ACCESSORIES: 'Аксессуары',
-  ART_CLUSTER: 'Арт-кластер',
-  MUSIC_LABEL: 'Музыкальный лейбл',
-  MUSIC_BAND: 'Музыкальная группа',
-  MUSIC_DUO: 'Музыкальный дуэт',
-  PODCAST: 'Подкаст',
-  RADIO_STATION: 'Радиостанция',
-  BOOKING_AGENCY: 'Букинг-агентство',
-  PROMO_GROUP: 'Промо-команда',
-  CREATIVE_COLLECTIVE: 'Творческое объединение',
-  MUSIC_FESTIVAL: 'Музыкальный фестиваль',
-  FILM_FESTIVAL: 'Кинофестиваль',
-  CINEMA: 'Кинотеатр',
-  MUSEUM: 'Музей',
-  WORKSHOP: 'Мастерская',
-  THEATER: 'Театр',
-  COFFEE_SHOP: 'Кофейня',
-  CREATIVE_HUB: 'Креативный хаб',
-  DESIGN_STUDIO: 'Студия дизайна',
-  PRODUCTION_STUDIO: 'Продакшн-студия',
-  CONCERT_VENUE: 'Концертная площадка',
-  EXHIBITION_SPACE: 'Выставочное пространство',
-  GALLERY: 'Галерея',
-  INDEPENDENT_MEDIA: 'Независимое медиа',
-};
+export { publicPageTypeLabels } from '@volna/messaging-client/community-labels';
 
 
 export function buildCountryOptions() {
@@ -392,7 +353,7 @@ export function russianPlural(count: number, one: string, few: string, many: str
 export function toApiMessagePrivacy(value: MessagePrivacy): ApiMessagePrivacy {
   const map: Record<MessagePrivacy, ApiMessagePrivacy> = {
     everyone: 'EVERYONE',
-    following: 'FOLLOWING',
+    friends: 'FOLLOWING',
     nobody: 'NOBODY',
   };
 
@@ -402,7 +363,7 @@ export function toApiMessagePrivacy(value: MessagePrivacy): ApiMessagePrivacy {
 export function fromApiMessagePrivacy(value: ApiMessagePrivacy): MessagePrivacy {
   const map: Record<ApiMessagePrivacy, MessagePrivacy> = {
     EVERYONE: 'everyone',
-    FOLLOWING: 'following',
+    FOLLOWING: 'friends',
     NOBODY: 'nobody',
   };
 

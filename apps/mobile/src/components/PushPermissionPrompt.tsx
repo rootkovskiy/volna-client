@@ -10,10 +10,10 @@ export function PushPermissionPrompt({ onNotify }: { onNotify: (message: string,
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || !isInstalledPwa()) return;
+    if (Platform.OS !== 'web') return;
     const permission = currentWebPushPermission();
     if (permission === 'granted') void syncWebPushSubscription().catch(() => undefined);
-    else if (permission !== 'unsupported') setVisible(true);
+    else if (isInstalledPwa() && permission !== 'unsupported') setVisible(true);
   }, []);
 
   const enable = async () => {

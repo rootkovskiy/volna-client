@@ -240,7 +240,7 @@ function parseDevice(value, identityPublicKey = undefined) {
 
 function parseThreadState(value) {
   const state = object(value, 'thread_state');
-  if (state.encryptionMode !== 'LEGACY_PLAINTEXT' && state.encryptionMode !== 'MLS_V1') fail('thread_encryption_mode');
+  if (state.encryptionMode !== 'E2EE_PENDING' && state.encryptionMode !== 'MLS_V1') fail('thread_encryption_mode');
   const identities = Array.isArray(state.identities) ? state.identities.map(parseIdentity) : [];
   const identityByAccount = new Map(identities.map((identity) => [identity.accountId, identity.publicKey]));
   const parsed = {
@@ -264,7 +264,7 @@ function parseThreadState(value) {
         })
       : [],
   };
-  if (parsed.encryptionMode === 'LEGACY_PLAINTEXT') {
+  if (parsed.encryptionMode === 'E2EE_PENDING') {
     if (
       parsed.protocolVersion !== null
       || parsed.groupId !== null
@@ -275,7 +275,7 @@ function parseThreadState(value) {
       || parsed.targetRosterHash !== null
       || parsed.transitionExpiresAt !== null
     ) {
-      fail('thread_legacy_state');
+      fail('thread_pending_state');
     }
   } else if (
     parsed.protocolVersion !== CHAT_PROTOCOL_VERSION
@@ -660,7 +660,7 @@ export class OpaqueChatTransport {
       || value.ciphersuite !== CHAT_CIPHERSUITE
       || value.plaintextFallback !== false
       || value.contentPlane !== 'opaque-only-for-mls-v1'
-      || value.legacyHistoryServerReadable !== true
+      || value.serverReadableHistory !== false
       || value.keyTransparencyRequired !== true
       || value.keyTransparencyVersion !== 1
       || !Number.isSafeInteger(value.keyTransparencyActivationTargetMs)
@@ -698,7 +698,7 @@ export class OpaqueChatTransport {
       membershipRekeyEnabled: value.membershipRekeyEnabled === true,
       plaintextFallback: false,
       contentPlane: 'opaque-only-for-mls-v1',
-      legacyHistoryServerReadable: true,
+      serverReadableHistory: false,
       keyTransparencyRequired: true,
       keyTransparencyVersion: 1,
       keyTransparencyPolicyStatus,
@@ -1228,10 +1228,13 @@ export class OpaqueChatTransport {
   }
 
   async sendEnvelope(threadId, input) {
-    const body = normalizeOpaqueEnvelopeInput(input);
+    const { notificationMessageId: notificationTarget, ...envelopeBody } = object(input, 'envelope');
+    const body = normalizeOpaqueEnvelopeInput(envelopeBody);
+    const notificationMessageId = notificationTarget === undefined ? undefined
+      : notificationTarget === null ? null : id(notificationTarget, 'notification_message_id');
     return parseEnvelope(await this.request(
       `/chats/${encodeQuery(id(threadId, 'thread_id'))}/e2ee/envelopes`,
-      { method: 'POST', body: JSON.stringify(body) },
+      { method: 'POST', body: JSON.stringify({ ...body, ...(notificationMessageId !== undefined ? { notificationMessageId } : {}) }) },
     ));
   }
 }

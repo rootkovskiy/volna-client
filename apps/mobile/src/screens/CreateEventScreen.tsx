@@ -1,13 +1,17 @@
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Link2, PanelsTopLeft, Plus, Search, Ticket, X } from 'lucide-react-native';
+import { CalendarPickerModal, formatDateValue } from '../components/CalendarPickerModal';
+import { ScreenTopBar } from '../components/ScreenTopBar';
+import { LoadingIndicator } from '@volna/messaging-client/loading';
+import { CalendarDays, Check, ChevronRight, Clock3, Link2, PanelsTopLeft, Plus, Search, Ticket, X } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { AppImage as Image } from '../components/AppImage';
 import { apiFetch as fetch, apiUrl, remoteSearchDebounceMs } from '../api/client';
 import { createEventArtistDraft, getAvatarInitial, getEndOfDay, parseDateInput, parseDateTimeInput } from '../domain';
 import { styles } from '../styles';
 import { AppSheetModal } from '../components/AppSheetModal';
 import { SelectionPickerModal, type SelectionPickerOption } from '../components/SelectionPickerModal';
+import { LocationPickerModal } from '../components/LocationPickerModal';
 import { AvatarCropModal } from './ProfileScreens';
 import { useAccountSearchSuggestions } from '../hooks/useAccountSearchSuggestions';
 import type { AvatarCropAsset, CreateEventInput, CursorPage, EventArtistDraft, EventSummary, EventTypeOption, PublicPage, ToastMessage } from '../types';
@@ -17,10 +21,6 @@ type TimePickerTarget =
   | { kind: 'artist'; artistId: string; field: 'start' | 'end' };
 
 type ArtistDatePickerTarget = { artistId: string; field: 'start' | 'end' };
-
-function formatDateValue(date: Date) {
-  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()}`;
-}
 
 function formatTimeValue(date: Date) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -35,6 +35,7 @@ export function CreateEventScreen({
   onNotify,
   ownAccountId,
   initialEvent,
+  organizerPage,
 }: {
   adminMode: boolean;
   authToken: string;
@@ -44,6 +45,7 @@ export function CreateEventScreen({
   onNotify: (message: string, type?: ToastMessage['type']) => void;
   ownAccountId: string;
   initialEvent?: EventSummary;
+  organizerPage?: PublicPage;
 }) {
   const [ownedPages, setOwnedPages] = useState<PublicPage[]>([]);
   const [eventTypes, setEventTypes] = useState<EventTypeOption[]>([]);
@@ -51,7 +53,10 @@ export function CreateEventScreen({
   const initialStart = initialEvent ? new Date(initialEvent.startsAt) : null;
   const initialEnd = initialEvent ? new Date(initialEvent.endsAt) : null;
   const initialHasEnd = Boolean(initialStart && initialEnd && (formatDateValue(initialStart) !== formatDateValue(initialEnd) || formatTimeValue(initialEnd) !== '23:59'));
-  const [organizerPageId, setOrganizerPageId] = useState(initialEvent?.organizerPageId ?? '');
+  const [organizerPageId, setOrganizerPageId] = useState(initialEvent?.organizerPageId ?? organizerPage?.id ?? '');
+  const [cityId, setCityId] = useState(initialEvent?.cityId ?? '');
+  const [cityName, setCityName] = useState(initialEvent?.cityName ?? '');
+  const [countryName, setCountryName] = useState(initialEvent?.countryName ?? '');
   const [title, setTitle] = useState(initialEvent?.title ?? '');
   const [type, setType] = useState(initialEvent?.type ?? '');
   const [posterLocalUri, setPosterLocalUri] = useState(initialEvent?.posterOriginalUrl ?? initialEvent?.posterUrl ?? '');
@@ -63,6 +68,7 @@ export function CreateEventScreen({
   const [endDate, setEndDate] = useState(initialEnd ? formatDateValue(initialEnd) : '');
   const [endTime, setEndTime] = useState(initialHasEnd && initialEnd ? formatTimeValue(initialEnd) : '');
   const [locationQuery, setLocationQuery] = useState(initialEvent?.venueName ?? '');
+  const [venueAddress, setVenueAddress] = useState(initialEvent?.venueAddress ?? '');
   const [selectedLocation, setSelectedLocation] = useState<PublicPage | null>(null);
   const [hasLocationChanged, setHasLocationChanged] = useState(false);
   const [isLocationFocused, setIsLocationFocused] = useState(false);
@@ -87,6 +93,7 @@ export function CreateEventScreen({
   })) ?? []);
   const [activeArtistId, setActiveArtistId] = useState<string | null>(null);
   const [isOrganizerPickerOpen, setIsOrganizerPickerOpen] = useState(false);
+  const [isCityPickerOpen, setIsCityPickerOpen] = useState(false);
   const [isTypePickerOpen, setIsTypePickerOpen] = useState(false);
   const [timePickerTarget, setTimePickerTarget] = useState<TimePickerTarget | null>(null);
   const [datePickerArtistTarget, setDatePickerArtistTarget] = useState<ArtistDatePickerTarget | null>(null);
@@ -95,7 +102,7 @@ export function CreateEventScreen({
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleteConfirmationOpen, setIsDeleteConfirmationOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const selectedOrganizer = ownedPages.find((page) => page.id === organizerPageId);
+  const selectedOrganizer = organizerPage?.id === organizerPageId ? organizerPage : ownedPages.find((page) => page.id === organizerPageId);
   const selectedType = eventTypes.find((option) => option.value === type);
   const activeArtist = artists.find((artist) => artist.id === activeArtistId);
   const artistSearch = useAccountSearchSuggestions(
@@ -145,7 +152,14 @@ export function CreateEventScreen({
         const nextOwnedPages = pages;
         setOwnedPages(nextOwnedPages);
         setOrganizerPageId((current) => (
-          current && nextOwnedPages.some((page) => page.id === current) ? current : ''
+          organizerPage
+            ? organizerPage.id
+            :
+          current && nextOwnedPages.some((page) => page.id === current)
+            ? current
+            : !adminMode && !initialEvent
+              ? nextOwnedPages[0]?.id ?? ''
+              : ''
         ));
         setEventTypes(types);
         setLocations(locationPage.items);
@@ -163,7 +177,7 @@ export function CreateEventScreen({
     return () => {
       isMounted = false;
     };
-  }, [adminMode, authToken, initialEvent?.venuePageId, onNotify, ownAccountId]);
+  }, [adminMode, authToken, initialEvent?.id, initialEvent?.venuePageId, onNotify, organizerPage, ownAccountId]);
 
   useEffect(() => {
     if (!isLocationFocused || selectedLocation) return;
@@ -202,6 +216,12 @@ export function CreateEventScreen({
     setHasLocationChanged(true);
     setSelectedLocation(location);
     setLocationQuery(location.name);
+    setVenueAddress(location.address ?? '');
+    if (location.cityId) {
+      setCityId(location.cityId);
+      setCityName(location.cityName);
+      setCountryName(location.countryName);
+    }
     setIsLocationFocused(false);
   };
 
@@ -272,8 +292,13 @@ export function CreateEventScreen({
       }))
       .filter((artist) => artist.displayName.length > 0);
 
-    if (!organizerPageId) {
+    if (!organizerPageId && !adminMode) {
       onNotify('Выберите сообщество-организатор', 'error');
+      return;
+    }
+
+    if (!cityId) {
+      onNotify('Выберите город события', 'error');
       return;
     }
 
@@ -364,10 +389,11 @@ export function CreateEventScreen({
       await onCreate({
         posterLocalUri,
         posterThumbnailLocalUri: posterThumbnailLocalUri || undefined,
-        organizerPageId,
+        organizerPageId: organizerPageId || undefined,
+        cityId,
         venuePageId: selectedLocation?.id ?? (!hasLocationChanged ? initialEvent?.venuePageId ?? undefined : undefined),
         venueName: selectedLocation?.name || locationQuery.trim(),
-        venueAddress: selectedLocation?.address || selectedLocation?.cityName || initialEvent?.venueAddress || '',
+        venueAddress: selectedLocation?.address?.trim() || venueAddress.trim(),
         title: title.trim(),
         type,
         startsAt: startsAt.toISOString(),
@@ -388,35 +414,31 @@ export function CreateEventScreen({
 
   return (
     <>
-      <View style={styles.topBar}>
-        <View style={styles.topBarLeft}>
-          <Pressable onPress={onBack} style={styles.topBarIconButton}>
-            <ChevronLeft size={29} color="#090909" strokeWidth={2.1} />
-          </Pressable>
-          <Text style={styles.topBarTitle}>{initialEvent ? 'Редактировать событие' : 'Создать событие'}</Text>
-        </View>
-      </View>
+      <ScreenTopBar onBack={onBack} title={initialEvent ? 'Редактировать событие' : 'Создать событие'} />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.editShell}>
         <ScrollView
           contentContainerStyle={[styles.editContent, styles.createCommunityContent, styles.createEventContent]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Pressable disabled={Boolean(initialEvent)} onPress={() => setIsOrganizerPickerOpen(true)} style={[styles.editSelectInput, styles.eventFormSurface]}>
-            {selectedOrganizer ? (
-              selectedOrganizer.avatarUrl ? (
+          {organizerPage && selectedOrganizer ? <View style={[styles.communityCategorySelectionBlock, styles.eventFormSurface]}>
+            <Text style={styles.communityCategorySelectionTitle}>Организатор</Text>
+            <View style={styles.eventOrganizerInfoRow}>
+              {selectedOrganizer.avatarUrl ? (
                 <Image source={{ uri: selectedOrganizer.avatarUrl }} style={styles.eventOrganizerAvatar} resizeMode="cover" />
               ) : (
                 <View style={styles.eventOrganizerAvatar}>
                   <Text style={styles.eventOrganizerAvatarText}>{getAvatarInitial(selectedOrganizer.name)}</Text>
                 </View>
-              )
-            ) : null}
+              )}
+              <Text numberOfLines={1} style={styles.eventOrganizerInfoName}>{selectedOrganizer.name}</Text>
+            </View>
+          </View> : <Pressable disabled={Boolean(initialEvent)} onPress={() => setIsOrganizerPickerOpen(true)} style={[styles.editSelectInput, styles.eventFormSurface]}>
             <Text numberOfLines={1} style={[styles.editSelectText, !selectedOrganizer && styles.editSelectPlaceholder]}>
-              {selectedOrganizer?.name || 'Сообщество-организатор'}
+              {selectedOrganizer?.name || (adminMode ? 'Без организатора' : 'Сообщество-организатор')}
             </Text>
             {!initialEvent ? <Text style={styles.editSelectChevron}>›</Text> : null}
-          </Pressable>
+          </Pressable>}
 
           <TextInput
             onChangeText={setTitle}
@@ -429,6 +451,13 @@ export function CreateEventScreen({
           <Pressable onPress={() => setIsTypePickerOpen(true)} style={[styles.editSelectInput, styles.editInputSpacing, styles.eventFormSurface, styles.eventFormSpacing]}>
             <Text numberOfLines={1} style={[styles.editSelectText, !selectedType && styles.editSelectPlaceholder]}>
               {selectedType?.label || 'Тип события'}
+            </Text>
+            <Text style={styles.editSelectChevron}>›</Text>
+          </Pressable>
+
+          <Pressable accessibilityLabel="Выбрать город события" accessibilityRole="button" onPress={() => setIsCityPickerOpen(true)} style={[styles.editSelectInput, styles.editInputSpacing, styles.eventFormSurface, styles.eventFormSpacing]}>
+            <Text numberOfLines={1} style={[styles.editSelectText, !cityId && styles.editSelectPlaceholder]}>
+              {cityName ? `${countryName}, ${cityName}` : 'Город события'}
             </Text>
             <Text style={styles.editSelectChevron}>›</Text>
           </Pressable>
@@ -476,7 +505,7 @@ export function CreateEventScreen({
                 style={styles.eventLocationSearchInput}
                 value={locationQuery}
               />
-              {isLocationSearching ? <ActivityIndicator color="#6f7b86" size="small" /> : null}
+              {isLocationSearching ? <LoadingIndicator size="small" /> : null}
               {locationQuery ? (
                 <Pressable accessibilityLabel="Очистить локацию" accessibilityRole="button" hitSlop={8} onPress={() => { setHasLocationChanged(true); clearLocation(); }} style={styles.eventLocationClearButton}>
                   <X color="#111" size={19} strokeWidth={1.8} />
@@ -505,6 +534,15 @@ export function CreateEventScreen({
             {isLocationFocused && !isLocationSearching && !selectedLocation && locationQuery.trim().length >= 2 && !locations.length ? (
               <Text style={styles.eventLocationFreeTextHint}>Совпадений нет — оставим «{locationQuery.trim()}» как локацию.</Text>
             ) : null}
+            {!selectedLocation ? <TextInput
+              accessibilityLabel="Адрес или ориентир"
+              maxLength={240}
+              onChangeText={setVenueAddress}
+              placeholder="Адрес или ориентир (необязательно)"
+              placeholderTextColor="#98a3ae"
+              style={[styles.editInputSpacing, styles.eventFormSurface, styles.eventFormSpacing]}
+              value={venueAddress}
+            /> : null}
           </View>
 
           <View style={[styles.editLocationRow, styles.eventDateRow]}>
@@ -668,7 +706,7 @@ export function CreateEventScreen({
                 ) : null}
                 {isActiveArtist && artistSearch.isSearching ? (
                   <View style={styles.communityAudioParticipantSearchStatus}>
-                    <ActivityIndicator color="#6f7b86" size="small" />
+                    <LoadingIndicator size="small" />
                     <Text style={styles.communityAudioParticipantSearchStatusText}>Ищем профили…</Text>
                   </View>
                 ) : null}
@@ -732,7 +770,7 @@ export function CreateEventScreen({
             <Text style={styles.eventAddArtistText}>Добавить участника</Text>
           </Pressable>
           <Pressable disabled={isSaving} onPress={submit} style={[styles.saveProfileButton, isSaving && styles.disabledButton]}>
-            {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveProfileText}>{initialEvent ? 'Сохранить' : 'Создать'}</Text>}
+            {isSaving ? <LoadingIndicator tone="inverse" /> : <Text style={styles.saveProfileText}>{initialEvent ? 'Сохранить' : 'Создать'}</Text>}
           </Pressable>
           {initialEvent && onDelete ? (
             <View style={styles.communityAudioEditorDeleteSection}>
@@ -774,7 +812,7 @@ export function CreateEventScreen({
               }}
               style={[styles.eventFilterApply, isDeleting && styles.disabledButton]}
             >
-              {isDeleting ? <ActivityIndicator color="#fff" /> : <Text style={styles.eventFilterApplyText}>Удалить</Text>}
+              {isDeleting ? <LoadingIndicator tone="inverse" /> : <Text style={styles.eventFilterApplyText}>Удалить</Text>}
             </Pressable>
           </View>
         )}
@@ -793,9 +831,26 @@ export function CreateEventScreen({
           setOrganizerPageId(value);
           setIsOrganizerPickerOpen(false);
         }}
-        options={ownedPages.map((page) => ({ label: page.name, meta: `@${page.username}`, value: page.id }))}
+        options={[
+          ...(adminMode ? [{ label: 'Без организатора', meta: 'Информационное событие', value: '' }] : []),
+          ...ownedPages.map((page) => ({ label: page.name, meta: `@${page.username}`, value: page.id })),
+        ]}
         selectedValue={organizerPageId}
         title="Сообщество"
+      />
+      <LocationPickerModal
+        initialCountryName={countryName}
+        isVisible={isCityPickerOpen}
+        onClose={() => setIsCityPickerOpen(false)}
+        onSelect={(location) => {
+          if (location.kind !== 'city') {
+            onNotify('Для события нужно выбрать конкретный город', 'error');
+            return;
+          }
+          setCityId(location.cityId);
+          setCityName(location.cityName);
+          setCountryName(location.countryName);
+        }}
       />
       <CalendarPickerModal
         isVisible={datePickerArtistTarget !== null}
@@ -881,48 +936,6 @@ export function CreateEventScreen({
       />
     </>
   );
-}
-
-export function CalendarPickerModal({ embedded = false, isVisible, maxDate, minDate, onClose, onSelect, selectedValue, title }: { embedded?: boolean; isVisible: boolean; maxDate?: Date; minDate: Date; onClose: () => void; onSelect: (value: string) => void; selectedValue: string; title: string }) {
-  const normalizedMin = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate());
-  const normalizedMax = maxDate ? new Date(maxDate.getFullYear(), maxDate.getMonth(), maxDate.getDate()) : null;
-  const selected = parseDateInput(selectedValue);
-  const [visibleMonth, setVisibleMonth] = useState(() => selected ?? normalizedMin);
-
-  useEffect(() => {
-    if (!isVisible) return;
-    const next = parseDateInput(selectedValue) ?? normalizedMin;
-    setVisibleMonth(new Date(next.getFullYear(), next.getMonth(), 1));
-  }, [isVisible, selectedValue, minDate.getFullYear(), minDate.getMonth(), minDate.getDate(), maxDate?.getFullYear(), maxDate?.getMonth(), maxDate?.getDate()]);
-
-  const year = visibleMonth.getFullYear();
-  const month = visibleMonth.getMonth();
-  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = Array.from({ length: 42 }, (_, index) => {
-    const day = index - firstWeekday + 1;
-    return day >= 1 && day <= daysInMonth ? new Date(year, month, day) : null;
-  });
-  const monthTitle = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(visibleMonth);
-  const previousMonth = new Date(year, month - 1, 1);
-  const nextMonth = new Date(year, month + 1, 1);
-  const canGoPrevious = new Date(previousMonth.getFullYear(), previousMonth.getMonth() + 1, 0) >= normalizedMin;
-  const canGoNext = !normalizedMax || nextMonth <= normalizedMax;
-
-  return <AppSheetModal embedded={embedded} isVisible={isVisible} onClose={onClose} title={title}>
-    <View style={styles.calendarMonthHeader}>
-      <Pressable accessibilityLabel="Предыдущий месяц" disabled={!canGoPrevious} onPress={() => setVisibleMonth(previousMonth)} style={[styles.calendarArrow, !canGoPrevious && styles.calendarArrowDisabled]}><ChevronLeft color="#111" size={22} /></Pressable>
-      <Text style={styles.calendarMonthTitle}>{monthTitle.charAt(0).toUpperCase() + monthTitle.slice(1)}</Text>
-      <Pressable accessibilityLabel="Следующий месяц" disabled={!canGoNext} onPress={() => setVisibleMonth(nextMonth)} style={[styles.calendarArrow, !canGoNext && styles.calendarArrowDisabled]}><ChevronRight color="#111" size={22} /></Pressable>
-    </View>
-    <View style={styles.calendarWeekdays}>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((day) => <Text key={day} style={styles.calendarWeekday}>{day}</Text>)}</View>
-    <View style={styles.calendarGrid}>{cells.map((date, index) => {
-      if (!date) return <View key={`empty-${index}`} style={styles.calendarDay} />;
-      const disabled = date < normalizedMin || Boolean(normalizedMax && date > normalizedMax);
-      const active = Boolean(selected && date.getFullYear() === selected.getFullYear() && date.getMonth() === selected.getMonth() && date.getDate() === selected.getDate());
-      return <Pressable accessibilityLabel={formatDateValue(date)} accessibilityRole="button" disabled={disabled} key={date.toISOString()} onPress={() => onSelect(formatDateValue(date))} style={[styles.calendarDay, active && styles.calendarDayActive]}><Text style={[styles.calendarDayText, disabled && styles.calendarDayTextDisabled, active && styles.calendarDayTextActive]}>{date.getDate()}</Text></Pressable>;
-    })}</View>
-  </AppSheetModal>;
 }
 
 export function TimePickerModal({ embedded = false, isVisible, maxTime = '23:55', minTime = '00:00', onClose, onSelect, value }: { embedded?: boolean; isVisible: boolean; maxTime?: string; minTime?: string; onClose: () => void; onSelect: (value: string) => void; value: string }) {

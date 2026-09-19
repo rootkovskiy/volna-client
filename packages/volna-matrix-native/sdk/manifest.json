@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": 1,
+  "upstreamOfficialArtifact": false,
+  "rustToolchain": "1.95.0",
+  "sources": {
+    "webRust": {
+      "repository": "matrix-org/matrix-rust-sdk",
+      "revision": "955837c4677cd7e92e79447169b69666c0debae6",
+      "archiveSha256": "29e85cb1f2b10e03b28d70ba8f2948e8e6be517de1bc12b5edc268a509f28746",
+      "patch": "rust-web-recipient.patch",
+      "patchSha256": "bdd99e2de79634ee5cabcb4c9dab78fba0e6bcbb58f5261fda2e2c6a725c4cb1"
+    },
+    "wasm": {
+      "repository": "matrix-org/matrix-sdk-crypto-wasm",
+      "revision": "93abc64b195b24a1335a3e796a16f4e3ccf0e3e1",
+      "archiveSha256": "1f1f4712143acc14912d8d1fc71ab9ae95d27984878e4fc45c9240f336805c9b",
+      "patch": "wasm-bindings-recipient.patch",
+      "patchSha256": "2ec12c12d3a6ad56e78f723b352be959f4f5af0de9b26e23eb43f06abce242de"
+    },
+    "android": {
+      "repository": "matrix-org/matrix-rust-sdk",
+      "revision": "1e6a409be052f35e0021538212e116b3a86edaa8",
+      "archiveSha256": "623c8eb9120352c6a3d20e9e362d9e97cf4d7bc6b65818b7dd6b526e8a200eaa",
+      "patch": "rust-android-recipient.patch",
+      "patchSha256": "9a15b4d65edb1ddb93fe279b5db4e6beed711a61f080c1b1b14eb33c986aa90a"
+    },
+    "ios": {
+      "repository": "matrix-org/matrix-rust-sdk",
+      "revision": "15a3ce2369a1e96fcad02cb2b1da3198ef23348a",
+      "archiveSha256": "415446e3740286395dfe08952c24dee9f096a408856f2710f10b0d21a14f69bb",
+      "patch": "rust-ios-recipient.patch",
+      "patchSha256": "ade15255dadaf53efdbd2469a53a31283c081951c4b8853a0c03fdeef005aaed"
+    }
+  },
+  "wasm": {
+    "artifact": "matrix-org-matrix-sdk-crypto-wasm-18.5.0-volna.2.tgz",
+    "sha256": "37724d99c18839342994856a48e14e0e8d0294670e44667bcdbf4456788998f5",
+    "wasmBindgen": "0.2.126",
+    "embeddedGitRevision": "VERGEN default; source revisions above are authoritative"
+  },
+  "android": {
+    "artifact": "matrix-sdk-android-26.08.13-volna.1.aar",
+    "sha256": "476d3586d6b6dbfff16798ea605d73bd92acdeb375e69af1fb22d99296c2c160",
+    "parts": [
+      {
+        "file": "matrix-sdk-android-26.08.13-volna.1.aar.part01",
+        "sha256": "caffd41d0981c03ef0fa6dd0e5eb164ee23ec2e77ba4a21af62bb3b653d122aa"
+      },
+      {
+        "file": "matrix-sdk-android-26.08.13-volna.1.aar.part02",
+        "sha256": "5eac2d625a1bbd4b21433f1bd205430a060f5b4af3816451b192341a6dbc6d26"
+      },
+      {
+        "file": "matrix-sdk-android-26.08.13-volna.1.aar.part03",
+        "sha256": "38adbcc915aec1d71343b45688adcfa72485b7e8dd84312f66a80ec052f07197"
+      }
+    ],
+    "abis": [
+      "arm64-v8a",
+      "armeabi-v7a",
+      "x86",
+      "x86_64"
+    ],
+    "elfLoadAlignmentBytes": 16384,
+    "allArchitecturesComplete": true
+  },
+  "iosArtifact": null,
+  "productionAccepted": false,
+  "physicalDeviceVerification": false
+}

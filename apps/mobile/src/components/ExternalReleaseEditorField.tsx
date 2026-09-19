@@ -1,5 +1,6 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Easing, Keyboard, Pressable, Text, TextInput, View } from 'react-native';
+import { Animated, Easing, Keyboard, Pressable, Text, TextInput, View } from 'react-native';
 import { ChevronDown, Disc3, Link2 } from 'lucide-react-native';
 import { AppImage as Image } from './AppImage';
 import { normalizeYouTubeTrackMetadata } from './audioPlayerCore';
@@ -9,6 +10,7 @@ export type ExternalReleasePreview = {
   provider: 'bandcamp' | 'soundcloud' | 'youtube';
   metadata: {
     title: string;
+    releaseDate?: string | null;
     artist?: string | null;
     artworkUrl?: string | null;
     tracks?: Array<{
@@ -71,7 +73,7 @@ export function ExternalReleaseEditorField({
           ]}
         >
           {isResolving
-            ? <ActivityIndicator color="#fff" size="small" />
+            ? <LoadingIndicator tone="inverse" size="small" />
             : <ChevronDown color={preview ? '#111' : '#fff'} size={20} strokeWidth={2.2} />}
         </Pressable>
       </View>

@@ -1,0 +1,5 @@
+android/build/
+android/.cxx/
+sdk/android-build/build/
+sdk/android-build/.gradle/
+vendor/

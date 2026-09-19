@@ -88,8 +88,11 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod
 
-      - name: Export Web
-        run: pnpm export:web
+      - name: Build the complete Web release
+        env:
+          EXPO_NO_DOTENV: "1"
+          EXPO_PUBLIC_API_URL: https://volna.social
+        run: pnpm release:web
 
       - name: Export Android bundle
         run: pnpm export:android

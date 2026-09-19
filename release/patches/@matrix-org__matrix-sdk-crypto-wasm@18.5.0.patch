@@ -1,0 +1,17 @@
+diff --git a/index.mjs b/index.mjs
+index 51d5256e3c0fd09973ca546ad5eab01f3f064c06..19692671126f360ba84c30a20dde9be48f1b62a5 100644
+--- a/index.mjs
++++ b/index.mjs
+@@ -21,7 +21,11 @@
+ 
+ import * as bindings from "./pkg/matrix_sdk_crypto_wasm_bg.js";
+ 
+-const defaultURL = new URL("./pkg/matrix_sdk_crypto_wasm_bg.wasm", import.meta.url);
++// Metro executes lazy web bundles as classic scripts, where `import.meta` is a
++// syntax error. VOLNA serves the exact dependency-owned WASM bytes from a
++// versioned same-origin route in its gateway, which also works in installed
++// Safari PWAs without weakening the content boundary.
++const defaultURL = "/matrix-assets/matrix-sdk-crypto-wasm/18.5.0/matrix_sdk_crypto_wasm_bg.wasm";
+ 
+ // Although we could simply instantiate the WASM at import time with a top-level `await`,
+ // we avoid that, to make it easier for callers to delay loading the WASM (and instead

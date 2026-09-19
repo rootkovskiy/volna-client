@@ -275,13 +275,27 @@ export function createExpoMessagingStorage(accountId: string, deviceId: string) 
       pendingKey = null;
       memoryKey?.fill(0);
       memoryKey = null;
-      await messageStore.clear();
-      await AsyncStorage.multiRemove([stateStorageKey(scope), wrappingStorageKey(scope)]);
-      if (Platform.OS === 'web') {
-        await withWebKeyStore('readwrite', (store) => store.delete(scope));
-      } else {
-        await SecureStore.deleteItemAsync(secureStoreKey(scope));
+      let firstFailure: unknown;
+      try {
+        await messageStore.clear();
+      } catch (error) {
+        firstFailure = error;
       }
+      try {
+        await AsyncStorage.multiRemove([stateStorageKey(scope), wrappingStorageKey(scope)]);
+      } catch (error) {
+        firstFailure ??= error;
+      }
+      try {
+        if (Platform.OS === 'web') {
+          await withWebKeyStore('readwrite', (store) => store.delete(scope));
+        } else {
+          await SecureStore.deleteItemAsync(secureStoreKey(scope));
+        }
+      } catch (error) {
+        firstFailure ??= error;
+      }
+      if (firstFailure !== undefined) fail('storage_clear', firstFailure);
     },
     destroyMemoryKey() {
       messageStore.destroyMemory();

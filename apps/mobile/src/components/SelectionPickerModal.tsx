@@ -1,5 +1,6 @@
+import { LoadingIndicator } from '@volna/messaging-client/loading';
 import type { ReactNode } from 'react';
-import { ActivityIndicator, Animated, Pressable, Text, TextInput, View, type ViewProps } from 'react-native';
+import { Animated, Pressable, Text, TextInput, View, type ViewProps } from 'react-native';
 import { Check, ChevronLeft, ChevronRight, Search } from 'lucide-react-native';
 import { styles } from '../styles';
 import { AppSheetModal } from './AppSheetModal';
@@ -8,6 +9,8 @@ export type SelectionPickerOption = {
   key: string;
   title: string;
   meta?: string;
+  metaLines?: number;
+  disabled?: boolean;
   leading?: ReactNode;
   muted?: boolean;
   selected?: boolean;
@@ -26,6 +29,7 @@ export function SelectionPickerModal({
   onChangeSearch,
   onClose,
   options,
+  topOptions = [],
   search,
   searchPlaceholder,
   subtitle,
@@ -41,6 +45,7 @@ export function SelectionPickerModal({
   onChangeSearch?: (value: string) => void;
   onClose: () => void;
   options: SelectionPickerOption[];
+  topOptions?: SelectionPickerOption[];
   search?: string;
   searchPlaceholder?: string;
   subtitle?: string;
@@ -71,13 +76,13 @@ export function SelectionPickerModal({
           </Pressable>
         ) : null}
 
-        {isLoading ? <ActivityIndicator color="#111" style={styles.selectionPickerLoading} /> : null}
-        {!isLoading && options.length ? (
+        {topOptions.length || (!isLoading && options.length) ? (
           <View accessibilityRole="list" style={styles.selectionPickerList}>
-            {options.map((option) => (
+            {[...topOptions, ...(isLoading ? [] : options)].map((option) => (
               <Pressable
                 accessibilityRole="button"
-                accessibilityState={{ selected: Boolean(option.selected) }}
+                accessibilityState={{ selected: Boolean(option.selected), disabled: Boolean(option.disabled) }}
+                disabled={option.disabled}
                 key={option.key}
                 onPress={option.onPress}
                 style={[
@@ -88,7 +93,7 @@ export function SelectionPickerModal({
                 {option.leading}
                 <View style={styles.selectionPickerCopy}>
                   <Text style={[styles.selectionPickerTitle, option.muted && styles.selectionPickerTitleMuted]}>{option.title}</Text>
-                  {option.meta ? <Text numberOfLines={1} style={styles.selectionPickerMeta}>{option.meta}</Text> : null}
+                  {option.meta ? <Text numberOfLines={option.metaLines ?? 1} style={styles.selectionPickerMeta}>{option.meta}</Text> : null}
                 </View>
                 {option.selected ? <Check color="#111" size={20} strokeWidth={2.1} /> : null}
                 {!option.selected && option.navigates ? <ChevronRight color="#8e99a4" size={20} strokeWidth={1.8} /> : null}
@@ -96,6 +101,7 @@ export function SelectionPickerModal({
             ))}
           </View>
         ) : null}
+        {isLoading ? <LoadingIndicator style={styles.selectionPickerLoading} /> : null}
         {!isLoading && !options.length ? <Text style={styles.selectionPickerEmpty}>{emptyText}</Text> : null}
       </Animated.View>
     </AppSheetModal>
