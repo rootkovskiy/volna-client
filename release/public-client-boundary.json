@@ -63,6 +63,7 @@
     ,"VOLNA_ENV"
   ],
   "requiredArchiveRootFiles": [
+    ".dockerignore",
     ".gitattributes",
     ".gitignore",
     ".github/dependabot.yml",

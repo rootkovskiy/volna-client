@@ -2,15 +2,24 @@ FROM node:24.19.0-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba
 WORKDIR /source
 RUN npm install --global pnpm@11.7.0
 COPY . .
-RUN CI=true PNPM_CONFIG_IGNORE_SCRIPTS=true pnpm --filter @volna/key-directory-witness deploy --prod /deploy \
+# pnpm 11 preserves an integrity-bearing file: tarball's root-relative path in
+# its deploy lockfile. Include that exact pinned archive in the copied package
+# until the frozen deployment has installed it; do not re-resolve dependencies.
+RUN mkdir -p packages/volna-key-directory-witness/packages/volna-matrix-native/sdk \
+ && cp packages/volna-matrix-native/sdk/matrix-org-matrix-sdk-crypto-wasm-18.5.0-volna.2.tgz \
+    packages/volna-key-directory-witness/packages/volna-matrix-native/sdk/ \
+ && CI=true PNPM_CONFIG_IGNORE_SCRIPTS=true pnpm --filter @volna/key-directory-witness deploy --prod /deploy \
  && cp packages/volna-messaging-client/LICENSE /deploy/LICENSE \
- && rm -rf /deploy/test /deploy/Dockerfile /deploy/pnpm-lock.yaml /deploy/pnpm-workspace.yaml \
+ && rm -rf /deploy/packages /deploy/test /deploy/Dockerfile /deploy/pnpm-lock.yaml /deploy/pnpm-workspace.yaml \
  && for package_root in /deploy/node_modules/.pnpm/@volna+messaging-client*/node_modules/@volna/messaging-client; do \
       rm -rf "$package_root/rust" "$package_root/scripts" "$package_root/test" \
         "$package_root/pnpm-lock.yaml" "$package_root/pnpm-lock.public.yaml" "$package_root/tsconfig.json"; \
     done
 
 FROM node:24.19.0-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runtime
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends libpcre2-8-0=10.42-1+deb12u1 \
+ && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build --chown=node:node /deploy/ ./

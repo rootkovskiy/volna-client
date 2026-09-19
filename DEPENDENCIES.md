@@ -123,12 +123,19 @@ PostgreSQL compare-and-swap race against an isolated PostgreSQL 17 service, buil
 the image, and fails on fixed high or critical container findings reported by the
 pinned Trivy action.
 
+The runtime also pins Debian Security `libpcre2-8-0=10.42-1+deb12u1`, fixing
+CVE-2026-86145, CVE-2026-89157 and CVE-2026-89161 in the base image. The frozen
+pnpm 11 deployment temporarily carries the exact local Matrix WASM tarball at
+its root-relative resolution path; that build input is removed after installation.
+The dependency graph and integrity checks are retained. The public `.dockerignore`
+excludes host dependencies, build output, environment files and private Git data.
+
 The independently deployable key-transparency log pins Tessera `v1.0.4` and its
 complete Go module graph in `packages/volna-key-transparency-log/go.sum`. The
 release SBOM includes those Go modules in addition to the client npm lock. Its
-multi-stage container uses digest-pinned Go `1.26.5` and distroless non-root
+multi-stage container uses digest-pinned Go `1.26.8` and distroless non-root
 images, while explicitly selecting OpenTelemetry `1.41.0` and
-`golang.org/x/crypto` `0.52.0` over older vulnerable transitive resolutions. CI
+`golang.org/x/crypto` `0.55.0` and `golang.org/x/mod` `0.40.0` over older vulnerable resolutions. CI
 builds and scans the final static image and must report zero fixable HIGH/CRITICAL
 findings.
 

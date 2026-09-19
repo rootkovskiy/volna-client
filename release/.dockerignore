@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/target
+**/.gradle
+**/.cxx
+.git
+.logs
+.tmp
+**/.env
+**/.env.*
+*.log
