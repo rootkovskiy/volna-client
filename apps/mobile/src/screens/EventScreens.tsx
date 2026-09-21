@@ -14,6 +14,7 @@ import { FlashList } from '@shopify/flash-list';
 import { ScreenTopBar } from '../components/navigation';
 import { PostFeed } from '../components/PostFeed';
 import { LocationPickerModal } from '../components/LocationPickerModal';
+import { useCatalogLocation } from '../components/CatalogLocationProvider';
 import { EntityShareModal } from '../components/EntityShareModal';
 import { AppRefreshControl } from '../components/AppRefreshControl';
 import { AppSheetModal } from '../components/AppSheetModal';
@@ -119,13 +120,19 @@ export function EventsScreen({
   const [showPastEvents, setShowPastEvents] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [pastNextCursor, setPastNextCursor] = useState<string | null>(null);
-  const [filters, setFilters] = useScreenChoice<EventFilters>('events:filters', () => ({
+  const [catalogLocation, selectCatalogLocation] = useCatalogLocation();
+  const [storedFilters, setFilters] = useScreenChoice<EventFilters>('events:filters', () => ({
     ...emptyEventFilters,
     cityId: defaultLocation.cityId ?? '',
     cityName: defaultLocation.cityName,
     countryCode: defaultLocation.countryCode ?? '',
     countryName: defaultLocation.countryName,
   }));
+  const filters = useMemo(() => catalogLocation ? {
+    ...storedFilters,
+    ...catalogLocation,
+    venue: storedFilters.venue?.cityId === catalogLocation.cityId ? storedFilters.venue : null,
+  } : storedFilters, [storedFilters, catalogLocation]);
   const [activeListTab, setActiveListTab] = useScreenChoice<EventListTab>('events:tab', 'all');
   const [selectedCategory, setSelectedCategory] = useScreenChoice<EventCategory | null>('events:category', null);
   const [categoryCounts, setCategoryCounts] = useState<Record<EventCategory, number> | null>(null);
@@ -144,6 +151,7 @@ export function EventsScreen({
   useEffect(() => () => { eventRequest.current++; pastRequest.current++; }, []);
 
   useEffect(() => {
+    if (catalogLocation) return;
     let isCancelled = false;
     const detectNearbyCity = async () => {
       try {
@@ -176,7 +184,7 @@ export function EventsScreen({
     };
     void detectNearbyCity();
     return () => { isCancelled = true; };
-  }, []);
+  }, [catalogLocation]);
 
   const loadEvents = useCallback(async (reset = true, source: 'initial' | 'refresh' = 'initial') => {
     if (!reset && (!nextCursor || eventBusy.current)) return;
@@ -453,13 +461,14 @@ export function EventsScreen({
       />
       </MotionSurface>
       </CatalogBackArea>
-      {selectedCategory ? <EventFiltersModal authToken={authToken} category={selectedCategory} initialValue={filters} isVisible={isFiltersOpen} onApply={(value) => { if (value.cityId !== filters.cityId || value.countryCode !== filters.countryCode) locationWasManuallyChangedRef.current = true; setFilters(value); setIsFiltersOpen(false); }} onClose={() => setIsFiltersOpen(false)} onNotify={onNotify} /> : null}
+      {selectedCategory ? <EventFiltersModal authToken={authToken} category={selectedCategory} initialValue={filters} isVisible={isFiltersOpen} onApply={(value) => { if (value.cityId !== filters.cityId || value.countryCode !== filters.countryCode) { locationWasManuallyChangedRef.current = true; selectCatalogLocation(value); } setFilters(value); setIsFiltersOpen(false); }} onClose={() => setIsFiltersOpen(false)} onNotify={onNotify} /> : null}
       {activeListTab === 'all' ? <LocationPickerModal
         initialCountryName={filters.countryName || undefined}
         isVisible={isCatalogLocationPickerOpen}
         onClose={() => setIsCatalogLocationPickerOpen(false)}
         onSelect={(location) => {
           locationWasManuallyChangedRef.current = true;
+          selectCatalogLocation(location);
           setFilters((current) => ({
             ...current,
             cityId: location.cityId,

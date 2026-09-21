@@ -332,6 +332,7 @@
       "components/AppSheetModal.tsx",
       "components/SelectionPickerModal.tsx",
       "components/LocationPickerModal.tsx",
+      "components/CatalogLocationProvider.tsx",
       "components/EntityShareModal.tsx",
       "components/ReleaseShareModal.tsx"
     ],
@@ -344,7 +345,7 @@
       "share",
       "delete"
     ],
-    "note": "Системный share, геолокация и отправка через реальные диалоги не вызываются. Их оболочки и действия показаны общими компонентами.",
+    "note": "Системный share, геолокация и отправка через реальные диалоги не вызываются. Пример location использует настоящий CatalogLocationProvider и пересоздаёт локальный селектор при смене вкладки, сохраняя общий город.",
     "notShown": [
       "Музыкальная отправка, редактор репоста и выбор автора",
       "Ошибки определения города; системный share и разрешения ОС вне HTML"

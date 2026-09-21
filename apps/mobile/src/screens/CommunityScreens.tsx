@@ -23,6 +23,7 @@ import { PostFeed, usePostAvailability } from '../components/PostFeed';
 import { FollowListModal, MutualFollowersSummary } from '../components/FollowListModal';
 import { MentionText } from '../components/MentionText';
 import { LocationPickerModal } from '../components/LocationPickerModal';
+import { useCatalogLocation } from '../components/CatalogLocationProvider';
 import { CountryPickerModal, SelectionPickerModal, type SelectionPickerOption } from '../components/SelectionPickerModal';
 import { AppRefreshControl } from '../components/AppRefreshControl';
 import { AvatarEditButton } from '../components/AvatarEditButton';
@@ -823,27 +824,34 @@ export function LocationsScreen({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selectedLocationCategory, setSelectedLocationCategory] = useScreenChoice<LocationCategory | null>('locations:category', null);
   const [locationCategoryCounts, setLocationCategoryCounts] = useState<Record<LocationCategory, number> | null>(null);
-  const profileCatalogLocation: CatalogLocation = {
+  const [catalogLocation, selectCatalogLocation] = useCatalogLocation();
+  const [communityLocation, selectCommunityLocation] = useCatalogLocation('communities');
+  const profileCatalogLocation: CatalogLocation = catalogLocation ?? {
     cityId: defaultLocation.cityId ?? '',
     cityName: defaultLocation.cityName,
     countryCode: defaultLocation.countryCode ?? '',
     countryName: defaultLocation.countryName,
   };
-  const [locationFilters, setLocationFilters] = useScreenChoice('locations:filters', {
+  const [storedLocationFilters, setLocationFilters] = useScreenChoice('locations:filters', {
     ...profileCatalogLocation,
     types: [] as string[],
   });
+  const selectedCatalogLocation = activeCatalogTab === 'locations' ? catalogLocation : communityLocation;
+  const locationFilters = useMemo(() => selectedCatalogLocation
+    ? { ...storedLocationFilters, ...selectedCatalogLocation }
+    : storedLocationFilters, [storedLocationFilters, selectedCatalogLocation]);
   const activeCatalogTabRef = useRef(activeCatalogTab);
   const locationsManuallyChangedRef = useRef(false);
   const catalogLocationsRef = useRef<Record<'locations' | 'communities', CatalogLocation>>({
     locations: profileCatalogLocation,
-    communities: { cityId: '', cityName: '', countryCode: '', countryName: '' },
+    communities: communityLocation ?? { cityId: '', cityName: '', countryCode: '', countryName: '' },
   });
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [isLocationFiltersOpen, setIsLocationFiltersOpen] = useState(false);
   const [followMutationUsernames, setFollowMutationUsernames] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
+    if (catalogLocation) return;
     let cancelled = false;
     const detectNearbyCity = async () => {
       try {
@@ -857,7 +865,7 @@ export function LocationsScreen({
           .filter((city) => Number.isFinite(city.latitude) && Number.isFinite(city.longitude))
           .map((city) => ({ city, distance: catalogDistanceKilometers(position.latitude, position.longitude, city.latitude!, city.longitude!) }))
           .sort((left, right) => left.distance - right.distance)[0];
-        if (!nearest || nearest.distance > nearbyCatalogCityRadiusKilometers || cancelled) return;
+        if (!nearest || nearest.distance > nearbyCatalogCityRadiusKilometers || cancelled || locationsManuallyChangedRef.current) return;
         const detected = {
           cityId: nearest.city.id,
           cityName: nearest.city.name,
@@ -872,7 +880,7 @@ export function LocationsScreen({
     };
     void detectNearbyCity();
     return () => { cancelled = true; };
-  }, []);
+  }, [catalogLocation]);
 
   const normalizedQuery = query.trim();
   const isSearching = normalizedQuery.length > 0;
@@ -1222,6 +1230,7 @@ export function LocationsScreen({
         onClose={() => setIsLocationPickerOpen(false)}
         onSelect={(location) => {
           if (activeCatalogTab === 'locations') locationsManuallyChangedRef.current = true;
+          (activeCatalogTab === 'locations' ? selectCatalogLocation : selectCommunityLocation)(location);
           catalogLocationsRef.current[activeCatalogTab] = {
             cityId: location.cityId,
             cityName: location.cityName,
