@@ -8,6 +8,7 @@ import { DrawerDismissArea } from './src/components/DrawerDismissArea';
 import { useReducedMotion } from '@volna/messaging-client/ui-motion';
 import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { ScreenContinuityProvider } from './src/components/ScreenContinuity';
+import { CatalogLocationProvider } from './src/components/CatalogLocationProvider';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Sentry } from './src/monitoring/sentry';
@@ -2193,7 +2194,7 @@ function MaintenanceScreen({ onRetry }: { onRetry: () => void }) {
 }
 
 function MainApp(props: Parameters<typeof MainAppContent>[0]) {
-  return <AppTopBarProvider><ScreenContinuityProvider key={`${props.ownAccountId}:${props.navigationReset}`}><MainAppContent {...props} /></ScreenContinuityProvider></AppTopBarProvider>;
+  return <AppTopBarProvider><CatalogLocationProvider key={props.ownAccountId}><ScreenContinuityProvider key={`${props.ownAccountId}:${props.navigationReset}`}><MainAppContent {...props} /></ScreenContinuityProvider></CatalogLocationProvider></AppTopBarProvider>;
 }
 
 function MainAppContent({
