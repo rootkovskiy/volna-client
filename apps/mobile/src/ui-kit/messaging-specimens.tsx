@@ -1,20 +1,39 @@
-import { useState, type ComponentProps } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { useRef, useState, type ComponentProps } from 'react';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { Paperclip, Send, ShieldAlert } from 'lucide-react-native';
-import { Avatar, ChatHistoryUnavailable, ChatHistoryPagination, DraftAttachment, MessageRow, SearchResult, MatrixSecurityFlow, messagingStyles as s } from '@volna/messaging-client/react-native-messages';
+import { Avatar, ChatHistoryUnavailable, ChatHistoryPagination, useChatHistoryPagination, DraftAttachment, MessageRow, SearchResult, MatrixSecurityFlow, messagingStyles as s } from '@volna/messaging-client/react-native-messages';
 import type { MessagingAttachment, MessagingMessage } from '@volna/messaging-client/messaging-surface-controller';
 import { Action, Stack, Row, Label, noop, type Specimen, type DemoProps } from './demo-shared';
 
 const attachment: MessagingAttachment = { kind: 'entity', entityType: 'event', id: 'ui-kit-event', snapshot: { title: 'Вечер независимой музыки', startsAt: '2030-09-21T17:00:00Z' } };
 function HistoryPagination() {
-  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const busy = useRef(false);
+  const load = () => {
+    if (busy.current || page >= 3) return;
+    busy.current = true;
+    // The first page contains only fictional service events: no layout change.
+    setPage(value => value + 1);
+    setFailed(false);
+    busy.current = false;
+  };
+  const pager = useChatHistoryPagination({ enabled: page < 3 && !failed, revision: page, canLoad: () => !busy.current, load });
   return <Stack>
-    <Label>Локальный пример последней страницы истории</Label>
-    {hasMore ? <ChatHistoryPagination busy={false} onLoad={() => setHasMore(false)} /> : <Label>Начало истории: действие подгрузки скрыто.</Label>}
-    {!hasMore ? <Action secondary onPress={() => setHasMore(true)}>Повторить пример</Action> : null}
-    <Label>Загрузка и ошибка — отдельные состояния</Label>
-    <ChatHistoryPagination busy onLoad={noop} />
-    <ChatHistoryPagination busy={false} error onLoad={() => setHasMore(true)} />
+    <Label>Короткая история заполняется автоматически, включая пустую промежуточную страницу.</Label>
+    <ScrollView style={{ height: 160, flexGrow: 0 }} contentContainerStyle={s.messages}
+      onLayout={({ nativeEvent }) => pager.onLayout(nativeEvent.layout.height)}
+      onContentSizeChange={(_width, height) => pager.onContentSizeChange(height)}
+      onScroll={({ nativeEvent: e }) => pager.onScroll(e.contentOffset.y, e.contentSize.height, e.layoutMeasurement.height)} scrollEventThrottle={32}>
+      <ChatHistoryPagination busy={false} error={failed} onLoad={load} />
+      {page >= 2 ? <Text>Привет! Увидимся вечером.</Text> : null}
+      <Text>Договорились.</Text>
+    </ScrollView>
+    <Label>{page === 3 ? 'Начало истории: кнопки нет.' : `Пройдено страниц: ${page}`}</Label>
+    <Action secondary onPress={() => { setPage(0); setFailed(false); }}>Повторить пример</Action>
+    <Action secondary onPress={() => { setPage(0); setFailed(true); }}>Ошибка — пример</Action>
+    <Label>Во время запроса — только индикатор, без кнопки.</Label>
+    <View style={{ height: 44 }}><ChatHistoryPagination busy onLoad={noop} /></View>
   </Stack>;
 }
 function Dialogs({ notify }: DemoProps) {
@@ -37,7 +56,7 @@ function Security({ notify, initialStep = 'home', verify = false, qr = false }: 
 }
 export const messagingSpecimens: Specimen[] = [
   { id: 'chat-history-unavailable', category: 'Сообщения', title: 'Недоступная история после восстановления', description: 'Ключи отсутствуют или SDK не подтвердил исходного отправителя. Успешный импорт ключа не скрывает предупреждение. Только локальный пример.', source: 'ChatHistoryUnavailable', render: p => <ChatHistoryUnavailable onRecover={() => p.notify('Переход к восстановлению — только пример')} /> },
-  { id: 'chat-history', category: 'Сообщения', title: 'Загрузка предыдущих сообщений', description: 'Общий Web/native-компонент: следующая страница, загрузка, повтор и начало истории без кнопки. Только локальное демонстрационное состояние, без сети и ключей.', source: 'ChatHistoryPagination', render: () => <HistoryPagination /> },
+  { id: 'chat-history', category: 'Сообщения', title: 'Загрузка предыдущих сообщений', description: 'Общие Web/native-компонент и планировщик: автозаполнение короткого чата, загрузка при прокрутке вверх и повтор только после сбоя. Локальная композиция без сети и ключей.', source: 'ChatHistoryPagination / useChatHistoryPagination', render: () => <HistoryPagination /> },
   { id: 'chat-list', category: 'Сообщения', title: 'Список диалогов', description: 'Превью, время, онлайн, непрочитанные и обновление истории. Композиция публичных стилей.', source: 'messagingStyles.thread* / Avatar', render: p => <Dialogs {...p} /> },
   { id: 'chat-composer', category: 'Сообщения', title: 'Поле сообщения и черновик', description: 'Однострочная капсула, вложение и ошибка отправки без потери текста.', source: 'messagingStyles.inputShell / messageInput / DraftAttachment', render: () => <Composer /> },
   { id: 'chat-attachments', category: 'Сообщения', title: 'Карточки вложений', description: 'Событие, профиль и сообщество внутри сообщения.', source: 'MessageRow / AttachmentCard', render: p => <Attachments {...p} /> },
