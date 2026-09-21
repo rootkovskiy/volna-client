@@ -8,6 +8,8 @@ import { SearchField, searchFieldStyles } from './search-field';
 import { LoadingIndicator } from './loading';
 import { MotionDisclosure, useReducedMotion } from './ui-motion';
 import { useWebChatViewport } from './web-chat-viewport';
+import { useChatHistoryPagination } from './chat-history-pagination';
+export { useChatHistoryPagination } from './chat-history-pagination';
 import { isAppForeground, subscribeAppActivity } from './app-activity';
 import { useChatActivity } from './use-chat-activity';
 import { formatPresence } from './chat-activity.mjs';
@@ -505,8 +507,10 @@ export function ChatHistoryUnavailable({ onRecover }: { onRecover?: () => void }
 }
 
 export function ChatHistoryPagination({ busy, error, onLoad }: { busy: boolean; error?: boolean; onLoad(): void }) {
-  return <Pressable accessibilityRole="button" accessibilityLabel={error ? 'Повторить загрузку истории' : 'Загрузить предыдущие сообщения'} accessibilityState={{ disabled: busy, busy }} disabled={busy} onPress={onLoad} style={ui.secondaryButton}>
-    {busy ? <LoadingIndicator /> : <Text style={ui.secondaryButtonText}>{error ? 'Повторить загрузку истории' : 'Предыдущие сообщения'}</Text>}
+  if (busy) return <View pointerEvents="none" style={ui.historyLoading}><LoadingIndicator accessibilityLabel="Загрузка истории" /></View>;
+  if (!error) return null;
+  return <Pressable accessibilityRole="button" accessibilityLabel="Повторить загрузку истории" onPress={onLoad} style={ui.secondaryButton}>
+    <Text style={ui.secondaryButtonText}>Повторить загрузку истории</Text>
   </Pressable>;
 }
 
@@ -584,7 +588,8 @@ function ChatScreenContent({
   const historyRowY = useRef(new Map<string, number>());
   const historyRows = useRef(new Map<string, View>());
   const historyAnchor = useRef<{ id: string; y: number; offset: number } | null>(null);
-  const historyScrollArmed = useRef(false);
+  const historyEmptyPages = useRef(0);
+  const historyOperation = useRef(0);
   const reduceMotion = useReducedMotion();
   const safeAreaInsets = useSafeAreaInsets();
   const webViewport = useWebChatViewport(ui.composer.backgroundColor);
@@ -619,14 +624,16 @@ function ChatScreenContent({
     }
     finally { if (revision === openRevision.current) setLoading(false); }
   }, [accountId, controller, partnerUsername]);
-  const loadEarlier = async () => {
+  const loadEarlier = async (retry = false) => {
     if (!thread?.hasMoreHistory || historyBusy.current) return;
     historyBusy.current = true;
-    historyScrollArmed.current = false;
-    nearBottom.current = false;
+    const operation = ++historyOperation.current;
+    if (retry) historyEmptyPages.current = 0;
+    const keepBottom = nearBottom.current && historyPager.isShort();
+    if (!keepBottom) nearBottom.current = false;
     const revision = ++openRevision.current;
     const first = thread.messages[0];
-    const anchor = first && historyRowY.current.has(first.id)
+    const anchor = !keepBottom && first && historyRowY.current.has(first.id)
       ? { id: first.id, y: historyRowY.current.get(first.id)!, offset: historyOffset.current } : null;
     setHistoryLoading(true); setHistoryError(false);
     try {
@@ -637,16 +644,48 @@ function ChatScreenContent({
       historyAnchor.current = next.messages.some(message => message.id === anchor?.id)
         && next.messages[0]?.id !== first?.id && anchor
         ? { ...anchor, offset: historyOffset.current } : null;
+      const addedOlder = first ? next.messages.findIndex(message => message.id === first.id) > 0 : next.messages.length > 0;
+      historyEmptyPages.current = addedOlder || !next.hasMoreHistory ? 0 : historyEmptyPages.current + 1;
+      // A filtered or stuck cursor cannot generate an unbounded background loop.
+      // Keep the SDK cursor intact; an explicit retry admits another bounded burst.
+      if (historyEmptyPages.current >= 5) setHistoryError(true);
       setThread(next);
     } catch {
       if (revision === openRevision.current) setHistoryError(true);
     } finally {
-      if (revision === openRevision.current) {
+      if (operation === historyOperation.current) {
         historyBusy.current = false; setHistoryLoading(false);
         if (historyRefreshQueued.current) { historyRefreshQueued.current = false; void open(false, false); }
       }
     }
   };
+  const historyPager = useChatHistoryPagination({
+    enabled: Boolean(thread?.hasMoreHistory) && !historyLoading && !historyError && !loading,
+    revision: thread,
+    canLoad: () => isAppForeground() && !historyBusy.current && !historyAnchor.current,
+    load: () => { void loadEarlier(); },
+  });
+  function restoreHistoryPosition() {
+    const anchor = historyAnchor.current;
+    const row = anchor && historyRows.current.get(anchor.id);
+    const content = scrollRef.current?.getInnerViewNode();
+    if (anchor && row && content) row.measureLayout(content, (_x, y) => {
+      if (historyAnchor.current !== anchor) return;
+      historyAnchor.current = null;
+      historyRowY.current.set(anchor.id, y);
+      const offset = Math.max(0, anchor.offset + y - anchor.y);
+      historyOffset.current = offset;
+      historyPager.restoreOffset(offset);
+      scrollRef.current?.scrollTo({ y: offset, animated: false });
+    }, () => { if (historyAnchor.current === anchor) { historyAnchor.current = null; historyPager.check(); } });
+    else if (anchor && !row) { historyAnchor.current = null; historyPager.check(); }
+    else if (nearBottom.current && !historyBusy.current && !anchor) scrollRef.current?.scrollToEnd({ animated: !reduceMotion });
+  }
+  useEffect(() => {
+    // Empty/filtered pages and equal-height replacements may not emit a size event.
+    const frame = requestAnimationFrame(restoreHistoryPosition);
+    return () => cancelAnimationFrame(frame);
+  }, [thread]);
   const [activityRevision, setActivityRevision] = useState(0);
   const [chatStateRevision, setChatStateRevision] = useState(0);
   const chatActivity = useChatActivity(controller, accountId, thread ? [thread.id] : [], chatStateRevision);
@@ -666,10 +705,11 @@ function ChatScreenContent({
   useEffect(() => {
     historyBusy.current = false; historyRefreshQueued.current = false;
     historyAnchor.current = null; historyRowY.current.clear(); historyRows.current.clear();
-    historyOffset.current = 0; historyScrollArmed.current = false;
+    historyOffset.current = 0; historyEmptyPages.current = 0; historyOperation.current++;
+    historyPager.reset();
     setHistoryLoading(false); setHistoryError(false);
     void open(true);
-    return () => { openRevision.current++; historyAnchor.current = null; };
+    return () => { openRevision.current++; historyOperation.current++; historyAnchor.current = null; };
   }, [open]);
 
   useEffect(() => {
@@ -921,27 +961,21 @@ function ChatScreenContent({
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={ui.chatShell}>
       <View style={ui.messageHistory}>
       <ComposerFade />
-      <ScrollView contentContainerStyle={ui.messages} onLayout={() => { if (nearBottom.current) scrollRef.current?.scrollToEnd({ animated: false }); }} onScroll={({ nativeEvent }) => {
+      <ScrollView contentContainerStyle={ui.messages} onLayout={({ nativeEvent }) => {
+        historyPager.onLayout(nativeEvent.layout.height);
+        if (nearBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+      }} onScroll={({ nativeEvent }) => {
         const offset = nativeEvent.contentOffset.y;
         historyOffset.current = offset;
         const next = nativeEvent.contentSize.height - offset - nativeEvent.layoutMeasurement.height < 80;
         if (next && !nearBottom.current) setReadRevision(value => value + 1);
         nearBottom.current = next;
-        if (offset > 120) historyScrollArmed.current = true;
-        if (offset < 80 && historyScrollArmed.current && !historyError) void loadEarlier();
-      }} scrollEventThrottle={32} onContentSizeChange={() => {
-        const anchor = historyAnchor.current;
-        const row = anchor && historyRows.current.get(anchor.id);
-        const content = scrollRef.current?.getInnerViewNode();
-        if (anchor && row && content) row.measureLayout(content, (_x, y) => {
-          if (historyAnchor.current !== anchor) return;
-          historyAnchor.current = null;
-          historyRowY.current.set(anchor.id, y);
-          scrollRef.current?.scrollTo({ y: Math.max(0, anchor.offset + y - anchor.y), animated: false });
-        }, () => { if (historyAnchor.current === anchor) historyAnchor.current = null; });
-        else if (nearBottom.current && !historyBusy.current && !anchor) scrollRef.current?.scrollToEnd({ animated: !reduceMotion });
+        historyPager.onScroll(offset, nativeEvent.contentSize.height, nativeEvent.layoutMeasurement.height);
+      }} scrollEventThrottle={32} onContentSizeChange={(_width, height) => {
+        historyPager.onContentSizeChange(height);
+        restoreHistoryPosition();
       }} ref={scrollRef} showsVerticalScrollIndicator={false} style={[ui.messageScroll, Platform.OS === 'web' ? { overflowAnchor: 'none' } as never : null]}>
-        {thread.hasMoreHistory ? <ChatHistoryPagination busy={historyLoading} error={historyError} onLoad={() => void loadEarlier()} /> : null}
+        {thread.hasMoreHistory ? <ChatHistoryPagination busy={historyLoading} error={historyError} onLoad={() => void loadEarlier(true)} /> : null}
         {thread.hasUndecryptableEvents ? <ChatHistoryUnavailable onRecover={onOpenMessageSecurity} /> : null}
         {thread.messages.map((message, index) => { const interactive = thread.encryptionMode !== 'MATRIX_V1' || message.securityMode === 'e2ee'; return <View key={message.id} ref={node => { if (node) historyRows.current.set(message.id, node); else historyRows.current.delete(message.id); }} onLayout={({ nativeEvent }) => {
           const y = nativeEvent.layout.y;
@@ -1378,6 +1412,7 @@ const ui = StyleSheet.create({
   personRow: { minHeight: 62, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 11 }, personCopy: { flex: 1, minWidth: 0 }, personName: { color: '#111', fontSize: 15, lineHeight: 20, fontWeight: '600' }, personUsername: { color: '#7d8894', fontSize: 12, lineHeight: 17 }, hint: { paddingVertical: 24, color: '#7d8894', fontSize: 14, textAlign: 'center' }, sendCircle: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' },
   chatIdentity: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }, chatIdentityCopy: { flex: 1, minWidth: 0 }, chatUsername: { flexShrink: 1, marginTop: -1, color: '#6f7b86', fontSize: 12 }, securityBanner: { minHeight: 40, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, securityBannerCopy: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }, securityBannerAction: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 2 }, securityBannerActionText: { color: '#53606c', fontSize: 12, lineHeight: 17, fontWeight: '600' }, securityBannerProtected: { backgroundColor: '#e8edf2' }, securityBannerText: { flexShrink: 1, color: '#53606c', fontSize: 12, lineHeight: 17 }, syncErrorBanner: { minHeight: 40, paddingHorizontal: 16, paddingVertical: 7, backgroundColor: '#fff1cf', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, syncErrorText: { flexShrink: 1, color: '#7d4e00', fontSize: 12, lineHeight: 17, textAlign: 'center' },
   matrixChatPrompt: { marginHorizontal: 12, marginTop: 10, padding: 12, borderRadius: 10, backgroundColor: '#f3f5f7', gap: 10 }, matrixChatPromptHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 }, matrixChatPromptIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' }, matrixChatPromptTitle: { color: '#111', fontSize: 14, lineHeight: 19, fontWeight: '600' }, matrixChatPromptText: { marginTop: 2, color: '#53606c', fontSize: 12, lineHeight: 17 }, matrixChatPromptButton: { minHeight: 42, borderRadius: 21, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 }, matrixChatPromptButtonText: { color: '#fff', fontSize: 13, lineHeight: 18, fontWeight: '600' },
+  historyLoading: { position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center', zIndex: 2 },
   blocked: { flex: 1, padding: 28, alignItems: 'center', justifyContent: 'center', gap: 10 }, blockedTitle: { color: '#111', fontSize: 18, lineHeight: 24, fontWeight: '600', textAlign: 'center' }, blockedText: { color: '#6f7b86', fontSize: 14, lineHeight: 20, textAlign: 'center' }, chatShell: { flex: 1, position: 'relative' }, messageHistory: { flex: 1, minHeight: 0, position: 'relative' }, messageScroll: { flex: 1, zIndex: 1 }, messages: { flexGrow: 1, justifyContent: 'flex-end', paddingHorizontal: 12, paddingTop: 14, paddingBottom: 34, gap: 4 }, daySeparator: { alignItems: 'center', paddingVertical: 10 }, dayText: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14, overflow: 'hidden', color: '#6f7b86', backgroundColor: '#f3f5f7', fontSize: 12 },
   messageRow: { flexDirection: 'row', justifyContent: 'flex-start' }, messageRowOwn: { justifyContent: 'flex-end' }, messageStack: { maxWidth: '82%', alignItems: 'flex-start' }, messageStackOwn: { alignItems: 'flex-end' }, messageGroup: { borderRadius: 12, overflow: 'hidden' }, messageGroupOwn: { alignItems: 'flex-end' }, bubble: { minWidth: 74, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 6, borderRadius: 12, backgroundColor: '#f3f5f7' }, bubbleOwn: { backgroundColor: '#111' }, bubbleText: { color: '#111', fontSize: 16, lineHeight: 21 }, bubbleTextOwn: { color: '#fff' }, deletedText: { color: '#6f7b86', fontSize: 14, fontStyle: 'italic' }, timestamp: { marginTop: 3, color: '#8e99a4', fontSize: 10, textAlign: 'right' }, timestampOwn: { color: '#b9c3cd' }, ownText: { color: '#fff' }, ownMuted: { color: '#b9c3cd' },
   reactionRow: { marginTop: 3, flexDirection: 'row', flexWrap: 'wrap', gap: 4 }, reactionRowOwn: { justifyContent: 'flex-end' }, reactionChip: { minHeight: 28, paddingHorizontal: 9, borderRadius: 14, backgroundColor: '#f3f5f7', alignItems: 'center', justifyContent: 'center' }, reactionChipMine: { backgroundColor: '#e8edf2' }, reactionText: { fontSize: 13 },

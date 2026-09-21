@@ -57,10 +57,11 @@ test('history pagination coalesces, preserves a measured anchor and fences depar
   for (const outcome of ['success', 'moved', 'failure', 'departed']) {
     let resolve, reject, calls = 0, committed, error = false, refresh = 0;
     const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const historyOperation = { current: 0 };
     const historyBusy = { current: false }, openRevision = { current: 4 }, historyAnchor = { current: null }, historyOffset = { current: 15 };
     const engine = closures('react-native-messages.tsx', ['loadEarlier'], {
       thread: { hasMoreHistory: true, messages: [{ id: 'old' }] }, historyBusy, openRevision, historyAnchor,
-      historyScrollArmed: { current: true }, nearBottom: { current: true },
+      historyOperation, historyEmptyPages: { current: 0 }, historyPager: { isShort: () => false }, nearBottom: { current: true },
       historyRowY: { current: new Map([['old', 60]]) }, historyOffset,
       historyRefreshQueued: { current: true }, accountId: 'fixture', partnerUsername: 'peer',
       controller: { openThread: async (_account, _peer, options) => { calls++; assert.equal(options.markRead, false); assert.equal(options.loadEarlier, true); return pending; } },
@@ -70,7 +71,7 @@ test('history pagination coalesces, preserves a measured anchor and fences depar
     const first = engine.loadEarlier();
     await engine.loadEarlier(); assert.equal(calls, 1);
     if (outcome === 'moved') historyOffset.current = 70;
-    if (outcome === 'departed') openRevision.current++;
+    if (outcome === 'departed') { openRevision.current++; historyOperation.current++; }
     if (outcome === 'failure') reject(Error('transport')); else resolve({ messages: [{ id: 'older' }, { id: 'old' }] });
     await first;
     if (outcome === 'success' || outcome === 'moved') {
