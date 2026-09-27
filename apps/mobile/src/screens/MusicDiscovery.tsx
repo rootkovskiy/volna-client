@@ -94,7 +94,7 @@ export function MusicDiscovery({ query, personalItems, genres, onChangeGenres }:
       onLayout={pagination.onLayout} onContentSizeChange={pagination.onContentSizeChange} onScroll={pagination.onScroll}
       onEndReached={pagination.onEndReached} onEndReachedThreshold={0.35} scrollEventThrottle={32}
       refreshControl={<AppRefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); setRefresh((value) => value + 1); }} />}
-      ListHeaderComponent={!normalizedQuery ? <Text style={local.heading}>{genres.length ? 'Результаты поиска' : 'Последние добавления'}</Text> : null}
+      ListHeaderComponent={!normalizedQuery ? <Text style={local.heading}>{genres.length ? 'Результаты поиска' : 'Последние релизы'}</Text> : null}
       renderItem={({ item, index }) => <View>
         {item.sectionTitle ? <Text accessibilityRole="header" style={[local.heading, index > 0 && local.sectionHeading]}>{item.sectionTitle}</Text> : null}
         {item.kind === 'upload'

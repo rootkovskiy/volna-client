@@ -55,10 +55,10 @@ function CatalogPaginationDemo() {
     <Action secondary onPress={() => { failNext.current = true; }}>Ошибка следующей страницы</Action>
     <View style={{ height: 320 }}><FlatList data={rows} keyExtractor={item => String(item)}
       onLayout={pagination.onLayout} onContentSizeChange={pagination.onContentSizeChange} onScroll={pagination.onScroll} onEndReached={pagination.onEndReached} scrollEventThrottle={32}
-      renderItem={({ item }) => <View style={s.trackCard}><View style={s.trackCardCopy}><Text style={s.trackCardTitle}>Демонстрационный релиз {item + 1}</Text><Text style={s.trackCardArtist}>Исполнитель</Text></View></View>}
+      renderItem={({ item }) => <View style={s.trackCard}><View style={s.trackCardCopy}><Text style={s.trackCardTitle}>Демонстрационный релиз {item + 1}</Text><Text style={s.trackCardArtist}>Исполнитель · {new Date(Date.UTC(2030, 8, 27 - item)).toLocaleDateString('ru-RU', { timeZone: 'UTC' })}</Text></View></View>}
       ListFooterComponent={<CatalogPaginationFooter loading={loading} error={error} hasMore={page < 5} onContinue={pagination.continue} />} />
     </View>
-    <Text style={s.trackCardArtist}>Прокрутите список: страницы дополняются автоматически, ошибка сохраняет строки. Данные и задержка демонстрационные, без сетевых запросов.</Text>
+    <Text style={s.trackCardArtist}>Релизы идут от новых к старым по дате выпуска. Прокрутите список: страницы дополняются автоматически, ошибка сохраняет строки. Данные и задержка демонстрационные, без сетевых запросов.</Text>
   </Stack>;
 }
 function TrackStates() {
@@ -114,7 +114,7 @@ function PlaylistEditorDemo({ notify }: DemoProps) {
 }
 
 export const musicSpecimens: Specimen[] = [
-  { id: 'music-pagination', category: 'Музыка', title: 'Подгрузка каталога', description: 'Продолжение при прокрутке, пустая промежуточная страница и повтор после ошибки.', source: 'useCatalogPagination / CatalogPaginationFooter / styles.trackCard', render: () => <CatalogPaginationDemo /> },
+  { id: 'music-pagination', category: 'Музыка', title: 'Подгрузка каталога', description: 'Релизы по дате выпуска, продолжение при прокрутке, пустая промежуточная страница и повтор после ошибки.', source: 'useCatalogPagination / CatalogPaginationFooter / styles.trackCard', render: () => <CatalogPaginationDemo /> },
   { id: 'music-primary-editor', category: 'Музыка', title: 'Главный трек: расположение в редакторе', description: 'Превью над поиском и ссылкой. Отдельная иконка удаления справа, в том числе у недоступного трека.', source: 'PrimaryTrackPreviewCard / styles.primaryTrackSelectedPreview / styles.primaryTrackModeTabs', render: () => <PrimaryTrackEditorDemo /> },
   { id: 'playlist-editor', category: 'Музыка', title: 'Редактор плейлиста', description: 'Общая шапка, обложка и поле названия; воспроизведение отдельно от удаления. Нижний плеер и ошибка сохранения.', source: 'PlaylistEditorSurface / GlobalMiniPlayer / styles.trackCard*', render: p => <PlaylistEditorDemo {...p} /> },
   { id: 'radio-schedule', category: 'Музыка', title: 'Программа радиостанции', description: 'Группировка по дням, время эфира, название передачи и ведущий.', source: 'RadioScheduleList', render: () => <RadioScheduleList items={[{ id: 'demo-radio', title: 'Музыка после полуночи', hostName: 'Алекс', startsAt: '2030-09-21T17:00:00Z', endsAt: '2030-09-21T19:00:00Z', sourceUrl: null }]} /> },
