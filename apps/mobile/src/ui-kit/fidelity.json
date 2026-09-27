@@ -46,7 +46,7 @@
   "security-qr": "component",
   "security-details": "component",
   "radio-schedule": "component",
-  "music-mini": "component",
+  "music-mini": "composition",
   "music-full": "fragment",
   "music-radio": "component",
   "music-preview-states": "component",
