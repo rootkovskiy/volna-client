@@ -137,6 +137,20 @@ function bandcampTrackId(value) {
     ?? (/^\d{1,20}$/.test(value) ? value : null);
 }
 
+function isBandcampEmbeddedPlayerUrl(value) {
+  const source = httpUrl(value);
+  if (!source) return false;
+  try {
+    const url = new URL(source);
+    const host = url.hostname.toLowerCase().replace(/\.$/, '');
+    const firstPathSegment = url.pathname.split('/').filter(Boolean)[0]?.toLowerCase();
+    return (host === 'bandcamp.com' || host.endsWith('.bandcamp.com'))
+      && firstPathSegment === 'embeddedplayer';
+  } catch {
+    return false;
+  }
+}
+
 function stableMusicPreviewUrl(origin, provider, id, previewUrl, externalUrl, sourceTrackUrl, collectionId) {
   if (provider === 'bandcamp') {
     const trackId = bandcampTrackId(previewUrl) ?? bandcampTrackId(id);
@@ -144,7 +158,7 @@ function stableMusicPreviewUrl(origin, provider, id, previewUrl, externalUrl, so
     if (trackId && releaseUrl) {
       return apiResourceUrl(origin, `/music/bandcamp/stream?url=${encodeURIComponent(releaseUrl)}&trackId=${encodeURIComponent(trackId)}`);
     }
-    return /bandcamp\.com\/EmbeddedPlayer/i.test(previewUrl ?? '') ? null : apiResourceUrl(origin, previewUrl);
+    return isBandcampEmbeddedPlayerUrl(previewUrl) ? null : apiResourceUrl(origin, previewUrl);
   }
   if (provider === 'soundcloud') {
     const trackUrl = httpUrl(sourceTrackUrl) ?? httpUrl(externalUrl) ?? httpUrl(previewUrl);

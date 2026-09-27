@@ -238,6 +238,25 @@ test('Matrix music send converts stale provider widgets into stable credential-f
     previewUrl: null,
     externalUrl: 'https://soundcloud.com/artist/sets/mixes',
   });
+  for (const previewUrl of [
+    'https://bandcamp.com/EmbeddedPlayer/album=123/size=large/',
+    'https://artist.bandcamp.com/EmbeddedPlayer/track=123/size=large/',
+  ]) {
+    assert.deepEqual(controller.resolveMusicPlayback({
+      kind: 'music', provider: 'bandcamp', id: 'saved_release_without_track_id', title: 'Релиз', artist: 'Артист',
+      metadata: { previewUrl },
+    }), { previewUrl: null, externalUrl: null });
+  }
+  for (const lookalikePreviewUrl of [
+    'https://media.example/bandcamp.com/EmbeddedPlayer/audio.mp3',
+    'https://bandcamp.com.evil.example/EmbeddedPlayer/audio.mp3',
+    'https://bandcamp.com@evil.example/EmbeddedPlayer/audio.mp3',
+  ]) {
+    assert.deepEqual(controller.resolveMusicPlayback({
+      kind: 'music', provider: 'bandcamp', id: 'saved_release_without_track_id', title: 'Релиз', artist: 'Артист',
+      metadata: { previewUrl: lookalikePreviewUrl },
+    }), { previewUrl: lookalikePreviewUrl, externalUrl: null });
+  }
 });
 
 test('Matrix music send reuses existing VOLNA artwork without creating another cache object', async () => {
