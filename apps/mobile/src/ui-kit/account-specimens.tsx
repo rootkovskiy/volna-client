@@ -1,4 +1,6 @@
 import { ChatPrivacyControls } from '../components/ChatPrivacyControls';
+import { BandcampTrackingControl } from '../components/BandcampTrackingControl';
+import { SocialLinkInput } from '../screens/ProfileScreens';
 import type { MessagePrivacy } from '../types';
 import { useEditorAutosave } from '../components/useEditorAutosave';
 import { useState } from 'react';
@@ -63,6 +65,30 @@ function Privacy() {
       options={[{ label: 'Никто', value: 'nobody' }, { label: 'Все', value: 'everyone' }]} value={age} onChange={setAge} />
   </View>;
 }
+function BandcampTracking({ notify }: DemoProps) {
+  const [url, setUrl] = useState('https://example-label.bandcamp.com');
+  const [checked, setChecked] = useState(false);
+  const [fail, setFail] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const { status } = useEditorAutosave({
+    scopeKey: 'fictional-bandcamp', lifecycle: false, draftKey: JSON.stringify([url, checked]),
+    onInvalid: () => notify('Проверьте ссылку в примере'),
+    save: async () => {
+      await new Promise<void>(resolve => setTimeout(resolve, 350));
+      if (fail) { notify('Пример ошибки: настройка сохранена в черновике'); throw new Error('Fictional save failure'); }
+      setSaved(checked); return true;
+    },
+  });
+  return <Stack>
+    <EditorAutosaveStatus status={status} />
+    <SocialLinkInput kind="bandcamp" placeholder="Bandcamp" value={url} onChangeText={value => { setUrl(value); setChecked(false); }} />
+    {url.trim() ? <BandcampTrackingControl checked={checked} onChange={setChecked} /> : null}
+    <View style={s.settingsSwitchRow}><Label>Ошибка сохранения — пример</Label><VolnaSwitch accessibilityLabel="Ошибка сохранения — пример" value={fail} onValueChange={setFail} /></View>
+    <Text style={s.settingsHint}>Вымышленное сохранённое значение: {saved ? 'включено' : 'выключено'}. Серверные задания не создаются.</Text>
+    <Label>Без права управления музыкой</Label>
+    <BandcampTrackingControl checked disabled onChange={() => undefined} />
+  </Stack>;
+}
 function Switches() {
   const [selected, setSelected] = useState<string[]>([]);
   return <Stack>{['Невидимый режим', 'Показывать сохранённую музыку', 'Показывать загруженную музыку', 'Показывать год рождения'].map(label => <View key={label} style={s.settingsSwitchRow}><View style={s.settingsSwitchCopy}><Text style={s.settingsLabel}>{label}</Text><Text style={s.settingsHint}>Изменение применяется только в этом примере</Text></View><VolnaSwitch value={selected.includes(label)} onValueChange={value => setSelected(value ? [...selected, label] : selected.filter(x => x !== label))} /></View>)}</Stack>;
@@ -101,6 +127,7 @@ function Confirm({ notify, title = 'Удалить данные?' }: DemoProps &
   return <><Action secondary onPress={() => setOpen(true)}>Открыть подтверждение</Action><AppSheetModal isVisible={open} title={title} onClose={() => setOpen(false)} footer={<Row><Action secondary onPress={() => setOpen(false)}>Отмена</Action><Action onPress={() => { setOpen(false); notify('Подтверждено только в примере'); }}>Подтвердить</Action></Row>}><Text style={s.settingsHint}>Демонстрация подтверждения. Данные приложения останутся без изменений.</Text></AppSheetModal></>;
 }
 export const accountSpecimens: Specimen[] = [
+  { id: 'bandcamp-tracking', category: 'Сообщества', title: 'Отслеживание Bandcamp', description: 'Флажок под ссылкой лейбла, автосохранение и недоступное состояние. Только вымышленные данные.', source: 'BandcampTrackingControl / SocialLinkInput / useEditorAutosave', render: p => <BandcampTracking {...p} /> },
   { id: 'profile-header', category: 'Профиль', title: 'Шапка личного профиля', description: 'Аватар, имя, верификация, счётчики, описание и редактирование.', source: 'ProfileScreens / styles.heroRow / VerifiedName', render: p => <ProfileHeader {...p} /> },
   { id: 'auth-login', category: 'Вход', title: 'Поля входа — фрагмент', description: 'Упрощённый пример полей, без полного экрана входа. Используйте вымышленные значения: пример не авторизует.', source: 'AuthScreen / styles.input / primaryAuthButton', render: p => <LocalForm {...p} fields={['Логин', 'Пароль — вымышленный']} action="Войти" /> },
   { id: 'auth-register', category: 'Вход', title: 'Поля регистрации — фрагмент', description: 'Имя, выбор года рождения и email. Последовательность регистрации и Telegram здесь не показаны.', source: 'AuthScreen / shared form styles', render: p => <LocalForm {...p} fields={['Имя', 'Год рождения', 'Email — вымышленный']} action="Продолжить" /> },

@@ -128,7 +128,8 @@ async function nativeHistoryFixture(count = 3200) {
     SAFE_ID: /^[\w-]+$/, SAFE_ROOM_ID: /^!/, SAFE_EVENT_ID: /^\$/, SAFE_MATRIX_USER_ID: /^@/,
     handles: new Map([[handle.accountId, Promise.resolve(handle)]]),
     matrixServerName: () => 'example.org', matrixUserIdForAccount: id => `@${id}:example.org`,
-    matrixDeviceProjectionId: (_user, id) => id, matrixEnvelopeId: id => id.replace('$', 'envelope_'),
+    matrixDeviceProjectionId: (_user, id) => id,
+    matrixEnvelopeId: id => id.startsWith('$') ? `envelope_${id.slice(1)}` : id,
     decodeMatrixMessageContent, normalizeContentEvent, projectMatrixContentEvents, messagePreview,
     assertRoomContract: async () => { validations++; await afterContract(); }, flushPendingForThread: () => flush(), notifyThread() {},
   });

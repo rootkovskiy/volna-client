@@ -86,6 +86,7 @@
     "sources": [
       "screens/CommunityScreens.tsx",
       "components/CommunityOwnershipSection.tsx",
+      "components/BandcampTrackingControl.tsx",
       "components/OwnershipTransferStatus.tsx",
       "components/OwnershipTransferNotification.tsx",
       "components/EntityUsernameLookup.tsx"
@@ -93,6 +94,7 @@
     "examples": [
       "community-header",
       "community-edit",
+      "bandcamp-tracking",
       "music-primary-editor",
       "community-team",
       "community-products",

@@ -334,6 +334,7 @@ export type PublicPage = {
   threadsUrl: string | null;
   telegramUrl: string | null;
   eventDiscoveryEnabled: boolean;
+  bandcampTrackingEnabled?: boolean;
   radioScheduleDiscoveryEnabled: boolean;
   youtubeUrl: string | null;
   letterboxdUrl: string | null;
@@ -475,6 +476,7 @@ export type CreateCommunityInput = {
   threadsUrl?: string;
   telegramUrl?: string;
   eventDiscoveryEnabled?: boolean;
+  bandcampTrackingEnabled?: boolean;
   radioScheduleDiscoveryEnabled?: boolean;
   youtubeUrl?: string;
   letterboxdUrl?: string;

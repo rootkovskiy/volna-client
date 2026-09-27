@@ -1,6 +1,7 @@
 import { useEditorAutosave } from '../components/useEditorAutosave';
 import { EntityUsernameLookup } from '../components/EntityUsernameLookup';
 import { CommunityOwnershipSection } from '../components/CommunityOwnershipSection';
+import { BandcampTrackingControl } from '../components/BandcampTrackingControl';
 import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { SearchField, searchFieldStyles } from '@volna/messaging-client/search-field';
 import { ContentTabIndicator } from '../components/ContentTabIndicator';
@@ -2721,6 +2722,9 @@ export function PublicPageEditScreen({
   const [trackDurationSeconds, setTrackDurationSeconds] = useState<number | null>(page.trackDurationSeconds ?? null);
   const [trackPreviewDurationSeconds, setTrackPreviewDurationSeconds] = useState(page.trackPreviewDurationSeconds ?? 30);
   const [bandcampUrl, setBandcampUrl] = useState(page.bandcampUrl ?? ''); const [soundcloudUrl, setSoundcloudUrl] = useState(page.soundcloudUrl ?? '');
+  const [bandcampTrackingEnabled, setBandcampTrackingEnabled] = useState(page.bandcampTrackingEnabled ?? false);
+  const canManageBandcamp = isGlobalAdmin || page.myPermissions.includes('MUSIC_MANAGE');
+  useEffect(() => { if (type !== 'MUSIC_LABEL') setBandcampTrackingEnabled(false); }, [type]);
   const [instagramUrl, setInstagramUrl] = useState(page.instagramUrl ?? '');
   const [threadsUrl, setThreadsUrl] = useState(page.threadsUrl ?? ''); const [telegramUrl, setTelegramUrl] = useState(page.telegramUrl ?? '');
   const [eventDiscoveryEnabled, setEventDiscoveryEnabled] = useState(page.eventDiscoveryEnabled ?? false);
@@ -3075,6 +3079,7 @@ export function PublicPageEditScreen({
         trackPreviewDurationSeconds: Math.round(Number(trackPreviewDurationSeconds) * 100) / 100,
         about: about.trim(),
         ...social.links,
+        ...(canManageBandcamp ? { bandcampTrackingEnabled: type === 'MUSIC_LABEL' && Boolean(social.links.bandcampUrl) && bandcampTrackingEnabled } : {}),
         ...(isGlobalAdmin && page.ownerId === null ? {
           eventDiscoveryEnabled: Boolean(social.links.telegramUrl || social.links.instagramUrl) && eventDiscoveryEnabled,
         } : {}),
@@ -3126,7 +3131,7 @@ export function PublicPageEditScreen({
   const { status: autoSaveStatus } = useEditorAutosave({
     scopeKey: authToken + ':' + page.id,
     draftKey: JSON.stringify([
-    about, address, avatarKey, avatarUrl, bandcampUrl, cityId, cityName, connectEnabled,
+    about, address, avatarKey, avatarUrl, bandcampUrl, bandcampTrackingEnabled, cityId, cityName, connectEnabled,
     connectAbout, connectGoals, connectPhotos, contactPhone, countryCode, countryName,
     instagramUrl, isPrivate, letterboxdUrl, musicLabelGenres, musicLabelName, name, phoneCode,
     eventDiscoveryEnabled, isGlobalAdmin, radioStreamUrl, soundcloudUrl, telegramUrl,
@@ -3357,7 +3362,13 @@ export function PublicPageEditScreen({
           </View>
 
           <Text style={styles.editSectionTitle}>Ссылки</Text>
-          <SocialLinkInput kind="bandcamp" onChangeText={setBandcampUrl} placeholder="Bandcamp" value={bandcampUrl} />
+          <SocialLinkInput kind="bandcamp" onChangeText={(value) => {
+            setBandcampUrl(value);
+            if (normalizeSocialLink(value, 'bandcamp').url !== normalizeSocialLink(bandcampUrl, 'bandcamp').url) setBandcampTrackingEnabled(false);
+          }} placeholder="Bandcamp" value={bandcampUrl} />
+          {type === 'MUSIC_LABEL' && bandcampUrl.trim() ? <BandcampTrackingControl
+            checked={bandcampTrackingEnabled} disabled={!canManageBandcamp} onChange={setBandcampTrackingEnabled}
+          /> : null}
           <SocialLinkInput kind="soundcloud" onChangeText={setSoundcloudUrl} placeholder="SoundCloud" value={soundcloudUrl} />
           <SocialLinkInput
             kind="instagram"
