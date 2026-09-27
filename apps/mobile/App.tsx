@@ -2193,8 +2193,33 @@ function MaintenanceScreen({ onRetry }: { onRetry: () => void }) {
   </SafeAreaView>;
 }
 
-function MainApp(props: Parameters<typeof MainAppContent>[0]) {
-  return <AppTopBarProvider><CatalogLocationProvider key={props.ownAccountId}><ScreenContinuityProvider key={`${props.ownAccountId}:${props.navigationReset}`}><MainAppContent {...props} /></ScreenContinuityProvider></CatalogLocationProvider></AppTopBarProvider>;
+type MainAppProps = Omit<Parameters<typeof MainAppContent>[0], 'releaseComposerRequest' | 'onReleaseComposerRequestHandled'>;
+
+function MainApp(props: MainAppProps) {
+  return <AppTopBarProvider><CatalogLocationProvider key={props.ownAccountId}><MainAppSession {...props} /></CatalogLocationProvider></AppTopBarProvider>;
+}
+
+function MainAppSession(props: MainAppProps) {
+  const [releaseComposerRequest, setReleaseComposerRequest] = useState<import('./src/components/GlobalAudioPlayer').TrackComposerRequest | null>(null);
+  const handleComposerRequest = useCallback((nonce: number) => {
+    setReleaseComposerRequest(current => current?.nonce === nonce ? null : current);
+  }, []);
+  const content = <ScreenContinuityProvider key={`${props.ownAccountId}:${props.navigationReset}`}>
+    <MainAppContent {...props} releaseComposerRequest={releaseComposerRequest} onReleaseComposerRequestHandled={handleComposerRequest} />
+  </ScreenContinuityProvider>;
+
+  // Playback belongs to the account, outside the screen-reset boundary. A tab
+  // change may remount every screen without releasing any audio backend.
+  // Forced password changes retain the previous authenticated-player teardown.
+  if (props.mustChangePassword) return content;
+  return <GlobalAudioProvider
+    onAddTrackToPost={track => {
+      setReleaseComposerRequest({ track, nonce: Date.now() });
+      props.onChangeTab('feed');
+    }}
+    onNotify={props.onNotify}
+    storageScope={props.ownAccountId}
+  >{content}</GlobalAudioProvider>;
 }
 
 function MainAppContent({
@@ -2285,7 +2310,11 @@ function MainAppContent({
   profile,
   profileMode,
   playlistIdToEdit,
+  releaseComposerRequest,
+  onReleaseComposerRequestHandled,
 }: {
+  releaseComposerRequest: import('./src/components/GlobalAudioPlayer').TrackComposerRequest | null;
+  onReleaseComposerRequestHandled: (nonce: number) => void;
   navigationReset: number;
   accountRole: Account['role'];
   activeChat: string | null;
@@ -2389,7 +2418,6 @@ function MainAppContent({
   playlistIdToEdit: string | null;
 }) {
   const [adminMode, setAdminMode] = useState(false);
-  const [releaseComposerRequest, setReleaseComposerRequest] = useState<import('./src/components/GlobalAudioPlayer').TrackComposerRequest | null>(null);
   const [bottomNavigationHeight, setBottomNavigationHeight] = useState(0);
   const [isPlaylistEditorVisible, setIsPlaylistEditorVisible] = useState(false);
   const openMessagesFromHeader = useCallback(() => {
@@ -2459,14 +2487,6 @@ function MainAppContent({
   }
 
   return (
-    <GlobalAudioProvider
-      onAddTrackToPost={(track) => {
-        setReleaseComposerRequest({ track, nonce: Date.now() });
-        onChangeTab('feed');
-      }}
-      onNotify={onNotify}
-      storageScope={ownAccountId}
-    >
     <DrawerDismissArea enabled={isSideMenuOpen} onDismiss={onCloseSideMenu} style={styles.appShell}>
       <View pointerEvents={isSideMenuOpen ? 'auto' : 'none'} style={[styles.sideMenuLayer, { width: drawerWidth }]}>
         <SafeAreaView edges={['top', 'bottom']} style={styles.drawerSafeArea}>
@@ -2521,6 +2541,7 @@ function MainAppContent({
               authToken={authToken}
               composerAuthor={{ avatarUrl: ownProfile.avatarUrl, isVerified: ownProfile.isVerified, name: ownProfile.name, username: ownProfile.username }}
               composerRequest={releaseComposerRequest}
+              onComposerRequestHandled={onReleaseComposerRequestHandled}
               onNotify={onNotify}
               onOpenMenu={onOpenMenu}
               onOpenMessages={openMessagesFromHeader}
@@ -2876,6 +2897,5 @@ function MainAppContent({
         </SafeAreaView>
       </Animated.View>
     </DrawerDismissArea>
-    </GlobalAudioProvider>
   );
 }

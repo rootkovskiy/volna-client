@@ -17,10 +17,11 @@ import { styles } from '../styles';
 
 const MIN_REFRESH_INDICATOR_MS = 500;
 
-export function FeedScreen({ authToken, composerAuthor, composerRequest, onNotify, onOpenMenu, onOpenMessages, onOpenNotifications, onOpenPost, onOpenProfile, onOpenPublicPage, username }: {
+export function FeedScreen({ authToken, composerAuthor, composerRequest, onComposerRequestHandled, onNotify, onOpenMenu, onOpenMessages, onOpenNotifications, onOpenPost, onOpenProfile, onOpenPublicPage, username }: {
   authToken: string;
   composerAuthor: { avatarUrl?: string | null; isVerified?: boolean; name: string; username?: string };
   composerRequest?: import('../components/GlobalAudioPlayer').TrackComposerRequest | null;
+  onComposerRequestHandled?: (nonce: number) => void;
   onNotify: (message: string, type?: 'success' | 'error') => void;
   onOpenMenu: () => void;
   onOpenMessages: () => void;
@@ -31,6 +32,15 @@ export function FeedScreen({ authToken, composerAuthor, composerRequest, onNotif
   username: string;
 }) {
   const globalAudio = useGlobalAudioControls();
+  // Keep the accepted request locally while its release metadata resolves.
+  // Acknowledgement clears the session handoff, so later navigation cannot
+  // reopen the composer or cancel this screen's in-flight metadata request.
+  const [acceptedComposerRequest, setAcceptedComposerRequest] = useState(composerRequest);
+  useEffect(() => {
+    if (!composerRequest) return;
+    setAcceptedComposerRequest(composerRequest);
+    onComposerRequestHandled?.(composerRequest.nonce);
+  }, [composerRequest, onComposerRequestHandled]);
   const [refreshKey, setRefreshKey] = useState(0);
   const [composerOpenRequest, setComposerOpenRequest] = useState(0);
   const [activeFeedTab, setActiveFeedTab] = useState<'for-you' | 'following'>('for-you');
@@ -119,7 +129,7 @@ export function FeedScreen({ authToken, composerAuthor, composerRequest, onNotif
             canCreate
             composerAuthor={composerAuthor}
             composerOpenRequest={composerOpenRequest}
-            composerRequest={composerRequest}
+            composerRequest={acceptedComposerRequest}
             emptyMessage={activeFeedTab === 'following' ? 'В подписках пока нет публикаций' : 'Публикаций пока нет'}
             feed
             feedMode={activeFeedTab}
