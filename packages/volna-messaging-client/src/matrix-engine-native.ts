@@ -1442,13 +1442,13 @@ export function createMatrixMessagingManager(options: {
   });
 
   const searchLocalMessages = async (accountId: string, queryValue: string, { limit = 100 } = {}) => {
-    const query = queryValue.trim().normalize('NFKC').toLocaleLowerCase('ru-RU');
+    const query = queryValue.trim().normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
     if (query.length < 2 || !(await capabilities()).enabled) return [];
     const handle = await getHandle(accountId);
     const results: Array<{ threadId: string; message: MessagingMessage }> = [];
     for (const thread of handle.threadByRoomId.values()) {
       for (const message of projectedMessages(handle, thread)) {
-        const haystack = `${message.text ?? ''} ${JSON.stringify(message.attachment ?? null)}`.normalize('NFKC').toLocaleLowerCase('ru-RU');
+        const haystack = `${message.text ?? ''} ${JSON.stringify(message.attachment ?? null)}`.normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
         if (haystack.includes(query)) results.push({ threadId: thread.id, message });
         if (results.length >= Math.min(500, Math.max(1, limit))) return results;
       }

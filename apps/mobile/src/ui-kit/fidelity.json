@@ -62,6 +62,7 @@
   "switches": "composition",
   "goals": "composition",
   "search": "composition",
+  "search-spelling": "composition",
   "attached-search": "composition",
   "links": "composition",
   "form": "composition",

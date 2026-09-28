@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Alert } from 'react-native';
 import { buildMusicGenreValue, musicGenreSearchText, musicSubgenreDisplayName, musicTaxonomy } from '../domain';
 import type { SelectionPickerOption } from './SelectionPickerModal';
+import { normalizeSearchText } from '../utils/searchNormalization';
 
 /** Shared taxonomy navigation for standalone music fields and Interests → Music. */
 export function useMusicGenrePicker({ selected, onChange, genreSearch, maxSelected, subgenresOnly = false, title = 'Музыкальные предпочтения' }: {
@@ -11,7 +12,7 @@ export function useMusicGenrePicker({ selected, onChange, genreSearch, maxSelect
   const [genreIndex, setGenreIndex] = useState<number | null>(null);
   const activeCategory = musicTaxonomy[categoryIndex ?? 0] ?? musicTaxonomy[0];
   const activeGenre = activeCategory.genres[genreIndex ?? 0] ?? activeCategory.genres[0];
-  const normalizedGenreSearch = genreSearch.trim().toLocaleLowerCase('ru-RU').replace(/[\s\-_/]+/g, '');
+  const normalizedGenreSearch = normalizeSearchText(genreSearch.trim()).replace(/[\s\-_/]+/g, '');
   const genreSearchResults = useMemo(() => {
     if (!normalizedGenreSearch) return [];
 
@@ -31,10 +32,8 @@ export function useMusicGenrePicker({ selected, onChange, genreSearch, maxSelect
         });
       }
 
-      return options.filter((option) => `${musicGenreSearchText(option.value)} ${option.title} ${option.context}`
-        .toLocaleLowerCase('ru-RU')
-        .replace(/[\s\-_/]+/g, '')
-        .includes(normalizedGenreSearch));
+      return options.filter((option) => normalizeSearchText(`${musicGenreSearchText(option.value)} ${option.title} ${option.context}`)
+        .replace(/[\s\-_/]+/g, '').includes(normalizedGenreSearch));
     }));
   }, [normalizedGenreSearch, subgenresOnly]);
 
