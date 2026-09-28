@@ -89,7 +89,8 @@
       "components/BandcampTrackingControl.tsx",
       "components/OwnershipTransferStatus.tsx",
       "components/OwnershipTransferNotification.tsx",
-      "components/EntityUsernameLookup.tsx"
+      "components/EntityUsernameLookup.tsx",
+      "utils/searchNormalization.ts"
     ],
     "examples": [
       "community-header",
@@ -100,9 +101,10 @@
       "community-products",
       "ownership",
       "catalog",
-      "location"
+      "location",
+      "search-spelling"
     ],
-    "note": "Кабинет показан через общие формы, карточки команды, товаров и статусы передачи. Поиск участников и передача владения не выполняются.",
+    "note": "Кабинет показан через общие формы, карточки команды, товаров и статусы передачи. search-spelling локально демонстрирует совпадение е/ё; серверный поиск участников и передача владения не выполняются.",
     "notShown": [
       "Полный кабинет: права, администраторы, партнеры и редактор товара",
       "Создание сообщества и подтверждение передачи владельцем/получателем"

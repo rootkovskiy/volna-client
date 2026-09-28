@@ -253,7 +253,7 @@ function MessagesScreenContent({
     return () => { active = false; abort.abort(); loadRef.current = null; dispose?.(); releaseActivity(); };
   }, [accountId, controller, snapshot]);
 
-  const normalized = query.trim().toLocaleLowerCase('ru-RU');
+  const normalized = query.trim().normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
   useEffect(() => {
     if (normalized.normalize('NFKC').length < 2) { setLocalMatchThreadIds(new Set()); return; }
     let active = true;
@@ -273,7 +273,7 @@ function MessagesScreenContent({
     }
   }, [hydrating, load, loading, loadingMore, nextCursor, unresolvedLocalMatch]);
   const visibleThreads = useMemo(() => normalized ? threads.filter((thread) => (
-    `${thread.partner.name} ${thread.partner.username} ${thread.lastMessageText ?? ''}`.toLocaleLowerCase('ru-RU').includes(normalized)
+    `${thread.partner.name} ${thread.partner.username} ${thread.lastMessageText ?? ''}`.normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').includes(normalized)
     || localMatchThreadIds.has(thread.id)
   )) : threads, [localMatchThreadIds, normalized, threads]);
 

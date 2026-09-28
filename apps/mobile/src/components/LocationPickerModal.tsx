@@ -5,6 +5,7 @@ import { LocateFixed, MapPin, RotateCcw } from 'lucide-react-native';
 import { apiFetch as fetch, apiUrl, remoteSearchDebounceMs, reportApiError } from '../api/client';
 import { SelectionPickerModal, type SelectionPickerOption } from './SelectionPickerModal';
 import { detectCurrentCity } from '../location/detectCity';
+import { normalizeSearchText, searchIncludes } from '../utils/searchNormalization';
 
 export type LocationSelection = {
   cityId: string;
@@ -131,9 +132,9 @@ export function LocationPickerModal({
   }, [country, isVisible, query]);
 
   const filteredCountries = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase('ru');
+    const normalized = normalizeSearchText(query.trim());
     return normalized
-      ? countries.filter((item) => item.name.toLocaleLowerCase('ru').includes(normalized))
+      ? countries.filter((item) => searchIncludes(item.name, normalized))
       : countries;
   }, [countries, query]);
 

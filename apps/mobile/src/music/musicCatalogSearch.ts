@@ -1,10 +1,11 @@
 import type { ProfileMusicTrack, PublicUploadedMusicTrack } from '../types';
+import { normalizeSearchText } from '../utils/searchNormalization';
 
 export type MusicCatalogItem = { key: string } & (
   { kind: 'external'; track: ProfileMusicTrack } | { kind: 'upload'; track: PublicUploadedMusicTrack }
 );
 export type MusicSearchRow = MusicCatalogItem & { sectionTitle?: string };
-const normalizeSearch = (value: string) => value.normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').trim();
+const normalizeSearch = (value: string) => normalizeSearchText(value).trim();
 
 /** Account-owned descriptors stay on the client; only text/filters go to the public catalog. */
 export function personalMusicMatches(items: MusicCatalogItem[], query: string, genres: string[]) {

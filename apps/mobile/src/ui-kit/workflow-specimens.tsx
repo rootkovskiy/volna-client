@@ -11,6 +11,7 @@ import { CatalogLocationProvider, useCatalogLocation } from '../components/Catal
 import { CatalogTabs } from '../components/CatalogTabs';
 import { EntityShareActions } from '../components/EntityShareModal';
 import { styles as s } from '../styles';
+import { searchIncludes } from '../utils/searchNormalization';
 import { Action, Stack, Label, Row, covers, noop, type DemoProps, type Specimen } from './demo-shared';
 
 function Schedule({ notify }: DemoProps) {
@@ -43,7 +44,7 @@ function CityPicker({ notify }: DemoProps) {
   const city = location?.cityName ?? 'Екатеринбург';
   const setCity = (value: string) => selectLocation({ cityId: value === 'Москва' ? 'ru-moscow' : 'ru-saint-petersburg', cityName: value, countryCode: 'RU', countryName: 'Россия' });
   const [level, setLevel] = useState<'country' | 'city'>('country'); const [search, setSearch] = useState('');
-  return <Stack><Action secondary onPress={() => { setLevel('country'); setSearch(''); setOpen(true); }}>{city}</Action><SelectionPickerModal title={level === 'country' ? 'Страна' : 'Город'} isVisible={open} onClose={() => setOpen(false)} search={search} onChangeSearch={setSearch} searchPlaceholder={level === 'country' ? 'Поиск страны' : 'Поиск города'} backLabel={level === 'city' ? 'К странам' : undefined} onBack={level === 'city' ? () => { setLevel('country'); setSearch(''); } : undefined} topOptions={[{ key: 'detect', title: 'Определить город', meta: 'Ближайший доступный город по геолокации', leading: <MapPin size={20} color="#111" />, onPress: () => notify('Геолокация в UI Kit не запрашивается') }]} options={(level === 'country' ? ['Россия'] : ['Москва', 'Санкт-Петербург']).filter(value => value.toLocaleLowerCase('ru').includes(search.toLocaleLowerCase('ru'))).map(value => ({ key: value, title: value, selected: level === 'city' && city === value, navigates: level === 'country', onPress: () => { if (level === 'country') { setLevel('city'); setSearch(''); } else { setCity(value); setOpen(false); } } }))} /></Stack>;
+  return <Stack><Action secondary onPress={() => { setLevel('country'); setSearch(''); setOpen(true); }}>{city}</Action><SelectionPickerModal title={level === 'country' ? 'Страна' : 'Город'} isVisible={open} onClose={() => setOpen(false)} search={search} onChangeSearch={setSearch} searchPlaceholder={level === 'country' ? 'Поиск страны' : 'Поиск города'} backLabel={level === 'city' ? 'К странам' : undefined} onBack={level === 'city' ? () => { setLevel('country'); setSearch(''); } : undefined} topOptions={[{ key: 'detect', title: 'Определить город', meta: 'Ближайший доступный город по геолокации', leading: <MapPin size={20} color="#111" />, onPress: () => notify('Геолокация в UI Kit не запрашивается') }]} options={(level === 'country' ? ['Россия'] : ['Москва', 'Санкт-Петербург']).filter(value => searchIncludes(value, search)).map(value => ({ key: value, title: value, selected: level === 'city' && city === value, navigates: level === 'country', onPress: () => { if (level === 'country') { setLevel('city'); setSearch(''); } else { setCity(value); setOpen(false); } } }))} /></Stack>;
 }
 function Push({ notify }: DemoProps) {
   const [open, setOpen] = useState(false);

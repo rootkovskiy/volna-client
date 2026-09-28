@@ -48,6 +48,7 @@ import { RadioScheduleSection } from '../components/RadioSchedule';
 import { apiFetch as fetch, apiUrl, readApiError, remoteSearchDebounceMs } from '../api/client';
 import { audioReleaseGenreLimit, avatarThumbnail, connectPhotoThumbnail, countryOptions, formatCityName, formatCountryCity, getAvatarInitial, groupMusicGenreChips, isMusicSubgenreValue, normalizePhoneDigits, normalizeSocialLink, normalizeUsernameInput, phoneCountryOptions, postImageThumbnail, publicPageTypeGroups, publicPageTypeLabels, releasePrimaryGenreLimit, russianPlural, splitInternationalPhone, uploadAvatarAsset, uploadConnectPhotoAsset, uploadPostImageAsset } from '../domain';
 import { styles } from '../styles';
+import { normalizeSearchText, searchIncludes, searchStartsWith } from '../utils/searchNormalization';
 import { resolveForegroundLocation } from '../location/foregroundLocation';
 import { normalizeExternalHttpsUrl } from '../security/externalUrls.mjs';
 import { openExternalHttpsUrl } from '../security/openExternalUrl';
@@ -511,16 +512,16 @@ export function CreateCommunityScreen({
   const [countrySearch, setCountrySearch] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const filteredCountries = useMemo(() => {
-    const normalizedSearch = countrySearch.trim().toLowerCase();
+    const normalizedSearch = normalizeSearchText(countrySearch.trim());
 
     if (!normalizedSearch) {
       return countryOptions;
     }
 
-    return countryOptions.filter((country) => country.toLowerCase().startsWith(normalizedSearch));
+    return countryOptions.filter((country) => searchStartsWith(country, normalizedSearch));
   }, [countrySearch]);
   const selectedType = typeOptions.find((option) => option.value === type);
-  const phoneCodeLabels = useMemo(() => phoneCountryOptions.map((option) => `${option.country} (${option.code})`).filter((label) => label.toLowerCase().includes(phoneCodeSearch.trim().toLowerCase())), [phoneCodeSearch]);
+  const phoneCodeLabels = useMemo(() => phoneCountryOptions.map((option) => `${option.country} (${option.code})`).filter((label) => searchIncludes(label, phoneCodeSearch.trim())), [phoneCodeSearch]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2758,18 +2759,18 @@ export function PublicPageEditScreen({
   const [verificationRequestStatus, setVerificationRequestStatus] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | null>(page.isVerified ? 'APPROVED' : null);
   const [isVerificationRequestLoading, setIsVerificationRequestLoading] = useState(false);
   const filteredCountries = useMemo(() => {
-    const normalizedSearch = countrySearch.trim().toLowerCase();
+    const normalizedSearch = normalizeSearchText(countrySearch.trim());
 
     if (!normalizedSearch) {
       return countryOptions;
     }
 
-    return countryOptions.filter((country) => country.toLowerCase().startsWith(normalizedSearch));
+    return countryOptions.filter((country) => searchStartsWith(country, normalizedSearch));
   }, [countrySearch]);
   const selectedType = typeOptions.find((option) => option.value === type);
   const isTypeLockedByReleases = page.type === 'MUSIC_LABEL' && labelledReleasesCount > 0;
   const availableLocationCategories = selectedType?.locationCategories ?? [];
-  const phoneCodeLabels = useMemo(() => phoneCountryOptions.map((option) => `${option.country} (${option.code})`).filter((label) => label.toLowerCase().includes(phoneCodeSearch.trim().toLowerCase())), [phoneCodeSearch]);
+  const phoneCodeLabels = useMemo(() => phoneCountryOptions.map((option) => `${option.country} (${option.code})`).filter((label) => searchIncludes(label, phoneCodeSearch.trim())), [phoneCodeSearch]);
   const primaryCommunityTrack = trackTitle && trackPreviewUrl && trackProvider
     ? {
         artist: trackArtist,
@@ -5817,7 +5818,7 @@ function PublicPageTypePickerModal({
   const otherOptions = options.filter((option) => !groupedValues.has(option.value));
   const groups = [...groupedOptions, ...(otherOptions.length ? [{ title: 'Другое', values: [], options: otherOptions }] : [])];
   const activeGroup = groups.find((group) => group.title === activeGroupTitle) ?? null;
-  const normalizedSearch = search.trim().toLocaleLowerCase('ru-RU');
+  const normalizedSearch = normalizeSearchText(search.trim());
 
   useEffect(() => {
     if (!isVisible) return;
@@ -5827,7 +5828,7 @@ function PublicPageTypePickerModal({
 
   const pickerOptions: SelectionPickerOption[] = normalizedSearch
     ? groups.flatMap((group) => group.options
-        .filter((option) => `${option.label} ${group.title}`.toLocaleLowerCase('ru-RU').includes(normalizedSearch))
+        .filter((option) => searchIncludes(`${option.label} ${group.title}`, normalizedSearch))
         .map((option) => ({
           key: option.value,
           title: option.label,

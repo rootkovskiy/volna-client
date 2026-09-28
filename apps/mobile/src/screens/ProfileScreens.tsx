@@ -48,6 +48,7 @@ import { subscribeMusicLibraryChanged } from '../components/musicLibraryEvents';
 import { AnimatedMusicLibraryRow } from '../components/AnimatedMusicLibraryRow';
 import type { YouTubeAudioEngineHandle, YouTubeAudioSnapshot } from '../components/YouTubeAudioEngine.types';
 import { getProfileTextViolation } from '@volna/content-policy';
+import { normalizeSearchText, searchIncludes, searchStartsWith } from '../utils/searchNormalization';
 import { getForegroundLocationAccess, requestForegroundLocationAccess } from '../location/foregroundLocation';
 import { normalizeExternalHttpsUrl } from '../security/externalUrls.mjs';
 import { openExternalHttpsUrl } from '../security/openExternalUrl';
@@ -2711,13 +2712,13 @@ export function EditProfileScreen({
     }
   };
   const filteredCountries = useMemo(() => {
-    const normalizedSearch = countrySearch.trim().toLowerCase();
+    const normalizedSearch = normalizeSearchText(countrySearch.trim());
 
     if (!normalizedSearch) {
       return countryOptions;
     }
 
-    return countryOptions.filter((country) => country.toLowerCase().startsWith(normalizedSearch));
+    return countryOptions.filter((country) => searchStartsWith(country, normalizedSearch));
   }, [countrySearch]);
   const primaryFavoriteTrack: ProfileMusicTrack | null = trackTitle && trackPreviewUrl && trackProvider !== 'uploaded' ? {
     id: `profile-primary:${trackProvider}:${trackExternalUrl || trackPreviewUrl}`,
@@ -4784,7 +4785,7 @@ export function ConnectInterestSelector({ filterCard = false, onChange, selected
   const [search, setSearch] = useState('');
   const musicPicker = useMusicGenrePicker({ selected: musicGenres, onChange: onChangeMusicGenres, genreSearch: search, maxSelected: musicGenreLimit, subgenresOnly: true });
   const summary = `Интересы: ${selected.length}/${connectInterestLimit} · Жанры: ${musicGenres.length}/${musicGenreLimit}`;
-  const normalizedSearch = search.trim().toLocaleLowerCase('ru-RU');
+  const normalizedSearch = normalizeSearchText(search.trim());
   const activeCategory = categoryIndex === null ? null : connectInterestGroups[categoryIndex] ?? null;
 
   const isMusicCategory = activeCategory?.title === 'Музыка';
@@ -4809,7 +4810,7 @@ export function ConnectInterestSelector({ filterCard = false, onChange, selected
 
   const interestOptions: SelectionPickerOption[] = normalizedSearch
     ? connectInterestGroups.flatMap((group) => group.items
-        .filter(([value, label]) => `${value} ${label}`.toLocaleLowerCase('ru-RU').includes(normalizedSearch))
+        .filter(([value, label]) => searchIncludes(`${value} ${label}`, normalizedSearch))
         .map(([value, label]) => ({
           key: value,
           title: label,

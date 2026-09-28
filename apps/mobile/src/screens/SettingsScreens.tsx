@@ -31,6 +31,7 @@ import { currentWebPushPermission, removeWebPushSubscription, requestWebPushPerm
 import type { AvatarCropAsset } from '../types';
 import { AvatarCropModal } from './ProfileScreens';
 import { CatalogCategoryTile, type CategoryCover, type CategoryCoverSurface, eventCategoryOptions, locationCategoryOptions } from '../components/CatalogCategoryTile';
+import { normalizeSearchText, searchIncludes } from '../utils/searchNormalization';
 
 type NotificationEventType = 'NEW_FOLLOWER' | 'DIRECT_MESSAGE' | 'POST_LIKE' | 'POST_REPOST' | 'CONNECT_LIKE' | 'POST_REPLY' | 'POST_MENTION' | 'FOLLOW_REQUEST' | 'COMMUNITY_EVENT' | 'COMMUNITY_RELEASE' | 'EVENT_REMINDER' | 'MODERATION' | 'SYSTEM';
 type NotificationDeliveryMode = 'OFF' | 'IN_APP' | 'IN_APP_AND_PUSH';
@@ -433,11 +434,11 @@ export function AdminScreen({ authToken, embedded = false, onBack, onNotify }: {
     finally { setIsLoading(false); }
   };
   const maxCount = Math.max(1, ...(stats?.points.map((point) => point.count) ?? []));
-  const normalizedPageSearchQuery = pageSearchQuery.trim().replace(/^@/, '').toLocaleLowerCase('ru-RU');
+  const normalizedPageSearchQuery = normalizeSearchText(pageSearchQuery.trim().replace(/^@/, ''));
   const matchingPages = normalizedPageSearchQuery
     ? pages.filter((page) => (
-      page.name.toLocaleLowerCase('ru-RU').includes(normalizedPageSearchQuery)
-      || page.username.toLocaleLowerCase('ru-RU').includes(normalizedPageSearchQuery)
+      searchIncludes(page.name, normalizedPageSearchQuery)
+      || searchIncludes(page.username, normalizedPageSearchQuery)
     )).slice(0, 20)
     : [];
 
@@ -1394,4 +1395,3 @@ export function PasswordSecurityScreen({
     </>
   );
 }
-
