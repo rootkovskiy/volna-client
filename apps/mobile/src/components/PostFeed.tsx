@@ -24,6 +24,7 @@ import { EntityShareModal } from './EntityShareModal';
 import { ScreenTopBar } from './ScreenTopBar';
 import { normalizeExternalHttpsUrl } from '../security/externalUrls.mjs';
 import { openExternalHttpsUrl } from '../security/openExternalUrl';
+import { postAge } from './post-age.mjs';
 
 type RepostDestination = { type: 'account' } | { type: 'community'; username: string };
 type YouTubeAttachment = { url: string; videoId: string; startSeconds: number };
@@ -980,7 +981,7 @@ export function PostCard({ post, compact = false, separated = false, thread = fa
     : onOpenProfile(post.author.username);
   const avatarStyle = [styles.postAuthorAvatar, thread && styles.postThreadAuthorAvatar];
   const avatar = <Pressable accessibilityLabel={`Открыть ${post.author.entityType === 'community' ? 'сообщество' : 'профиль'} ${post.author.name}`} accessibilityRole="link" onPress={() => void openAuthor()} style={thread ? undefined : styles.postAuthorAvatarLink}>{post.author.avatarUrl ? <Image source={{ uri: post.author.avatarUrl }} style={avatarStyle} /> : <View style={avatarStyle}><Text style={styles.postAuthorAvatarText}>{getAvatarInitial(post.author.name)}</Text></View>}</Pressable>;
-  const identity = <View style={styles.postAuthorRow}><Pressable accessibilityLabel={`Открыть ${post.author.name}`} accessibilityRole="link" onPress={() => void openAuthor()} style={[styles.postAuthorIdentity, thread && styles.postThreadAuthorCopy]}><VerifiedName badgeSize={13} isVerified={post.author.isVerified} name={post.author.name} style={styles.postAuthorName} /><Text numberOfLines={1} style={styles.postAuthorUsername}>@{post.author.username} · {formatPostDate(post.createdAt)}</Text></Pressable><Pressable accessibilityLabel="Действия с публикацией" accessibilityRole="button" hitSlop={8} onPress={(event) => onOpenActions({ x: event.nativeEvent.pageX, y: event.nativeEvent.pageY })} style={styles.postMoreButton}><EllipsisVertical color="#6f7b86" size={19} strokeWidth={1.8} /></Pressable></View>;
+  const identity = <View style={styles.postAuthorRow}><Pressable accessibilityLabel={`Открыть ${post.author.name}`} accessibilityRole="link" onPress={() => void openAuthor()} style={[styles.postAuthorIdentity, thread && styles.postThreadAuthorCopy]}><VerifiedName badgeSize={13} isVerified={post.author.isVerified} name={post.author.name} style={styles.postAuthorName} /><Text numberOfLines={1} style={styles.postAuthorUsername}>@{post.author.username} · <PostAgeText value={post.createdAt} /></Text></Pressable><Pressable accessibilityLabel="Действия с публикацией" accessibilityRole="button" hitSlop={8} onPress={(event) => onOpenActions({ x: event.nativeEvent.pageX, y: event.nativeEvent.pageY })} style={styles.postMoreButton}><EllipsisVertical color="#6f7b86" size={19} strokeWidth={1.8} /></Pressable></View>;
 
   return <View style={[styles.postCard, compact && styles.feedPostCard, separated && styles.feedPostSeparator, thread && styles.postThreadCard]}>
     {thread ? <View style={styles.postThreadAuthorHeader}>{avatar}<View style={styles.postThreadAuthorIdentity}>{identity}</View></View> : avatar}
@@ -1146,7 +1147,7 @@ export function PostActionsPopover({ anchor, canDelete, isVisible, onClose, onDe
 export function QuotedPostCard({ post, onOpenPost, onOpenProfile, onOpenPublicPage }: { post: QuotedPost | AppPost; onOpenPost?: (post: AppPost | QuotedPost) => Promise<void>; onOpenProfile: (username: string) => Promise<void>; onOpenPublicPage: (username: string) => Promise<void> }) {
   if (post.isDeleted) return <View style={[styles.quotedPostCard, styles.quotedPostDeleted]}><Text style={styles.quotedPostDeletedText}>Публикация удалена</Text></View>;
   return <Pressable accessibilityLabel={`Открыть публикацию ${post.author.name}`} accessibilityRole="button" disabled={!onOpenPost} onPress={() => void onOpenPost?.(post)} style={styles.quotedPostCard}>
-    <View style={styles.quotedPostAuthorRow}>{post.author.avatarUrl ? <Image source={{ uri: post.author.avatarUrl }} style={styles.quotedPostAvatar} /> : <View style={styles.quotedPostAvatar}><Text style={styles.postAuthorAvatarText}>{getAvatarInitial(post.author.name)}</Text></View>}<View style={styles.postTrackCopy}><VerifiedName badgeGap={6} badgeSize={13} isVerified={post.author.isVerified} name={post.author.name} style={styles.postAuthorName} /><Text numberOfLines={1} style={styles.postAuthorUsername}>@{post.author.username} · {formatPostDate(post.createdAt)}</Text></View></View>
+    <View style={styles.quotedPostAuthorRow}>{post.author.avatarUrl ? <Image source={{ uri: post.author.avatarUrl }} style={styles.quotedPostAvatar} /> : <View style={styles.quotedPostAvatar}><Text style={styles.postAuthorAvatarText}>{getAvatarInitial(post.author.name)}</Text></View>}<View style={styles.postTrackCopy}><VerifiedName badgeGap={6} badgeSize={13} isVerified={post.author.isVerified} name={post.author.name} style={styles.postAuthorName} /><Text numberOfLines={1} style={styles.postAuthorUsername}>@{post.author.username} · <PostAgeText value={post.createdAt} /></Text></View></View>
     {post.text ? <MentionText onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} text={post.text} /> : null}
     {post.images.length ? <Image source={{ uri: postImageThumbnail(post.images[0].imageUrl) ?? post.images[0].imageUrl }} style={styles.quotedPostImage} /> : null}
     {post.youtubeVideoId ? <YouTubePostEmbed startSeconds={post.youtubeStartSeconds} videoId={post.youtubeVideoId} /> : null}
@@ -1198,6 +1199,17 @@ function formatTelegramDuration(value: number | null) {
   const minutes = Math.floor(value / 60);
   const seconds = Math.floor(value % 60).toString().padStart(2, '0');
   return `${minutes}:${seconds}`;
+}
+
+function PostAgeText({ value }: { value: string }) {
+  const [revision, setRevision] = useState(0);
+  const { label, nextUpdateMs } = postAge(value, Date.now());
+  useEffect(() => {
+    if (nextUpdateMs === null) return;
+    const timer = setTimeout(() => setRevision(current => current + 1), nextUpdateMs);
+    return () => clearTimeout(timer);
+  }, [nextUpdateMs, revision, value]);
+  return label;
 }
 
 function formatPostDate(value: string) {

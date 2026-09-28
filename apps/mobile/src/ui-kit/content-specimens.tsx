@@ -27,8 +27,9 @@ const event: ProfileEvent = {
 };
 function Publication({ notify, images = false, thread = false }: DemoProps & { images?: boolean; thread?: boolean }) {
   const [liked, setLiked] = useState(false);
+  const [publishedAt] = useState(() => new Date(Date.now() - 42_000).toISOString());
   const open = async () => notify('В приложении открывается страница автора');
-  return <PostCard compact={!thread} thread={thread} post={{ ...post, viewerLiked: liked, likesCount: 12 + Number(liked), images: images ? covers.map((imageUrl, position) => ({ id: `image-${position}`, imageKey: '', imageUrl, position })) : [] }} onLike={() => setLiked(!liked)} onComment={() => notify('Обсуждение публикации')} onOpenActions={() => notify('Действия с публикацией — отдельный образец ниже')} onOpenPost={open} onOpenProfile={open} onOpenPublicPage={open} onPollVote={noop} onRepost={() => notify('Открывается редактор репоста')} onSend={() => notify('Открывается выбор получателя')} />;
+  return <PostCard compact={!thread} thread={thread} post={{ ...post, createdAt: publishedAt, viewerLiked: liked, likesCount: 12 + Number(liked), images: images ? covers.map((imageUrl, position) => ({ id: `image-${position}`, imageKey: '', imageUrl, position })) : [] }} onLike={() => setLiked(!liked)} onComment={() => notify('Обсуждение публикации')} onOpenActions={() => notify('Действия с публикацией — отдельный образец ниже')} onOpenPost={open} onOpenProfile={open} onOpenPublicPage={open} onPollVote={noop} onRepost={() => notify('Открывается редактор репоста')} onSend={() => notify('Открывается выбор получателя')} />;
 }
 function Comments({ notify }: DemoProps) {
   const [liked, setLiked] = useState(false);
@@ -56,11 +57,11 @@ function EventExample({ notify, past = false, compact = false }: DemoProps & { p
   return <EventCard compactList={compact} event={{ ...event, myParticipationStatus: participation, ...(past ? { posterUrl: null, startsAt: '2020-01-01T17:00:00Z', endsAt: '2020-01-01T22:00:00Z' } : {}) }} onOpen={() => notify('Страница события')} onSetParticipation={value => setParticipation(current => current === value ? null : value)} />;
 }
 export const contentSpecimens: Specimen[] = [
-  { id: 'post', category: 'Лента', title: 'Публикация', description: 'Автор, упоминания, счётчики действий с цифрами веса 500 и активный лайк.', source: 'PostFeed / PostCard', render: p => <Publication {...p} /> },
+  { id: 'post', category: 'Лента', title: 'Публикация', description: 'Автор, время публикации в секундах с переходом к минутам, счётчики веса 500 и активный лайк.', source: 'PostFeed / PostCard', render: p => <Publication {...p} /> },
   { id: 'post-images', category: 'Лента', title: 'Фотографии публикации', description: 'Карусель и полноэкранный просмотр локальных изображений.', source: 'PostCard / PostImageCarousel', render: p => <Publication {...p} images /> },
   { id: 'post-thread', category: 'Лента', title: 'Обсуждение и ответы', description: 'Крупный автор публикации, вложенные ответы, лайк и удалённый ответ.', source: 'PostCard / PostCommentCard', render: p => <Stack><Publication {...p} thread /><Comments {...p} /></Stack> },
   { id: 'post-poll', category: 'Лента', title: 'Опрос', description: 'Один или несколько ответов, проценты и выбранный вариант.', source: 'PostPollCard', render: () => <Poll /> },
-  { id: 'post-quote', category: 'Лента', title: 'Цитата и удалённая публикация', description: 'Доступная цитата и сообщение об удалённом оригинале.', source: 'QuotedPostCard', render: p => <Stack>{[post, { id: 'deleted', isDeleted: true as const, createdAt: post.createdAt }].map(item => <QuotedPostCard key={item.id} post={item} onOpenProfile={async () => p.notify('Профиль')} onOpenPublicPage={async () => p.notify('Сообщество')} />)}</Stack> },
+  { id: 'post-quote', category: 'Лента', title: 'Цитата и удалённая публикация', description: 'Возраст исходного поста вместо даты; удалённый оригинал без метаданных.', source: 'QuotedPostCard', render: p => <Stack>{[post, { id: 'deleted', isDeleted: true as const, createdAt: post.createdAt }].map(item => <QuotedPostCard key={item.id} post={item} onOpenProfile={async () => p.notify('Профиль')} onOpenPublicPage={async () => p.notify('Сообщество')} />)}</Stack> },
   { id: 'post-composer', category: 'Лента', title: 'Редактор публикации', description: 'Композиция общих стилей: текст, вложения, счётчики, недоступная кнопка и ошибка с сохранённым черновиком.', source: 'styles.postCompose* / PostFeed', render: () => <Composer /> },
   { id: 'post-actions', category: 'Лента', title: 'Меню публикации и жалоба', description: 'Меню у точки нажатия, удаление и причины жалобы.', source: 'PostActionsPopover', render: p => <PostMenu {...p} /> },
   { id: 'event-card', category: 'События', title: 'Карточка события', description: 'Афиша, дата, место, участники, «Пойду» и отслеживание.', source: 'EventCard / EventPoster / EventCounters', render: p => <EventExample {...p} /> },
