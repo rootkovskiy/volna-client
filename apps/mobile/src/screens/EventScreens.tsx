@@ -105,11 +105,17 @@ export function EventsScreen({
     countryCode: defaultLocation.countryCode ?? '',
     countryName: defaultLocation.countryName,
   }));
-  const filters = useMemo(() => catalogLocation ? {
-    ...storedFilters,
-    ...catalogLocation,
-    venue: storedFilters.venue?.cityId === catalogLocation.cityId ? storedFilters.venue : null,
-  } : storedFilters, [storedFilters, catalogLocation]);
+  const filters = useMemo(() => {
+    if (!catalogLocation || (
+      storedFilters.cityId === catalogLocation.cityId
+      && storedFilters.countryCode === catalogLocation.countryCode
+    )) return storedFilters;
+    return {
+      ...storedFilters,
+      ...catalogLocation,
+      venue: storedFilters.venue?.cityId === catalogLocation.cityId ? storedFilters.venue : null,
+    };
+  }, [storedFilters, catalogLocation]);
   const [activeListTab, setActiveListTab] = useScreenChoice<EventListTab>('events:tab', 'all');
   const [selectedCategory, setSelectedCategory] = useScreenChoice<EventCategory | null>('events:category', null);
   const [categoryCounts, setCategoryCounts] = useState<Record<EventCategory, number> | null>(null);
@@ -311,6 +317,7 @@ export function EventsScreen({
         onLayout={catalogScroll.onLayout}
         onScroll={catalogScroll.onScroll}
         onScrollBeginDrag={catalogScroll.onScrollBeginDrag}
+        onTouchStart={catalogScroll.onTouchStart}
         onContentSizeChange={catalogScroll.onContentSizeChange}
         alwaysBounceVertical
         data={eventListItems}

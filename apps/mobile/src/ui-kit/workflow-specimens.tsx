@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { Bell, ChevronRight, Copy, MapPin, Plus, ShieldAlert, Trash2, X } from 'lucide-react-native';
 import { AppSheetModal } from '@volna/messaging-client/app-sheet';
 import { LoadingIndicator } from '@volna/messaging-client/loading';
@@ -9,6 +9,7 @@ import { AppImage } from '../components/AppImage';
 import { SelectionPickerModal } from '../components/SelectionPickerModal';
 import { CatalogLocationProvider, useCatalogLocation } from '../components/CatalogLocationProvider';
 import { CatalogTabs } from '../components/CatalogTabs';
+import { ScreenContinuityProvider, useScreenScroll } from '../components/ScreenContinuity';
 import { EntityShareActions } from '../components/EntityShareModal';
 import { styles as s } from '../styles';
 import { searchIncludes } from '../utils/searchNormalization';
@@ -54,6 +55,20 @@ function ListStates({ notify }: DemoProps) {
   const [state, setState] = useState(0);
   return <Stack><View style={s.emptyProfileTab}>{state === 0 ? <LoadingIndicator /> : state === 1 ? <><Text style={s.emptyProfileTabTitle}>Здесь пока ничего нет</Text><Text style={s.emptyProfileTabText}>Добавьте первую запись или измените фильтры.</Text></> : <><ShieldAlert color="#111" size={28} /><Text style={s.emptyProfileTabTitle}>Не удалось загрузить</Text><Text style={s.emptyProfileTabText}>Проверьте соединение и повторите попытку.</Text><Action secondary onPress={() => { setState(0); notify('Повторная загрузка — пример'); }}>Повторить</Action></>}</View><Action secondary onPress={() => setState((state + 1) % 3)}>Следующее состояние</Action></Stack>;
 }
+function CatalogScrollExample() {
+  const [category, setCategory] = useState<'music' | 'cinema'>('music');
+  const [extra, setExtra] = useState(false);
+  const scroll = useScreenScroll(`ui-kit:catalog-scroll:${category}`);
+  const rows = Array.from({ length: extra ? 18 : 12 }, (_, index) => index + 1);
+  return <Stack>
+    <CatalogTabs value={category} onChange={setCategory} tabs={[{ value: 'music', label: 'Музыка' }, { value: 'cinema', label: 'Кино' }]} />
+    <ScrollView ref={scroll.ref} onLayout={scroll.onLayout} onContentSizeChange={scroll.onContentSizeChange} onScroll={scroll.onScroll} onScrollBeginDrag={scroll.onScrollBeginDrag} onTouchStart={scroll.onTouchStart} scrollEventThrottle={16} style={{ height: 260 }}>
+      {rows.map(index => <View key={index} style={s.publicPageTeamRow}><Text style={s.publicPageTeamName}>{category === 'music' ? 'Музыкальное' : 'Кинопоказ'} событие {index}</Text></View>)}
+    </ScrollView>
+    <Action secondary onPress={() => setExtra(!extra)}>{extra ? 'Убрать добавленные строки' : 'Добавить строки после прокрутки'}</Action>
+  </Stack>;
+}
+function CatalogScroll() { return <ScreenContinuityProvider><CatalogScrollExample /></ScreenContinuityProvider>; }
 function Share({ notify }: DemoProps) {
   const [open, setOpen] = useState(false);
   return <><Action secondary onPress={() => setOpen(true)}>Поделиться</Action><AppSheetModal title="Поделиться" isVisible={open} onClose={() => setOpen(false)}><EntityShareActions onChat={() => notify('Выбор получателя показан в разделе «Сообщения»')} onRepost={() => notify('Открытие редактора репоста — пример')} onExternal={() => notify('Системная панель здесь не вызывается')} /></AppSheetModal></>;
@@ -67,5 +82,6 @@ export const workflowSpecimens: Specimen[] = [
   { id: 'location', category: 'Выбор', title: 'Город и определение местоположения', description: 'Выбранный город сохраняется между событиями и локациями. В приложении выбор восстанавливается для аккаунта после перезапуска; новый город по GPS применяется только при реальном изменении города. Пример показывает локальное переключение вкладок без хранилища, GPS и изменения профиля.', source: 'SelectionPickerModal / CatalogLocationProvider', render: p => <City {...p} /> },
   { id: 'push-permission', category: 'Уведомления', title: 'Предложение включить push', description: 'Панель приложения перед системным запросом разрешения.', source: 'AppSheetModal / styles.pushPermission*', render: p => <Push {...p} /> },
   { id: 'lists-states', category: 'Состояния', title: 'Загрузка, пустой список и ошибка', description: 'Общий набор состояний ленты, каталогов, музыки и сообществ.', source: 'LoadingIndicator / styles.emptyProfileTab*', render: p => <ListStates {...p} /> },
+  { id: 'catalog-scroll', category: 'Состояния', title: 'Прокрутка каталога', description: 'Локальная композиция с настоящим useScreenScroll: начните прокрутку сразу, затем добавьте строки. Список остаётся на месте; смена категории прокручивает к началу.', source: 'ScreenContinuityProvider / useScreenScroll / shared team-row styles', render: () => <CatalogScroll /> },
   { id: 'share', category: 'Навигация', title: 'Поделиться объектом', description: 'Настоящие действия EntityShareModal: личный чат, репост и другие приложения. Музыкальное окно отправки отличается и этим примером не покрывается.', source: 'AppSheetModal / EntityShareActions', render: p => <Share {...p} /> },
 ];
