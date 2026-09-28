@@ -56,7 +56,7 @@ function EventExample({ notify, past = false, compact = false }: DemoProps & { p
   return <EventCard compactList={compact} event={{ ...event, myParticipationStatus: participation, ...(past ? { posterUrl: null, startsAt: '2020-01-01T17:00:00Z', endsAt: '2020-01-01T22:00:00Z' } : {}) }} onOpen={() => notify('Страница события')} onSetParticipation={value => setParticipation(current => current === value ? null : value)} />;
 }
 export const contentSpecimens: Specimen[] = [
-  { id: 'post', category: 'Лента', title: 'Публикация', description: 'Автор, упоминания, счётчики и активный лайк.', source: 'PostFeed / PostCard', render: p => <Publication {...p} /> },
+  { id: 'post', category: 'Лента', title: 'Публикация', description: 'Автор, упоминания, счётчики действий с цифрами веса 500 и активный лайк.', source: 'PostFeed / PostCard', render: p => <Publication {...p} /> },
   { id: 'post-images', category: 'Лента', title: 'Фотографии публикации', description: 'Карусель и полноэкранный просмотр локальных изображений.', source: 'PostCard / PostImageCarousel', render: p => <Publication {...p} images /> },
   { id: 'post-thread', category: 'Лента', title: 'Обсуждение и ответы', description: 'Крупный автор публикации, вложенные ответы, лайк и удалённый ответ.', source: 'PostCard / PostCommentCard', render: p => <Stack><Publication {...p} thread /><Comments {...p} /></Stack> },
   { id: 'post-poll', category: 'Лента', title: 'Опрос', description: 'Один или несколько ответов, проценты и выбранный вариант.', source: 'PostPollCard', render: () => <Poll /> },
