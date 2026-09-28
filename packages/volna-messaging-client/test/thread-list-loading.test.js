@@ -110,6 +110,19 @@ test('mounted verified inbox does not repaint pending text on repeated backgroun
   assert.equal(visible[0].lastMessageText, 'endpoint preview');
 });
 
+test('provisional refresh drops a mounted preview when deletion, peer or protocol changes', async () => {
+  const { mergeThreadListPage } = await import('../src/thread-list-presentation.mjs');
+  const mounted = verified([row()]);
+  const changed = [
+    { ...row(), visibility: { hasDeletions: true, clearedBefore: null, deletedMessageIds: ['message_12345678'] } },
+    { ...row(), partner: { ...row().partner, id: OTHER_ACCOUNT } },
+    { ...row(), protocolVersion: 2 },
+  ];
+  for (const next of changed) {
+    assert.deepEqual(mergeThreadListPage(mounted, { items: [next] }, true, true), []);
+  }
+});
+
 test('return snapshot never skips a fresh authorized read and expires after 60 seconds', async (t) => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
