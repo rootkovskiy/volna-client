@@ -30,7 +30,6 @@ import { CalendarPickerModal } from '../components/CalendarPickerModal';
 import { CatalogCategoryTile, eventCategoryOptions, useCategoryCovers } from '../components/CatalogCategoryTile';
 import { CatalogInnerHeader } from '../components/CatalogInnerHeader';
 import { CatalogBackArea } from '../components/CatalogBackArea';
-import { resolveForegroundLocation } from '../location/foregroundLocation';
 import { normalizeExternalHttpsUrl } from '../security/externalUrls.mjs';
 import { openExternalHttpsUrl } from '../security/openExternalUrl';
 
@@ -55,28 +54,6 @@ type EventCatalogListItem =
   | { kind: 'archive-empty' };
 
 const emptyEventFilters: EventFilters = { cityId: '', cityName: '', countryCode: '', countryName: '', dateFrom: '', dateTo: '', types: [], venue: null };
-const nearbyCityRadiusKilometers = 120;
-
-type SelectableCityLocation = {
-  id: string;
-  name: string;
-  countryCode: string;
-  latitude: number | null;
-  longitude: number | null;
-  country: { name: string };
-};
-
-function distanceKilometers(latitude: number, longitude: number, cityLatitude: number, cityLongitude: number) {
-  const toRadians = (value: number) => value * Math.PI / 180;
-  const latitudeDelta = toRadians(cityLatitude - latitude);
-  const longitudeDelta = toRadians(cityLongitude - longitude);
-  const startLatitude = toRadians(latitude);
-  const endLatitude = toRadians(cityLatitude);
-  const haversine = Math.sin(latitudeDelta / 2) ** 2
-    + Math.cos(startLatitude) * Math.cos(endLatitude) * Math.sin(longitudeDelta / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
-}
-
 export function EventsScreen({
   accountRole,
   adminMode,
@@ -139,7 +116,6 @@ export function EventsScreen({
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [isCatalogLocationPickerOpen, setIsCatalogLocationPickerOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
-  const locationWasManuallyChangedRef = useRef(false);
   const catalogScroll = useScreenScroll(`events:scroll:${activeListTab}:${selectedCategory}:${JSON.stringify(filters)}`, { loading: isInitialLoading || isLoadingMore, canLoadMore: Boolean(nextCursor), loadMore: () => void loadEvents(false) });
   const pastLoadInFlightRef = useRef(false);
   const eventRequest = useRef(0);
@@ -149,42 +125,6 @@ export function EventsScreen({
   const queryIdentity = JSON.stringify([activeListTab, filters, selectedCategory, authToken]);
   currentQuery.current = queryIdentity;
   useEffect(() => () => { eventRequest.current++; pastRequest.current++; }, []);
-
-  useEffect(() => {
-    if (catalogLocation) return;
-    let isCancelled = false;
-    const detectNearbyCity = async () => {
-      try {
-        const [position, cityResponse] = await Promise.all([
-          resolveForegroundLocation(),
-          fetch(`${apiUrl}/locations/cities`),
-        ]);
-        if (!position || !cityResponse.ok || isCancelled) return;
-        const cities = await cityResponse.json() as SelectableCityLocation[];
-        const nearest = cities
-          .filter((city) => Number.isFinite(city.latitude) && Number.isFinite(city.longitude))
-          .map((city) => ({
-            city,
-            distance: distanceKilometers(position.latitude, position.longitude, city.latitude!, city.longitude!),
-          }))
-          .sort((left, right) => left.distance - right.distance)[0];
-        if (!nearest || nearest.distance > nearbyCityRadiusKilometers || isCancelled || locationWasManuallyChangedRef.current) return;
-        setFilters((current) => current.cityId === nearest.city.id ? current : ({
-          ...current,
-          cityId: nearest.city.id,
-          cityName: nearest.city.name,
-          countryCode: nearest.city.countryCode,
-          countryName: nearest.city.country.name,
-          venue: null,
-        }));
-      } catch {
-        // Permission denial, unavailable browser location, and transient GPS
-        // failures intentionally retain the profile-based location fallback.
-      }
-    };
-    void detectNearbyCity();
-    return () => { isCancelled = true; };
-  }, [catalogLocation]);
 
   const loadEvents = useCallback(async (reset = true, source: 'initial' | 'refresh' = 'initial') => {
     if (!reset && (!nextCursor || eventBusy.current)) return;
@@ -461,13 +401,12 @@ export function EventsScreen({
       />
       </MotionSurface>
       </CatalogBackArea>
-      {selectedCategory ? <EventFiltersModal authToken={authToken} category={selectedCategory} initialValue={filters} isVisible={isFiltersOpen} onApply={(value) => { if (value.cityId !== filters.cityId || value.countryCode !== filters.countryCode) { locationWasManuallyChangedRef.current = true; selectCatalogLocation(value); } setFilters(value); setIsFiltersOpen(false); }} onClose={() => setIsFiltersOpen(false)} onNotify={onNotify} /> : null}
+      {selectedCategory ? <EventFiltersModal authToken={authToken} category={selectedCategory} initialValue={filters} isVisible={isFiltersOpen} onApply={(value) => { if (value.cityId !== filters.cityId || value.countryCode !== filters.countryCode) selectCatalogLocation(value); setFilters(value); setIsFiltersOpen(false); }} onClose={() => setIsFiltersOpen(false)} onNotify={onNotify} /> : null}
       {activeListTab === 'all' ? <LocationPickerModal
         initialCountryName={filters.countryName || undefined}
         isVisible={isCatalogLocationPickerOpen}
         onClose={() => setIsCatalogLocationPickerOpen(false)}
         onSelect={(location) => {
-          locationWasManuallyChangedRef.current = true;
           selectCatalogLocation(location);
           setFilters((current) => ({
             ...current,

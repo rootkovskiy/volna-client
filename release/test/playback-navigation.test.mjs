@@ -22,7 +22,7 @@ function harness() {
     exports: {}, require: () => ({ jsx, jsxs: jsx }),
     useState: () => [request, value => { request = typeof value === 'function' ? value(request) : value; }],
     useCallback: callback => callback,
-    AppTopBarProvider: 'topbar', CatalogLocationProvider: 'account', GlobalAudioProvider: 'audio',
+    AppTopBarProvider: 'topbar', CatalogLocationProvider: 'account', DevelopmentLoadingScreen: 'loading', GlobalAudioProvider: 'audio',
     ScreenContinuityProvider: 'screens', MainAppContent: 'content',
   };
   const declarations = app.statements.filter(node => ts.isFunctionDeclaration(node) && ['MainApp', 'MainAppSession'].includes(node.name?.text));

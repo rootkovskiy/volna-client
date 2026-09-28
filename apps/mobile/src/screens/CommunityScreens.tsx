@@ -49,7 +49,6 @@ import { apiFetch as fetch, apiUrl, readApiError, remoteSearchDebounceMs } from 
 import { audioReleaseGenreLimit, avatarThumbnail, connectPhotoThumbnail, countryOptions, formatCityName, formatCountryCity, getAvatarInitial, groupMusicGenreChips, isMusicSubgenreValue, normalizePhoneDigits, normalizeSocialLink, normalizeUsernameInput, phoneCountryOptions, postImageThumbnail, publicPageTypeGroups, publicPageTypeLabels, releasePrimaryGenreLimit, russianPlural, splitInternationalPhone, uploadAvatarAsset, uploadConnectPhotoAsset, uploadPostImageAsset } from '../domain';
 import { styles } from '../styles';
 import { normalizeSearchText, searchIncludes, searchStartsWith } from '../utils/searchNormalization';
-import { resolveForegroundLocation } from '../location/foregroundLocation';
 import { normalizeExternalHttpsUrl } from '../security/externalUrls.mjs';
 import { openExternalHttpsUrl } from '../security/openExternalUrl';
 import type { AppleMusicTrack, AppPost, AvatarCropAsset, ConnectGoal, ConnectPhoto, CreateCommunityInput, CursorPage, EventParticipationStatus, EventSummary, Gender, PartnerPageInput, PartnerReference, Profile, PublicAccount, PublicPage, PublicPageAudioRelease, PublicPageContentTab, PublicPageDetail, PublicPageListTab, PublicPagePermission, PublicPageProduct, PublicPageTeamMember, PublicPageTypeOption, QuotedPost, TeamMemberInput, ToastMessage, UpdateCommunityInput } from '../types';
@@ -310,20 +309,6 @@ export function MyCommunitiesScreen({
 }
 
 type CatalogLocation = { cityId: string; cityName: string; countryCode: string; countryName: string };
-type SelectableCatalogCity = CatalogLocation & { id: string; name: string; latitude: number | null; longitude: number | null; country: { name: string } };
-const nearbyCatalogCityRadiusKilometers = 120;
-
-function catalogDistanceKilometers(latitude: number, longitude: number, cityLatitude: number, cityLongitude: number) {
-  const toRadians = (value: number) => value * Math.PI / 180;
-  const latitudeDelta = toRadians(cityLatitude - latitude);
-  const longitudeDelta = toRadians(cityLongitude - longitude);
-  const startLatitude = toRadians(latitude);
-  const endLatitude = toRadians(cityLatitude);
-  const haversine = Math.sin(latitudeDelta / 2) ** 2
-    + Math.cos(startLatitude) * Math.cos(endLatitude) * Math.sin(longitudeDelta / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
-}
-
 export function CommunityCabinetScreen({ authToken, isOwner, onBack, onNotify, page }: { authToken: string; isOwner: boolean; onBack: () => void; onNotify: (message: string, type?: ToastMessage['type']) => void; page: PublicPageDetail }) {
   const [auditLog, setAuditLog] = useState<Array<{ id: string; action: string; details: Record<string, unknown> | null; createdAt: string; actor: { username: string; name: string } }>>([]);
   const effectivePermissions = isOwner ? allPublicPagePermissions : page.myPermissions;
@@ -842,8 +827,6 @@ export function LocationsScreen({
   const locationFilters = useMemo(() => selectedCatalogLocation
     ? { ...storedLocationFilters, ...selectedCatalogLocation }
     : storedLocationFilters, [storedLocationFilters, selectedCatalogLocation]);
-  const activeCatalogTabRef = useRef(activeCatalogTab);
-  const locationsManuallyChangedRef = useRef(false);
   const catalogLocationsRef = useRef<Record<'locations' | 'communities', CatalogLocation>>({
     locations: profileCatalogLocation,
     communities: communityLocation ?? { cityId: '', cityName: '', countryCode: '', countryName: '' },
@@ -851,38 +834,6 @@ export function LocationsScreen({
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [isLocationFiltersOpen, setIsLocationFiltersOpen] = useState(false);
   const [followMutationUsernames, setFollowMutationUsernames] = useState<Set<string>>(() => new Set());
-
-  useEffect(() => {
-    if (catalogLocation) return;
-    let cancelled = false;
-    const detectNearbyCity = async () => {
-      try {
-        const [position, cityResponse] = await Promise.all([
-          resolveForegroundLocation(),
-          fetch(`${apiUrl}/locations/cities`),
-        ]);
-        if (!position || !cityResponse.ok || cancelled || locationsManuallyChangedRef.current) return;
-        const cities = await cityResponse.json() as SelectableCatalogCity[];
-        const nearest = cities
-          .filter((city) => Number.isFinite(city.latitude) && Number.isFinite(city.longitude))
-          .map((city) => ({ city, distance: catalogDistanceKilometers(position.latitude, position.longitude, city.latitude!, city.longitude!) }))
-          .sort((left, right) => left.distance - right.distance)[0];
-        if (!nearest || nearest.distance > nearbyCatalogCityRadiusKilometers || cancelled || locationsManuallyChangedRef.current) return;
-        const detected = {
-          cityId: nearest.city.id,
-          cityName: nearest.city.name,
-          countryCode: nearest.city.countryCode,
-          countryName: nearest.city.country.name,
-        };
-        catalogLocationsRef.current.locations = detected;
-        if (activeCatalogTabRef.current === 'locations') setLocationFilters((current) => ({ ...current, ...detected }));
-      } catch {
-        // The profile city remains the fallback when permission is denied or GPS is unavailable.
-      }
-    };
-    void detectNearbyCity();
-    return () => { cancelled = true; };
-  }, [catalogLocation]);
 
   const normalizedQuery = query.trim();
   const isSearching = normalizedQuery.length > 0;
@@ -1067,7 +1018,6 @@ export function LocationsScreen({
                         countryCode: locationFilters.countryCode,
                         countryName: locationFilters.countryName,
                       };
-                      activeCatalogTabRef.current = tab.value;
                       setActiveCatalogTab(tab.value);
                       setLocationFilters((current) => ({ ...current, ...catalogLocationsRef.current[tab.value], types: [] }));
                       if (tab.value === 'communities') setSelectedLocationCategory(null);
@@ -1231,7 +1181,6 @@ export function LocationsScreen({
         isVisible={isLocationPickerOpen}
         onClose={() => setIsLocationPickerOpen(false)}
         onSelect={(location) => {
-          if (activeCatalogTab === 'locations') locationsManuallyChangedRef.current = true;
           (activeCatalogTab === 'locations' ? selectCatalogLocation : selectCommunityLocation)(location);
           catalogLocationsRef.current[activeCatalogTab] = {
             cityId: location.cityId,
