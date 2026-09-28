@@ -125,6 +125,21 @@ test('ready empty preview survives refresh but not identity, time or protocol ch
   }
 });
 
+test('a local decrypted timeline date does not invalidate an unchanged server row', async () => {
+  const { controller } = await fixture({
+    fetchPage: async () => Response.json({ items: [{ ...row(), lastMessageId: 'message_12345678' }] }),
+    decorate: async (_account, rows) => rows.map(item => ({
+      ...item, lastMessageAt: '2026-09-04T00:00:00.000Z', lastMessageText: 'verified local preview',
+    })),
+  });
+  await controller.listThreads(ACCOUNT);
+  let provisional;
+  await controller.listThreads(ACCOUNT, { onInitialPage: page => { provisional = page.items[0]; } });
+  assert.equal(provisional.previewAvailable, true);
+  assert.equal(provisional.lastMessageText, 'verified local preview');
+  assert.equal(provisional.lastMessageAt, '2026-09-05T00:00:00.000Z');
+});
+
 test('pagination updates its own rows without replacing the first-page snapshot', async () => {
   const { controller } = await fixture({ fetchPage: async (url) => Response.json({
     items: [row(url.includes('cursor=') ? 'thread_second_123' : 'thread_12345678')],

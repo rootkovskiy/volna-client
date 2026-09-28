@@ -195,9 +195,19 @@ function MessagesScreenContent({
     let active = true;
     let cursor: string | null = snapshot?.nextCursor ?? null;
     let reloadQueued = false;
+    let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
     const abort = new AbortController();
+    const scheduleRealtimeRefresh = () => {
+      if (!active) return;
+      if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+      realtimeRefreshTimer = setTimeout(() => {
+        realtimeRefreshTimer = null;
+        runLoad(true);
+      }, 400);
+    };
     const runLoad = (reset: boolean) => {
       if (!active) return;
+      if (reset && realtimeRefreshTimer) { clearTimeout(realtimeRefreshTimer); realtimeRefreshTimer = null; }
       if (loadRef.current) {
         // A realtime update during initial crypto sync must be replayed once.
         if (reset) reloadQueued = true;
@@ -239,18 +249,18 @@ function MessagesScreenContent({
           setLoading(false);
           setLoadingMore(false);
           setRefreshing(false);
-          if (reloadQueued) { reloadQueued = false; runLoad(true); }
+          if (reloadQueued) { reloadQueued = false; scheduleRealtimeRefresh(); }
         });
       loadRef.current = work;
     };
     runLoadRef.current = runLoad;
     runLoad(true);
     const releaseActivity = subscribeAppActivity(() => { if (isAppForeground()) runLoad(true); });
-    void controller.subscribeRealtime({ accountId, onChatStateUpdated: () => setChatStateRevision(value => value + 1), onActivity: () => onActivityRef.current?.(), onEncryptedEnvelope: () => runLoad(true), onThreadUpdated: () => runLoad(true) }).then((cleanup) => {
+    void controller.subscribeRealtime({ accountId, onChatStateUpdated: () => setChatStateRevision(value => value + 1), onActivity: () => onActivityRef.current?.(), onEncryptedEnvelope: scheduleRealtimeRefresh, onThreadUpdated: scheduleRealtimeRefresh }).then((cleanup) => {
       if (active) dispose = cleanup;
       else cleanup();
     }).catch(() => undefined);
-    return () => { active = false; abort.abort(); loadRef.current = null; dispose?.(); releaseActivity(); };
+    return () => { active = false; if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer); abort.abort(); loadRef.current = null; dispose?.(); releaseActivity(); };
   }, [accountId, controller, snapshot]);
 
   const normalized = query.trim().normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
