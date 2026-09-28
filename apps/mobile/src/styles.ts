@@ -3238,7 +3238,7 @@ export const styles = StyleSheet.create({
   postTrackArtistOnDark: { marginTop: 1, fontSize: 12, lineHeight: 16, color: '#d7dee5' },
   postActions: { minHeight: 32, marginTop: 5, flexDirection: 'row', alignItems: 'center', gap: 18 },
   postAction: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  postActionCount: { minWidth: 10, fontSize: 12, lineHeight: 17, fontWeight: '400', color: '#6f7b86' },
+  postActionCount: { minWidth: 10, fontSize: 12, lineHeight: 17, fontWeight: '500', color: '#6f7b86' },
   postActionCountLiked: { color: '#e53935' },
   postDiscussion: { borderTopWidth: 1, borderTopColor: '#d7dee5', paddingBottom: 16 },
   postDiscussionHeader: { position: 'relative', zIndex: 20, minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 7, borderBottomWidth: 1, borderBottomColor: '#d7dee5' },
