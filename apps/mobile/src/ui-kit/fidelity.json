@@ -90,6 +90,7 @@
   "motion": "composition",
   "event-schedule": "component",
   "event-time": "component",
+  "event-filters": "composition",
   "community-team": "composition",
   "community-products": "composition",
   "auth-invite": "composition",
