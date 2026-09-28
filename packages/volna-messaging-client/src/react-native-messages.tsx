@@ -11,6 +11,7 @@ import { useWebChatViewport } from './web-chat-viewport';
 import { useChatHistoryPagination } from './chat-history-pagination';
 export { useChatHistoryPagination } from './chat-history-pagination';
 import { isAppForeground, subscribeAppActivity } from './app-activity';
+import { mergeThreadListPage } from './thread-list-presentation.mjs';
 import { useChatActivity } from './use-chat-activity';
 import { formatPresence } from './chat-activity.mjs';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
@@ -217,20 +218,18 @@ function MessagesScreenContent({
       setHydrating(true);
       if (reset) setLoadError(null);
       else setLoadingMore(true);
-      const applyPage = (page: MessagingThreadListPage) => {
+      const applyPage = (page: MessagingThreadListPage, provisional = false) => {
         if (!active) return;
-        setThreads((current) => {
-          if (reset) return page.items;
-          const updates = new Map(page.items.map((item) => [item.id, item]));
-          return [...current.map((item) => updates.get(item.id) ?? item), ...page.items.filter((item) => !current.some((stored) => stored.id === item.id))];
-        });
+        // A mounted inbox already shows endpoint-verified previews. Keep that
+        // complete picture until the new encrypted projection is ready.
+        setThreads(current => mergeThreadListPage(current, page, reset, provisional));
         cursor = page.nextCursor;
         setNextCursor(cursor);
         setLoading(false);
         setRefreshing(false);
       };
-      const work = controller.listThreads(accountId, { cursor: reset ? null : cursor, signal: abort.signal, onInitialPage: applyPage })
-        .then(applyPage)
+      const work = controller.listThreads(accountId, { cursor: reset ? null : cursor, signal: abort.signal, onInitialPage: page => applyPage(page, true) })
+        .then(page => applyPage(page))
         .catch((error) => {
           if (!active) return;
           setLoadError(messagingSurfaceErrorMessage(error));
@@ -256,7 +255,8 @@ function MessagesScreenContent({
     runLoadRef.current = runLoad;
     runLoad(true);
     const releaseActivity = subscribeAppActivity(() => { if (isAppForeground()) runLoad(true); });
-    void controller.subscribeRealtime({ accountId, onChatStateUpdated: () => setChatStateRevision(value => value + 1), onActivity: () => onActivityRef.current?.(), onEncryptedEnvelope: scheduleRealtimeRefresh, onThreadUpdated: scheduleRealtimeRefresh }).then((cleanup) => {
+    void controller.subscribeRealtime({ accountId, onChatStateUpdated: () => setChatStateRevision(value => value + 1), onActivity: () => onActivityRef.current?.(), onEncryptedEnvelope: scheduleRealtimeRefresh, onThreadUpdated: scheduleRealtimeRefresh,
+      onVisibilityUpdated: threadId => { if (active) setThreads(current => current.filter(item => item.id !== threadId)); } }).then((cleanup) => {
       if (active) dispose = cleanup;
       else cleanup();
     }).catch(() => undefined);
