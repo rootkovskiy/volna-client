@@ -83,6 +83,33 @@ test('identity rows paint while crypto is blocked; provisional content is redact
   assert.equal(calls[0].init.cache, 'no-store');
 });
 
+test('mounted verified inbox does not repaint pending text on repeated background reads', async () => {
+  const { mergeThreadListPage } = await import('../src/thread-list-presentation.mjs');
+  const crypto = pending();
+  let reads = 0;
+  const { controller } = await fixture({ decorate: async (_account, rows) => {
+    if (++reads === 2) await crypto.promise;
+    return verified(rows);
+  } });
+  let visible = [];
+  const first = await controller.listThreads(ACCOUNT, {
+    onInitialPage: page => { visible = mergeThreadListPage(visible, page, true, true); },
+  });
+  assert.equal(visible[0].previewPending, true);
+  visible = mergeThreadListPage(visible, first, true, false);
+  assert.equal(visible[0].lastMessageText, 'endpoint preview');
+  const verifiedRows = visible;
+  const refresh = controller.listThreads(ACCOUNT, {
+    onInitialPage: page => { visible = mergeThreadListPage(visible, page, true, true); },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(visible, verifiedRows);
+  assert.equal(visible[0].lastMessageText, 'endpoint preview');
+  crypto.resolve();
+  visible = mergeThreadListPage(visible, await refresh, true, false);
+  assert.equal(visible[0].lastMessageText, 'endpoint preview');
+});
+
 test('return snapshot never skips a fresh authorized read and expires after 60 seconds', async (t) => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);

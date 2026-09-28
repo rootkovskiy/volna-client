@@ -103,6 +103,7 @@ export declare function createMessagingSurfaceController(options: {
     thread?: MessagingThread | null;
     onEncryptedEnvelope?(threadId: string): void;
     onThreadUpdated?(): void;
+    onVisibilityUpdated?(threadId: string): void;
     onReconnect?(): void;
     onActivity?(): void;
   }): Promise<() => void>;

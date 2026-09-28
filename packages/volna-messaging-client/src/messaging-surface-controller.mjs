@@ -927,7 +927,7 @@ export function createMessagingSurfaceController(options) {
     return result;
   };
 
-  const subscribeRealtime = async ({ accountId, thread, onEncryptedEnvelope, onThreadUpdated, onReconnect, onActivity, onChatStateUpdated }) => {
+  const subscribeRealtime = async ({ accountId, thread, onEncryptedEnvelope, onThreadUpdated, onVisibilityUpdated, onReconnect, onActivity, onChatStateUpdated }) => {
     identifier(accountId, 'account_id');
     const accessToken = typeof options.getAccessToken === 'function' ? await options.getAccessToken() : undefined;
     const socket = io(`${origin}/chat`, {
@@ -965,6 +965,7 @@ export function createMessagingSurfaceController(options) {
       const threadId = identifier(value?.threadId, 'visibility_thread_id');
       visibilityRevisions.set(threadId, (visibilityRevisions.get(threadId) ?? 0) + 1);
       clearThreadListSnapshot(accountId);
+      onVisibilityUpdated?.(threadId);
       onActivity?.(); onEncryptedEnvelope?.(threadId); onThreadUpdated?.();
     });
     socket.on('encrypted_envelope_available', encrypted);
