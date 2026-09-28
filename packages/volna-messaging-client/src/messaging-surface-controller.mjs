@@ -625,13 +625,15 @@ export function createMessagingSurfaceController(options) {
     if (!Array.isArray(page.items) || page.items.length > boundedPageSize) fail('thread_page_items');
     const rawItems = page.items.map(item => normalizeThread({ ...item, messages: [], lastMessageText: null }));
     const nextCursor = typeof page.nextCursor === 'string' ? page.nextCursor : null;
-    const previous = new Map((getThreadListSnapshot(accountId)?.items ?? []).map((item) => [item.id, item]));
+    const previousSnapshot = getThreadListSnapshot(accountId);
+    const previous = new Map((previousSnapshot?.items ?? []).map((item) => [item.id, item]));
+    const previousSourceDates = previousSnapshot ? session.snapshot?.sourceLastMessageAtById : null;
     // Identity rows can paint before crypto starts. Do not expose an unverified
     // server preview or claim a verified security state in this provisional page.
     onInitialPage?.({
       items: rawItems.flatMap((thread) => {
         const saved = previous.get(thread.id);
-        const samePreview = Boolean(saved && saved.lastMessageAt === thread.lastMessageAt
+        const samePreview = Boolean(saved && previousSourceDates?.[thread.id] === thread.lastMessageAt
           && saved.lastMessageId === thread.lastMessageId
           && saved.partner.id === thread.partner.id && saved.encryptionMode === thread.encryptionMode
           && saved.protocolVersion === thread.protocolVersion);
@@ -679,7 +681,9 @@ export function createMessagingSurfaceController(options) {
     };
     if (!cursor && pageSize === 30 && session.revision === revision) {
       const json = JSON.stringify({ ...result, items: result.items.slice(0, 30).map((thread) => ({ ...thread, messages: [] })) });
-      session.snapshot = json.length * 2 <= THREAD_LIST_SNAPSHOT_MAX_BYTES ? { json, savedAt: Date.now() } : null;
+      const sourceLastMessageAtById = Object.fromEntries(rawItems.slice(0, 30).map((thread) => [thread.id, thread.lastMessageAt]));
+      session.snapshot = (json.length + JSON.stringify(sourceLastMessageAtById).length) * 2 <= THREAD_LIST_SNAPSHOT_MAX_BYTES
+        ? { json, sourceLastMessageAtById, savedAt: Date.now() } : null;
     }
     return result;
   };
