@@ -2,6 +2,7 @@ import { CatalogTabs } from '../components/CatalogTabs';
 import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { MotionSurface } from '@volna/messaging-client/ui-motion';
 import { useScreenChoice, useScreenScroll } from '../components/ScreenContinuity';
+import { useCatalogSnapshot } from '../components/CatalogSnapshot';
 import { Bell, BellOff, CalendarClock, CalendarDays, CalendarPlus, Check, ChevronRight, Clock3, EllipsisVertical, Flag, Handshake, List, MapPin, PanelsTopLeft, Pencil, Plus, Search, Share2, SlidersHorizontal, X } from 'lucide-react-native';
 import * as Calendar from 'expo-calendar';
 import * as Location from 'expo-location';
@@ -86,7 +87,6 @@ export function EventsScreen({
   ownAccountId: string;
 }) {
   const { covers: categoryCovers, reload: reloadCategoryCovers } = useCategoryCovers();
-  const [events, setEvents] = useState<EventSummary[]>([]);
   const [pastEvents, setPastEvents] = useState<EventSummary[]>([]);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -95,7 +95,6 @@ export function EventsScreen({
   const [isPastLoadingMore, setIsPastLoadingMore] = useState(false);
   const [hasLoadedPastEvents, setHasLoadedPastEvents] = useState(false);
   const [showPastEvents, setShowPastEvents] = useState(false);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [pastNextCursor, setPastNextCursor] = useState<string | null>(null);
   const [catalogLocation, selectCatalogLocation] = useCatalogLocation();
   const [storedFilters, setFilters] = useScreenChoice<EventFilters>('events:filters', () => ({
@@ -122,6 +121,9 @@ export function EventsScreen({
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [isCatalogLocationPickerOpen, setIsCatalogLocationPickerOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<EventSummary | null>(null);
+  const catalogSnapshot = useCatalogSnapshot<{ items: EventSummary[]; nextCursor: string | null }>(`events:${ownAccountId}:${activeListTab}:${selectedCategory}:${JSON.stringify(filters)}`);
+  const [events, setEvents] = useState<EventSummary[]>(() => catalogSnapshot.read()?.items ?? []);
+  const [nextCursor, setNextCursor] = useState<string | null>(() => catalogSnapshot.read()?.nextCursor ?? null);
   const catalogScroll = useScreenScroll(`events:scroll:${activeListTab}:${selectedCategory}:${JSON.stringify(filters)}`, { loading: isInitialLoading || isLoadingMore, canLoadMore: Boolean(nextCursor), loadMore: () => void loadEvents(false) });
   const pastLoadInFlightRef = useRef(false);
   const eventRequest = useRef(0);
@@ -164,6 +166,7 @@ export function EventsScreen({
 
       const page = await response.json() as CursorPage<EventSummary>;
       if (!isCurrent()) return;
+      if (reset) catalogSnapshot.write({ items: page.items, nextCursor: page.nextCursor });
       setEvents((current) => reset ? page.items : [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]);
       setNextCursor(page.nextCursor);
     } catch (error) {
@@ -176,7 +179,7 @@ export function EventsScreen({
       setIsRefreshing(false);
       setIsLoadingMore(false);
     }
-  }, [activeListTab, authToken, filters, nextCursor, onNotify, selectedCategory]);
+  }, [activeListTab, authToken, catalogSnapshot, filters, nextCursor, onNotify, selectedCategory]);
 
   const loadPastEvents = useCallback(async (reset = true, source: 'initial' | 'refresh' = 'initial') => {
     if (activeListTab !== 'all' || !selectedCategory || pastLoadInFlightRef.current) return;
@@ -225,8 +228,9 @@ export function EventsScreen({
   }, [activeListTab, authToken, filters, onNotify]);
 
   useEffect(() => {
-    setEvents([]);
-    setNextCursor(null);
+    const remembered = catalogSnapshot.read();
+    setEvents(remembered?.items ?? []);
+    setNextCursor(remembered?.nextCursor ?? null);
     pastRequest.current++;
     pastLoadInFlightRef.current = false;
     setIsPastInitialLoading(false);
@@ -238,7 +242,7 @@ export function EventsScreen({
     void loadEvents(true);
     // Cursor is intentionally excluded: loading another page must not reset the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeListTab, authToken, filters, selectedCategory]);
+  }, [activeListTab, authToken, catalogSnapshot, filters, selectedCategory]);
 
   useEffect(() => { void loadCategoryCounts(); }, [loadCategoryCounts]);
 
@@ -256,6 +260,7 @@ export function EventsScreen({
   const updateParticipation = async (event: EventSummary, status: EventParticipationStatus) => {
     const nextStatus = event.myParticipationStatus === status ? null : status;
     const updatedEvent = await onToggleEventParticipation(event.id, nextStatus);
+    catalogSnapshot.write({ items: events.map((item) => item.id === updatedEvent.id ? updatedEvent : item), nextCursor });
     setEvents((currentEvents) => currentEvents.map((currentEvent) => (currentEvent.id === updatedEvent.id ? updatedEvent : currentEvent)));
     setPastEvents((currentEvents) => currentEvents.map((currentEvent) => (currentEvent.id === updatedEvent.id ? updatedEvent : currentEvent)));
   };
@@ -307,11 +312,11 @@ export function EventsScreen({
 
   return (
     <View style={{ flex: 1 }}>
-      {selectedEvent ? <EventDetailScreen adminMode={adminMode} authToken={authToken} event={selectedEvent} isGlobalAdmin={accountRole === 'ADMIN'} onBack={closeSelectedEvent} onDeleted={(eventId) => { setEvents((current) => current.filter((item) => item.id !== eventId)); setPastEvents((current) => current.filter((item) => item.id !== eventId)); closeSelectedEvent(); }} onNotify={onNotify} onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onUpdate={(updatedEvent) => { setSelectedEvent(updatedEvent); setEvents((current) => current.map((item) => item.id === updatedEvent.id ? updatedEvent : item)); setPastEvents((current) => current.map((item) => item.id === updatedEvent.id ? updatedEvent : item)); }} onToggleParticipation={onToggleEventParticipation} ownAccountId={ownAccountId} /> : null}
+      {selectedEvent ? <EventDetailScreen adminMode={adminMode} authToken={authToken} event={selectedEvent} isGlobalAdmin={accountRole === 'ADMIN'} onBack={closeSelectedEvent} onDeleted={(eventId) => { catalogSnapshot.write({ items: events.filter((item) => item.id !== eventId), nextCursor }); setEvents((current) => current.filter((item) => item.id !== eventId)); setPastEvents((current) => current.filter((item) => item.id !== eventId)); closeSelectedEvent(); }} onNotify={onNotify} onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} onOpenProfile={onOpenProfile} onOpenPublicPage={onOpenPublicPage} onUpdate={(updatedEvent) => { catalogSnapshot.write({ items: events.map((item) => item.id === updatedEvent.id ? updatedEvent : item), nextCursor }); setSelectedEvent(updatedEvent); setEvents((current) => current.map((item) => item.id === updatedEvent.id ? updatedEvent : item)); setPastEvents((current) => current.map((item) => item.id === updatedEvent.id ? updatedEvent : item)); }} onToggleParticipation={onToggleEventParticipation} ownAccountId={ownAccountId} /> : null}
       <View style={{ flex: 1, display: selectedEvent ? "none" : "flex" }}>
       <ScreenTopBar onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} title="События" />
       <CatalogBackArea routeKey={activeListTab === 'all' ? selectedCategory : null} enabled={!selectedEvent && !isFiltersOpen && !isCatalogLocationPickerOpen} onBack={backToEventCategories}>
-      <MotionSurface identity={`${isInitialLoading}:${events.length ? "results" : "empty"}`} style={{ flex: 1 }}>
+      <MotionSurface identity={events.length ? 'results' : isInitialLoading ? 'loading' : 'empty'} style={{ flex: 1 }}>
       <FlashList
         ref={catalogScroll.ref}
         onLayout={catalogScroll.onLayout}

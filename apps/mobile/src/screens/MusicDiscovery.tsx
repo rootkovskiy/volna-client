@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { apiFetch, apiUrl, readApiError, remoteSearchDebounceMs } from '../api/client';
 import { AppRefreshControl } from '../components/AppRefreshControl';
+import { useCatalogSnapshot } from '../components/CatalogSnapshot';
 import { boundedPlaybackQueue, uploadedTrackPlayerId } from '../components/audioPlayerCore';
 import { useGlobalAudioControls, type GlobalTrackQueueItem } from '../components/GlobalAudioPlayer';
 import { musicSearchRows, personalMusicMatches, type MusicCatalogItem, type MusicSearchRow } from '../music/musicCatalogSearch';
@@ -15,10 +16,6 @@ export function MusicDiscovery({ query, personalItems, genres, onChangeGenres }:
   query: string; personalItems: MusicCatalogItem[]; genres: string[]; onChangeGenres: (genres: string[]) => void;
 }) {
   const { activeTrack } = useGlobalAudioControls();
-  const [items, setItems] = useState<MusicCatalogItem[]>([]);
-  const [resultFilter, setResultFilter] = useState<string | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refresh, setRefresh] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -29,6 +26,11 @@ export function MusicDiscovery({ query, personalItems, genres, onChangeGenres }:
   const genreKey = [...genres].sort().join(',');
   const normalizedQuery = query.trim();
   const filterKey = JSON.stringify([normalizedQuery, genreKey]);
+  const catalogSnapshot = useCatalogSnapshot<{ items: MusicCatalogItem[]; nextCursor: string | null }>(`music:${filterKey}`);
+  const [items, setItems] = useState<MusicCatalogItem[]>(() => catalogSnapshot.read()?.items ?? []);
+  const [resultFilter, setResultFilter] = useState<string | null>(() => catalogSnapshot.read() ? filterKey : null);
+  const [nextCursor, setNextCursor] = useState<string | null>(() => catalogSnapshot.read()?.nextCursor ?? null);
+  const [loading, setLoading] = useState(() => !catalogSnapshot.read());
   const personalMatches = useMemo(() => personalMusicMatches(personalItems, normalizedQuery, genres), [personalItems, normalizedQuery, genreKey]);
   const rows = useMemo(() => musicSearchRows(personalMatches, resultFilter === filterKey ? items : [], Boolean(normalizedQuery)),
     [personalMatches, items, resultFilter, filterKey, normalizedQuery]);
@@ -54,6 +56,7 @@ export function MusicDiscovery({ query, personalItems, genres, onChangeGenres }:
       if (!response.ok) throw new Error(await readApiError(response, 'Не удалось загрузить музыку'));
       const page = await response.json() as CatalogPage;
       if (controller.signal.aborted || generation.current !== version) return;
+      if (!cursor) catalogSnapshot.write({ items: page.items, nextCursor: page.nextCursor });
       setItems((previous) => cursor ? [...new Map([...previous, ...page.items].map((item) => [item.key, item])).values()] : page.items);
       setResultFilter(filterKey);
       setNextCursor(page.nextCursor);
@@ -62,19 +65,21 @@ export function MusicDiscovery({ query, personalItems, genres, onChangeGenres }:
     } finally {
       if (!controller.signal.aborted && generation.current === version) { busy.current = false; setLoading(false); setRefreshing(false); }
     }
-  }, [genreKey, normalizedQuery, filterKey]);
+  }, [catalogSnapshot, genreKey, normalizedQuery, filterKey]);
 
   useEffect(() => {
     const version = ++generation.current;
     busy.current = true;
     setLoading(true);
     setError('');
-    setItems([]);
-    setNextCursor(null);
+    const remembered = catalogSnapshot.read();
+    setItems(remembered?.items ?? []);
+    setResultFilter(remembered ? filterKey : null);
+    setNextCursor(remembered?.nextCursor ?? null);
     list.current?.scrollToOffset({ offset: 0, animated: false });
     const timer = setTimeout(() => void load(null, version), normalizedQuery || genreKey ? remoteSearchDebounceMs : 0);
     return () => { clearTimeout(timer); request.current?.abort(); generation.current++; };
-  }, [load, refresh]);
+  }, [catalogSnapshot, filterKey, load, refresh]);
 
   const pagination = useCatalogPagination({
     cursor: nextCursor, loading, enabled: resultFilter === filterKey, error: Boolean(error), rowCount: rows.length,

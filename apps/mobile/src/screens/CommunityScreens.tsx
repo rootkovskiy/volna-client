@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { ScreenTopBar } from '../components/navigation';
 import { AppAnimatedImage, AppImage as Image } from '../components/AppImage';
+import { useCatalogSnapshot } from '../components/CatalogSnapshot';
 import { VolnaSwitch } from '../components/VolnaSwitch';
 import { PostFeed, usePostAvailability } from '../components/PostFeed';
 import { FollowListModal, MutualFollowersSummary } from '../components/FollowListModal';
@@ -802,13 +803,10 @@ export function LocationsScreen({
   const { covers: categoryCovers, reload: reloadCategoryCovers } = useCategoryCovers();
   const [activeCatalogTab, setActiveCatalogTab] = useScreenChoice<'locations' | 'communities'>('locations:tab', 'locations');
   const [query, setQuery] = useScreenChoice('locations:query', '');
-  const [pages, setPages] = useState<PublicPage[]>([]);
-  const [accounts, setAccounts] = useState<PublicAccount[]>([]);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selectedLocationCategory, setSelectedLocationCategory] = useScreenChoice<LocationCategory | null>('locations:category', null);
   const [locationCategoryCounts, setLocationCategoryCounts] = useState<Record<LocationCategory, number> | null>(null);
   const [catalogLocation, selectCatalogLocation] = useCatalogLocation();
@@ -831,6 +829,12 @@ export function LocationsScreen({
     )) return storedLocationFilters;
     return { ...storedLocationFilters, ...selectedCatalogLocation };
   }, [storedLocationFilters, selectedCatalogLocation]);
+  const catalogSnapshot = useCatalogSnapshot<{ pages: PublicPage[]; accounts: PublicAccount[]; nextCursor: string | null }>(
+    `public-pages:${ownAccountId}:${activeCatalogTab}:${selectedLocationCategory}:${query.trim()}:${locationFilters.cityId}:${[...locationFilters.types].sort().join(',')}`,
+  );
+  const [pages, setPages] = useState<PublicPage[]>(() => catalogSnapshot.read()?.pages ?? []);
+  const [accounts, setAccounts] = useState<PublicAccount[]>(() => catalogSnapshot.read()?.accounts ?? []);
+  const [nextCursor, setNextCursor] = useState<string | null>(() => catalogSnapshot.read()?.nextCursor ?? null);
   const catalogLocationsRef = useRef<Record<'locations' | 'communities', CatalogLocation>>({
     locations: profileCatalogLocation,
     communities: communityLocation ?? { cityId: '', cityName: '', countryCode: '', countryName: '' },
@@ -870,6 +874,7 @@ export function LocationsScreen({
           accountsResponse.json() as Promise<CursorPage<PublicAccount>>,
         ]);
         if (signal?.aborted) return;
+        catalogSnapshot.write({ pages: pageResults.items, accounts: accountResults.items, nextCursor: null });
         setPages(pageResults.items);
         setAccounts(accountResults.items);
         setNextCursor(null);
@@ -896,6 +901,7 @@ export function LocationsScreen({
       if (!response.ok) throw new Error(await readApiError(response, 'Не удалось загрузить каталог'));
       const page = await response.json() as CursorPage<PublicPage>;
       if (signal?.aborted) return;
+      if (reset) catalogSnapshot.write({ pages: page.items, accounts: [], nextCursor: page.nextCursor });
       setPages((current) => reset ? page.items : [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]);
       setAccounts([]);
       setNextCursor(page.nextCursor);
@@ -909,12 +915,13 @@ export function LocationsScreen({
         setIsLoadingMore(false);
       }
     }
-  }, [activeCatalogTab, locationFilters.cityId, locationFilters.types, nextCursor, normalizedQuery, selectedLocationCategory]);
+  }, [activeCatalogTab, catalogSnapshot, locationFilters.cityId, locationFilters.types, nextCursor, normalizedQuery, selectedLocationCategory]);
 
   useEffect(() => {
-    setPages([]);
-    setAccounts([]);
-    setNextCursor(null);
+    const remembered = catalogSnapshot.read();
+    setPages(remembered?.pages ?? []);
+    setAccounts(remembered?.accounts ?? []);
+    setNextCursor(remembered?.nextCursor ?? null);
     setIsInitialLoading(true);
     const controller = new AbortController();
     const timeout = setTimeout(
@@ -927,7 +934,7 @@ export function LocationsScreen({
     };
     // Pagination cursor must not restart the catalog.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCatalogTab, locationFilters, query, selectedLocationCategory]);
+  }, [activeCatalogTab, catalogSnapshot, locationFilters, query, selectedLocationCategory]);
 
   const loadLocationCategoryCounts = useCallback(async () => {
     if (activeCatalogTab !== 'locations' || isSearching) return;
@@ -953,14 +960,17 @@ export function LocationsScreen({
         : page.isPrivate
           ? 'PENDING'
           : 'ACTIVE';
-      setPages((current) => current.map((item) => item.username === page.username
+      const updateFollow = (item: PublicPage) => item.username === page.username
         ? {
             ...item,
             followStatus: nextFollowStatus,
             isFollowing: nextFollowStatus === 'ACTIVE',
             followersCount: Math.max(0, item.followersCount + (nextFollowStatus === 'ACTIVE' ? 1 : item.followStatus === 'ACTIVE' ? -1 : 0)),
           }
-        : item));
+        : item;
+      setPages((current) => current.map(updateFollow));
+      const remembered = catalogSnapshot.read();
+      if (remembered) catalogSnapshot.write({ ...remembered, pages: remembered.pages.map(updateFollow) });
     } catch (error) {
       onNotify(error instanceof Error ? error.message : 'Не удалось обновить подписку', 'error');
     } finally {
@@ -970,7 +980,7 @@ export function LocationsScreen({
         return next;
       });
     }
-  }, [followMutationUsernames, onNotify, onTogglePublicPageFollow, ownAccountId]);
+  }, [catalogSnapshot, followMutationUsernames, onNotify, onTogglePublicPageFollow, ownAccountId]);
 
   const catalogScroll = useScreenScroll(`locations:scroll:${activeCatalogTab}:${selectedLocationCategory}:${query}`, { loading: isInitialLoading || isLoadingMore, canLoadMore: Boolean(nextCursor), loadMore: () => void loadCatalog(false) });
   const loadingState = isInitialLoading ? <View style={styles.loadingRow}><LoadingIndicator /></View> : null;
@@ -984,7 +994,7 @@ export function LocationsScreen({
     <>
       <ScreenTopBar onOpenMenu={onOpenMenu} onOpenMessages={onOpenMessages} onOpenNotifications={onOpenNotifications} title="Сообщество" />
       <CatalogBackArea routeKey={!isSearching && activeCatalogTab === 'locations' ? selectedLocationCategory : null} enabled={!isLocationFiltersOpen && !isLocationPickerOpen} onBack={backToLocationCategories}>
-      <MotionSurface identity={`${isInitialLoading}:${items.length ? "results" : "empty"}:${isSearching}`} style={{ flex: 1 }}>
+      <MotionSurface identity={`${items.length ? 'results' : isInitialLoading ? 'loading' : 'empty'}:${isSearching}`} style={{ flex: 1 }}>
       <FlashList
         ref={catalogScroll.ref}
         onLayout={catalogScroll.onLayout}

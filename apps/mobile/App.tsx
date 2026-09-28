@@ -8,6 +8,7 @@ import { DrawerDismissArea } from './src/components/DrawerDismissArea';
 import { useReducedMotion } from '@volna/messaging-client/ui-motion';
 import { LoadingIndicator } from '@volna/messaging-client/loading';
 import { ScreenContinuityProvider } from './src/components/ScreenContinuity';
+import { CatalogSnapshotProvider } from './src/components/CatalogSnapshot';
 import { CatalogLocationProvider } from './src/components/CatalogLocationProvider';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -2211,7 +2212,7 @@ function MainAppSession(props: MainAppProps) {
   // Playback belongs to the account, outside the screen-reset boundary. A tab
   // change may remount every screen without releasing any audio backend.
   // Forced password changes retain the previous authenticated-player teardown.
-  if (props.mustChangePassword) return content;
+  if (props.mustChangePassword) return <CatalogSnapshotProvider>{content}</CatalogSnapshotProvider>;
   return <GlobalAudioProvider
     onAddTrackToPost={track => {
       setReleaseComposerRequest({ track, nonce: Date.now() });
@@ -2219,7 +2220,7 @@ function MainAppSession(props: MainAppProps) {
     }}
     onNotify={props.onNotify}
     storageScope={props.ownAccountId}
-  >{content}</GlobalAudioProvider>;
+  ><CatalogSnapshotProvider>{content}</CatalogSnapshotProvider></GlobalAudioProvider>;
 }
 
 function MainAppContent({

@@ -360,9 +360,10 @@
   },
   {
     "title": "Изображения, карточки и состояния",
-    "sources": [
-      "components/AppImage.tsx",
-      "components/CatalogCategoryTile.tsx",
+      "sources": [
+        "components/AppImage.tsx",
+        "components/CatalogSnapshot.tsx",
+        "components/CatalogCategoryTile.tsx",
       "components/VerifiedBadge.tsx",
       "components/EditorAutosaveStatus.tsx",
       "screens/EntityNotFoundScreen.tsx",
@@ -373,6 +374,7 @@
     "examples": [
       "identity",
       "catalog",
+      "image-update",
       "photos",
       "feedback",
       "empty",
@@ -381,7 +383,7 @@
       "profile-edit",
       "community-edit"
     ],
-    "note": "Pull-to-refresh использует системный native adapter; его физический жест проверяется отдельно.",
+      "note": "Каталог показывает локальную смену обложки через общие AppImageBackground и CatalogCategoryTile. Pull-to-refresh использует системный native adapter; его физический жест проверяется отдельно.",
     "notShown": [
       "Экран недоступного/удалённого объекта и восстановление сессии",
       "Физический pull-to-refresh и загрузка/ошибки реальных изображений",
