@@ -95,6 +95,7 @@
   "location": "composition",
   "push-permission": "composition",
   "lists-states": "composition",
+  "catalog-scroll": "composition",
   "share": "component",
   "playlist-editor": "composition",
   "music-pagination": "composition"

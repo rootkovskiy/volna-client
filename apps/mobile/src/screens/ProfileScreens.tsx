@@ -363,6 +363,7 @@ export function ProfileScreen({
         onLayout={detailScroll.onLayout}
         onContentSizeChange={detailScroll.onContentSizeChange}
         onScrollBeginDrag={detailScroll.onScrollBeginDrag}
+        onTouchStart={detailScroll.onTouchStart}
         onScroll={(event) => {
           detailScroll.onScroll(event);
           const { nativeEvent } = event;

@@ -824,9 +824,13 @@ export function LocationsScreen({
     types: [] as string[],
   });
   const selectedCatalogLocation = activeCatalogTab === 'locations' ? catalogLocation : communityLocation;
-  const locationFilters = useMemo(() => selectedCatalogLocation
-    ? { ...storedLocationFilters, ...selectedCatalogLocation }
-    : storedLocationFilters, [storedLocationFilters, selectedCatalogLocation]);
+  const locationFilters = useMemo(() => {
+    if (!selectedCatalogLocation || (
+      storedLocationFilters.cityId === selectedCatalogLocation.cityId
+      && storedLocationFilters.countryCode === selectedCatalogLocation.countryCode
+    )) return storedLocationFilters;
+    return { ...storedLocationFilters, ...selectedCatalogLocation };
+  }, [storedLocationFilters, selectedCatalogLocation]);
   const catalogLocationsRef = useRef<Record<'locations' | 'communities', CatalogLocation>>({
     locations: profileCatalogLocation,
     communities: communityLocation ?? { cityId: '', cityName: '', countryCode: '', countryName: '' },
@@ -986,6 +990,7 @@ export function LocationsScreen({
         onLayout={catalogScroll.onLayout}
         onScroll={catalogScroll.onScroll}
         onScrollBeginDrag={catalogScroll.onScrollBeginDrag}
+        onTouchStart={catalogScroll.onTouchStart}
         onContentSizeChange={catalogScroll.onContentSizeChange}
         alwaysBounceVertical
         data={items}
@@ -1981,6 +1986,7 @@ export function PublicPageScreen({
         onLayout={detailScroll.onLayout}
         onContentSizeChange={detailScroll.onContentSizeChange}
         onScrollBeginDrag={detailScroll.onScrollBeginDrag}
+        onTouchStart={detailScroll.onTouchStart}
         onScroll={(event) => {
           detailScroll.onScroll(event);
           const { nativeEvent } = event;

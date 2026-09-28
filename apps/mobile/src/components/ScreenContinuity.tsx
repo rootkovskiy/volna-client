@@ -27,10 +27,23 @@ type ScrollTarget = { scrollTo?: (options: { y: number; animated: boolean }) => 
 export function useScreenScroll(key: string, options: { loading?: boolean; canLoadMore?: boolean; loadMore?: () => void } = {}) {
   const values = useContext(Context);
   const ref = useRef<ScrollTarget | null>(null);
-  const saved = useRef({ key, target: Number(values?.get(key) ?? 0), restoring: true, viewport: 0, height: 0, requestedHeight: -1 });
-  if (saved.current.key !== key) saved.current = { key, target: Number(values?.get(key) ?? 0), restoring: true, viewport: 0, height: 0, requestedHeight: -1 };
+  const savedOffset = (route: string) => {
+    const value = values?.get(route);
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+  };
+  const initialOffset = savedOffset(key);
+  const saved = useRef({ key, target: initialOffset ?? 0, restoring: initialOffset !== null, resetPending: false, viewport: 0, height: 0, requestedHeight: -1 });
+  if (saved.current.key !== key) {
+    const target = savedOffset(key);
+    saved.current = { key, target: target ?? 0, restoring: target !== null, resetPending: target === null, viewport: 0, height: 0, requestedHeight: -1 };
+  }
   const restore = () => {
     const state = saved.current;
+    if (state.resetPending && ref.current) {
+      state.resetPending = false;
+      ref.current.scrollTo?.({ y: 0, animated: false });
+      ref.current.scrollToOffset?.({ offset: 0, animated: false });
+    }
     if (!state.restoring || !ref.current || !state.viewport || !state.height || options.loading) return;
     const max = Math.max(0, state.height - state.viewport);
     const y = Math.min(state.target, max);
@@ -43,6 +56,7 @@ export function useScreenScroll(key: string, options: { loading?: boolean; canLo
     }
   };
   useLayoutEffect(restore, [key, options.loading, options.canLoadMore]);
+  const yieldToInteraction = () => { saved.current.restoring = false; saved.current.resetPending = false; };
   return {
     ref: (node: ScrollTarget | null) => { ref.current = node; },
     onLayout: (event: LayoutChangeEvent) => { saved.current.viewport = event.nativeEvent.layout.height; restore(); },
@@ -51,7 +65,8 @@ export function useScreenScroll(key: string, options: { loading?: boolean; canLo
       saved.current.viewport = layoutMeasurement.height;
       if (!saved.current.restoring) remember(values, key, contentOffset.y);
     },
-    onScrollBeginDrag: () => { saved.current.restoring = false; },
+    onScrollBeginDrag: yieldToInteraction,
+    onTouchStart: yieldToInteraction,
     onContentSizeChange: (_width: number, height: number) => {
       saved.current.height = height;
       restore();
