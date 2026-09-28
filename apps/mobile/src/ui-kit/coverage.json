@@ -126,12 +126,13 @@
       "event-schedule",
       "calendar",
       "event-time",
+      "event-filters",
       "catalog-scroll",
       "community-team",
       "form"
     ],
     "notShown": [
-      "Полная страница события, билеты, архив и фильтры",
+      "Полная страница события, билеты и архив; сетевой поиск локации и реальные результаты фильтра",
       "Полный редактор события, площадки, сцен и участников"
     ]
   },
@@ -350,6 +351,7 @@
       "location",
       "calendar",
       "event-time",
+      "event-filters",
       "share",
       "delete"
     ],

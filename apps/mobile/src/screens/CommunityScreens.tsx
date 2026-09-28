@@ -1260,14 +1260,16 @@ function CatalogFiltersModal({
     <AppSheetModal
       footer={<View style={styles.eventFilterActions}><Pressable onPress={() => setDraftTypes([])} style={styles.eventFilterReset}><Text style={styles.eventFilterResetText}>Сбросить</Text></Pressable><Pressable onPress={() => onApply(draftTypes)} style={styles.eventFilterApply}><Text style={styles.eventFilterApplyText}>Показать</Text></Pressable></View>}
       footerContainerStyle={styles.eventFilterFooter}
+      contentContainerStyle={styles.eventFilterContent}
       isVisible={isVisible}
       onClose={onClose}
       scroll
       title={catalogTab === 'communities' ? 'Фильтры сообществ' : 'Фильтры локаций'}
     >
-      <Text style={[styles.connectFilterTitle, styles.eventFilterFirstTitle]}>{catalogTab === 'communities' ? 'Тип сообщества' : 'Тип локации'}</Text>
-      {isLoading ? <LoadingIndicator style={{ marginVertical: 18 }} /> : (
-        <View style={styles.eventFilterChips}>
+      <View style={styles.eventFilterSection}>
+        <Text style={styles.eventFilterSectionTitle}>{catalogTab === 'communities' ? 'Тип сообщества' : 'Тип локации'}</Text>
+        {isLoading ? <LoadingIndicator style={{ marginVertical: 18 }} /> : (
+          <View style={styles.eventFilterChips}>
           {typeOptions.map((option) => {
             const selected = draftTypes.includes(option.value);
             return (
@@ -1282,8 +1284,9 @@ function CatalogFiltersModal({
               </Pressable>
             );
           })}
-        </View>
-      )}
+          </View>
+        )}
+      </View>
     </AppSheetModal>
   );
 }

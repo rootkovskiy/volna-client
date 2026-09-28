@@ -533,21 +533,29 @@ function EventFiltersModal({ authToken, category, initialValue, isVisible, onApp
     <AppSheetModal
       footer={<View style={styles.eventFilterActions}><Pressable onPress={() => { setDraft((current) => ({ ...emptyEventFilters, cityId: current.cityId, cityName: current.cityName, countryCode: current.countryCode, countryName: current.countryName })); setVenueQuery(''); }} style={styles.eventFilterReset}><Text style={styles.eventFilterResetText}>Сбросить</Text></Pressable><Pressable onPress={apply} style={styles.eventFilterApply}><Text style={styles.eventFilterApplyText}>Показать</Text></Pressable></View>}
       footerContainerStyle={styles.eventFilterFooter}
+      contentContainerStyle={styles.eventFilterContent}
       isVisible={isVisible}
       onClose={onClose}
       scroll
       title="Фильтры событий"
     >
-            <Text style={[styles.connectFilterTitle, styles.eventFilterFirstTitle]}>Даты</Text>
-            <View style={styles.eventFilterDates}><Pressable onPress={() => setDateTarget('from')} style={styles.eventFilterDateButton}><CalendarDays color="#6f7b86" size={18} /><Text style={[styles.eventFilterDateText, !draft.dateFrom && styles.editSelectPlaceholder]}>{draft.dateFrom || 'От'}</Text></Pressable><Pressable onPress={() => setDateTarget('to')} style={styles.eventFilterDateButton}><CalendarDays color="#6f7b86" size={18} /><Text style={[styles.eventFilterDateText, !draft.dateTo && styles.editSelectPlaceholder]}>{draft.dateTo || 'До'}</Text></Pressable></View>
-
-            <Text style={styles.connectFilterTitle}>Типы событий</Text>
-            <View style={styles.eventFilterChips}>{eventTypes.map((type) => { const selected = draft.types.includes(type.value); return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} key={type.value} onPress={() => setDraft((current) => ({ ...current, types: selected ? current.types.filter((value) => value !== type.value) : [...current.types, type.value] }))} style={[styles.eventFilterChip, selected && styles.eventFilterChipActive]}><Text style={[styles.eventFilterChipText, selected && styles.eventFilterChipTextActive]}>{type.label}</Text></Pressable>; })}</View>
-
-            <Text style={styles.connectFilterTitle}>Локация</Text>
-            <View style={styles.eventFilterVenueInput}><Search color="#6f7b86" size={19} /><TextInput autoCorrect={false} onChangeText={(value) => { setVenueQuery(value); setDraft((current) => ({ ...current, venue: null })); }} onFocus={() => setIsVenueFocused(true)} placeholder={draft.cityName ? `Найти локацию в городе ${draft.cityName}` : 'Найти локацию'} placeholderTextColor="#8e99a4" style={styles.eventFilterVenueText} value={venueQuery} />{venueQuery ? <Pressable accessibilityLabel="Очистить локацию" hitSlop={8} onPress={() => { setVenueQuery(''); setDraft((current) => ({ ...current, venue: null })); }}><X color="#6f7b86" size={20} /></Pressable> : null}</View>
-            {isVenueLoading ? <LoadingIndicator style={{ marginVertical: 12 }} /> : null}
-            {isVenueFocused && venueQuery.trim().length >= 3 && !draft.venue && venueOptions.length ? <View style={styles.eventFilterVenueOptions}>{venueOptions.map((venue) => <Pressable key={venue.id} onPress={() => { setDraft((current) => ({ ...current, venue: { id: venue.id, name: venue.name, cityId: venue.cityId }, cityId: venue.cityId ?? '', cityName: venue.cityName, countryName: venue.countryName })); setVenueQuery(venue.name); setIsVenueFocused(false); }} style={styles.eventFilterVenueOption}><Text style={styles.eventFilterVenueName}>{venue.name}</Text><Text style={styles.eventFilterVenueMeta}>{[venue.cityName, venue.address].filter(Boolean).join(' · ')}</Text></Pressable>)}</View> : null}
+      <View style={styles.eventFilterSection}>
+        <Text style={styles.eventFilterSectionTitle}>Даты</Text>
+        <View style={styles.eventFilterDates}>
+          <Pressable accessibilityLabel={`Дата от: ${draft.dateFrom || 'не выбрана'}`} accessibilityRole="button" onPress={() => setDateTarget('from')} style={styles.eventFilterDateButton}><CalendarDays color="#6f7b86" size={18} /><Text style={[styles.eventFilterDateText, !draft.dateFrom && styles.eventFilterDatePlaceholder]}>{draft.dateFrom || 'От'}</Text></Pressable>
+          <Pressable accessibilityLabel={`Дата до: ${draft.dateTo || 'не выбрана'}`} accessibilityRole="button" onPress={() => setDateTarget('to')} style={styles.eventFilterDateButton}><CalendarDays color="#6f7b86" size={18} /><Text style={[styles.eventFilterDateText, !draft.dateTo && styles.eventFilterDatePlaceholder]}>{draft.dateTo || 'До'}</Text></Pressable>
+        </View>
+      </View>
+      <View style={styles.eventFilterSection}>
+        <Text style={styles.eventFilterSectionTitle}>Типы событий</Text>
+        <View style={styles.eventFilterChips}>{eventTypes.map((type) => { const selected = draft.types.includes(type.value); return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} key={type.value} onPress={() => setDraft((current) => ({ ...current, types: selected ? current.types.filter((value) => value !== type.value) : [...current.types, type.value] }))} style={[styles.eventFilterChip, selected && styles.eventFilterChipActive]}><Text style={[styles.eventFilterChipText, selected && styles.eventFilterChipTextActive]}>{type.label}</Text></Pressable>; })}</View>
+      </View>
+      <View style={styles.eventFilterSection}>
+        <Text style={styles.eventFilterSectionTitle}>Локация</Text>
+        <View style={styles.eventFilterVenueInput}><Search color="#6f7b86" size={19} /><TextInput accessibilityLabel="Найти локацию" autoCorrect={false} onChangeText={(value) => { setVenueQuery(value); setDraft((current) => ({ ...current, venue: null })); }} onFocus={() => setIsVenueFocused(true)} placeholder={draft.cityName ? `Найти локацию в городе ${draft.cityName}` : 'Найти локацию'} placeholderTextColor="#98a3ae" style={styles.eventFilterVenueText} value={venueQuery} />{venueQuery ? <Pressable accessibilityLabel="Очистить локацию" accessibilityRole="button" onPress={() => { setVenueQuery(''); setDraft((current) => ({ ...current, venue: null })); }} style={styles.eventFilterVenueClear}><X color="#6f7b86" size={20} /></Pressable> : null}</View>
+        {isVenueLoading ? <LoadingIndicator style={{ marginVertical: 12 }} /> : null}
+        {isVenueFocused && venueQuery.trim().length >= 3 && !draft.venue && venueOptions.length ? <View style={styles.eventFilterVenueOptions}>{venueOptions.map((venue) => <Pressable key={venue.id} onPress={() => { setDraft((current) => ({ ...current, venue: { id: venue.id, name: venue.name, cityId: venue.cityId }, cityId: venue.cityId ?? '', cityName: venue.cityName, countryName: venue.countryName })); setVenueQuery(venue.name); setIsVenueFocused(false); }} style={styles.eventFilterVenueOption}><Text style={styles.eventFilterVenueName}>{venue.name}</Text><Text style={styles.eventFilterVenueMeta}>{[venue.cityName, venue.address].filter(Boolean).join(' · ')}</Text></Pressable>)}</View> : null}
+      </View>
     </AppSheetModal>
     <CalendarPickerModal isVisible={dateTarget !== null} minDate={dateTarget === 'to' && selectedFrom ? selectedFrom : new Date(1970, 0, 1)} onClose={() => setDateTarget(null)} onSelect={(value) => { setDraft((current) => ({ ...current, [dateTarget === 'to' ? 'dateTo' : 'dateFrom']: value })); setDateTarget(null); }} selectedValue={dateTarget === 'to' ? draft.dateTo : draft.dateFrom} title={dateTarget === 'to' ? 'Дата до' : 'Дата от'} />
   </>;
