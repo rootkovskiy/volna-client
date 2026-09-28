@@ -80,6 +80,7 @@
   "photos": "component",
   "playlists": "composition",
   "catalog": "composition",
+  "image-update": "component",
   "release": "composition",
   "chat": "composition",
   "delete": "component",

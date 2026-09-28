@@ -23,7 +23,7 @@ function harness() {
     useState: () => [request, value => { request = typeof value === 'function' ? value(request) : value; }],
     useCallback: callback => callback,
     AppTopBarProvider: 'topbar', CatalogLocationProvider: 'account', DevelopmentLoadingScreen: 'loading', GlobalAudioProvider: 'audio',
-    ScreenContinuityProvider: 'screens', MainAppContent: 'content',
+    ScreenContinuityProvider: 'screens', CatalogSnapshotProvider: 'catalog-snapshots', MainAppContent: 'content',
   };
   const declarations = app.statements.filter(node => ts.isFunctionDeclaration(node) && ['MainApp', 'MainAppSession'].includes(node.name?.text));
   vm.runInNewContext(compile(declarations.map(node => node.getText(app)).join('\n') + '\nexports.render = MainApp;'), context);
@@ -46,10 +46,12 @@ test('all main-tab resets preserve audio identity while remounting screen state'
   const render = harness();
   const initial = render(props);
   assert.equal(initial('audio').length, 1);
+  assert.equal(initial('catalog-snapshots').length, 1);
   let reset = props.navigationReset;
   for (const activeTab of ['events', 'locations', 'community', 'feed', 'music', 'music']) {
     const next = render({ ...props, activeTab, navigationReset: ++reset });
     assert.deepEqual(next('audio')[0].identity, initial('audio')[0].identity);
+    assert.deepEqual(next('catalog-snapshots')[0].identity, initial('catalog-snapshots')[0].identity);
     assert.notDeepEqual(next('screens')[0].identity, initial('screens')[0].identity);
     assert.ok(next('screens')[0].identity.includes('audio:'));
     assert.equal(next('audio')[0].props.storageScope, props.ownAccountId);
@@ -63,6 +65,7 @@ test('account replacement changes player identity; forced password changes remov
   const before = render(props)('audio')[0];
   const after = render({ ...props, ownAccountId: 'account-b' })('audio')[0];
   assert.notDeepEqual(after.identity, before.identity);
+  assert.notDeepEqual(render({ ...props, ownAccountId: 'account-b' })('catalog-snapshots')[0].identity, render(props)('catalog-snapshots')[0].identity);
   assert.equal(after.props.storageScope, 'account-b');
   assert.equal(render({ ...props, mustChangePassword: true })('audio').length, 0);
 });

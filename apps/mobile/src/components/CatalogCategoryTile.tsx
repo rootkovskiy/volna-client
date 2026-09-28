@@ -5,6 +5,7 @@ import { apiFetch, apiUrl } from '../api/client';
 
 export type CategoryCoverSurface = 'events' | 'locations';
 export type CategoryCover = { surface: CategoryCoverSurface; category: string; imageUrl: string; updatedAt: string };
+let rememberedCovers: Record<string, string> = {};
 
 export const eventCategoryOptions = [
   { value: 'MUSIC', label: 'Музыка' },
@@ -25,12 +26,13 @@ export const locationCategoryOptions = [
 ] as const;
 
 export function useCategoryCovers() {
-  const [covers, setCovers] = useState<Record<string, string>>({});
+  const [covers, setCovers] = useState<Record<string, string>>(() => rememberedCovers);
   const load = useCallback(async () => {
     const response = await apiFetch(`${apiUrl}/category-covers`);
     if (!response.ok) return;
     const payload = await response.json() as { items: CategoryCover[] };
-    setCovers(Object.fromEntries(payload.items.map((item) => [`${item.surface}:${item.category}`, item.imageUrl])));
+    rememberedCovers = Object.fromEntries(payload.items.map((item) => [`${item.surface}:${item.category}`, item.imageUrl]));
+    setCovers(rememberedCovers);
   }, []);
   useEffect(() => { void load(); }, [load]);
   return { covers, reload: load };
