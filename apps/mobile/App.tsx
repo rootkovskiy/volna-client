@@ -2196,7 +2196,7 @@ function MaintenanceScreen({ onRetry }: { onRetry: () => void }) {
 type MainAppProps = Omit<Parameters<typeof MainAppContent>[0], 'releaseComposerRequest' | 'onReleaseComposerRequestHandled'>;
 
 function MainApp(props: MainAppProps) {
-  return <AppTopBarProvider><CatalogLocationProvider key={props.ownAccountId}><MainAppSession {...props} /></CatalogLocationProvider></AppTopBarProvider>;
+  return <AppTopBarProvider><CatalogLocationProvider accountId={props.ownAccountId} fallback={<DevelopmentLoadingScreen />} key={props.ownAccountId}><MainAppSession {...props} /></CatalogLocationProvider></AppTopBarProvider>;
 }
 
 function MainAppSession(props: MainAppProps) {
